@@ -20,7 +20,7 @@ from __future__ import print_function
 from .layer_function_generator import generate_layer_fn
 from .layer_function_generator import autodoc, templatedoc
 from ..layer_helper import LayerHelper
-from ..framework import Variable, in_dygraph_mode, static_only
+from ..framework import Variable, _non_static_mode, static_only
 from .. import core
 from .loss import softmax_with_cross_entropy
 from . import tensor
@@ -34,6 +34,7 @@ import numpy as np
 from functools import reduce
 from ..data_feeder import convert_dtype, check_variable_and_dtype, check_type, check_dtype
 from paddle.utils import deprecated
+from paddle import _C_ops
 
 __all__ = [
     'prior_box',
@@ -1071,7 +1072,6 @@ def yolov3_loss(x,
                                           anchor_mask=anchor_mask, class_num=80,
                                           ignore_thresh=0.7, downsample_ratio=32)
     """
-    helper = LayerHelper('yolov3_loss', **locals())
 
     if not isinstance(x, Variable):
         raise TypeError("Input x of yolov3_loss must be Variable")
@@ -1094,8 +1094,16 @@ def yolov3_loss(x,
         raise TypeError(
             "Attr use_label_smooth of yolov3_loss must be a bool value")
 
-    loss = helper.create_variable_for_type_inference(dtype=x.dtype)
+    if _non_static_mode():
+        attrs = ("anchors", anchors, "anchor_mask", anchor_mask, "class_num",
+                 class_num, "ignore_thresh", ignore_thresh, "downsample_ratio",
+                 downsample_ratio, "use_label_smooth", use_label_smooth,
+                 "scale_x_y", scale_x_y)
+        loss, _, _ = _C_ops.yolov3_loss(x, gt_box, gt_label, gt_score, *attrs)
+        return loss
 
+    helper = LayerHelper('yolov3_loss', **locals())
+    loss = helper.create_variable_for_type_inference(dtype=x.dtype)
     objectness_mask = helper.create_variable_for_type_inference(dtype='int32')
     gt_match_mask = helper.create_variable_for_type_inference(dtype='int32')
 
@@ -1139,7 +1147,9 @@ def yolo_box(x,
              downsample_ratio,
              clip_bbox=True,
              name=None,
-             scale_x_y=1.):
+             scale_x_y=1.,
+             iou_aware=False,
+             iou_aware_factor=0.5):
     """
 
     ${comment}
@@ -1156,6 +1166,8 @@ def yolo_box(x,
         name (string): The default value is None.  Normally there is no need 
                        for user to set this property.  For more information, 
                        please refer to :ref:`api_guide_Name`
+        iou_aware (bool): ${iou_aware_comment}
+        iou_aware_factor (float): ${iou_aware_factor_comment}
 
     Returns:
         Variable: A 3-D tensor with shape [N, M, 4], the coordinates of boxes,
@@ -1204,6 +1216,8 @@ def yolo_box(x,
         "downsample_ratio": downsample_ratio,
         "clip_bbox": clip_bbox,
         "scale_x_y": scale_x_y,
+        "iou_aware": iou_aware,
+        "iou_aware_factor": iou_aware_factor
     }
 
     helper.append_op(
@@ -2214,17 +2228,18 @@ def multi_box_head(inputs,
     Examples 1: set min_ratio and max_ratio:
         .. code-block:: python
 
-          import paddle.fluid as fluid
+          import paddle
+          paddle.enable_static()
 
-          images = fluid.data(name='data', shape=[None, 3, 300, 300], dtype='float32')
-          conv1 = fluid.data(name='conv1', shape=[None, 512, 19, 19], dtype='float32')
-          conv2 = fluid.data(name='conv2', shape=[None, 1024, 10, 10], dtype='float32')
-          conv3 = fluid.data(name='conv3', shape=[None, 512, 5, 5], dtype='float32')
-          conv4 = fluid.data(name='conv4', shape=[None, 256, 3, 3], dtype='float32')
-          conv5 = fluid.data(name='conv5', shape=[None, 256, 2, 2], dtype='float32')
-          conv6 = fluid.data(name='conv6', shape=[None, 128, 1, 1], dtype='float32')
+          images = paddle.static.data(name='data', shape=[None, 3, 300, 300], dtype='float32')
+          conv1 = paddle.static.data(name='conv1', shape=[None, 512, 19, 19], dtype='float32')
+          conv2 = paddle.static.data(name='conv2', shape=[None, 1024, 10, 10], dtype='float32')
+          conv3 = paddle.static.data(name='conv3', shape=[None, 512, 5, 5], dtype='float32')
+          conv4 = paddle.static.data(name='conv4', shape=[None, 256, 3, 3], dtype='float32')
+          conv5 = paddle.static.data(name='conv5', shape=[None, 256, 2, 2], dtype='float32')
+          conv6 = paddle.static.data(name='conv6', shape=[None, 128, 1, 1], dtype='float32')
 
-          mbox_locs, mbox_confs, box, var = fluid.layers.multi_box_head(
+          mbox_locs, mbox_confs, box, var = paddle.static.nn.multi_box_head(
             inputs=[conv1, conv2, conv3, conv4, conv5, conv6],
             image=images,
             num_classes=21,
@@ -2239,17 +2254,18 @@ def multi_box_head(inputs,
     Examples 2: set min_sizes and max_sizes:
         .. code-block:: python
 
-          import paddle.fluid as fluid
+          import paddle
+          paddle.enable_static()
 
-          images = fluid.data(name='data', shape=[None, 3, 300, 300], dtype='float32')
-          conv1 = fluid.data(name='conv1', shape=[None, 512, 19, 19], dtype='float32')
-          conv2 = fluid.data(name='conv2', shape=[None, 1024, 10, 10], dtype='float32')
-          conv3 = fluid.data(name='conv3', shape=[None, 512, 5, 5], dtype='float32')
-          conv4 = fluid.data(name='conv4', shape=[None, 256, 3, 3], dtype='float32')
-          conv5 = fluid.data(name='conv5', shape=[None, 256, 2, 2], dtype='float32')
-          conv6 = fluid.data(name='conv6', shape=[None, 128, 1, 1], dtype='float32')
+          images = paddle.static.data(name='data', shape=[None, 3, 300, 300], dtype='float32')
+          conv1 = paddle.static.data(name='conv1', shape=[None, 512, 19, 19], dtype='float32')
+          conv2 = paddle.static.data(name='conv2', shape=[None, 1024, 10, 10], dtype='float32')
+          conv3 = paddle.static.data(name='conv3', shape=[None, 512, 5, 5], dtype='float32')
+          conv4 = paddle.static.data(name='conv4', shape=[None, 256, 3, 3], dtype='float32')
+          conv5 = paddle.static.data(name='conv5', shape=[None, 256, 2, 2], dtype='float32')
+          conv6 = paddle.static.data(name='conv6', shape=[None, 128, 1, 1], dtype='float32')
 
-          mbox_locs, mbox_confs, box, var = fluid.layers.multi_box_head(
+          mbox_locs, mbox_confs, box, var = paddle.static.nn.multi_box_head(
             inputs=[conv1, conv2, conv3, conv4, conv5, conv6],
             image=images,
             num_classes=21,
@@ -2978,11 +2994,11 @@ def generate_proposals(scores,
                          im_info, anchors, variances)
 
     """
-    if in_dygraph_mode():
+    if _non_static_mode():
         assert return_rois_num, "return_rois_num should be True in dygraph mode."
         attrs = ('pre_nms_topN', pre_nms_top_n, 'post_nms_topN', post_nms_top_n,
                  'nms_thresh', nms_thresh, 'min_size', min_size, 'eta', eta)
-        rpn_rois, rpn_roi_probs, rpn_rois_num = core.ops.generate_proposals(
+        rpn_rois, rpn_roi_probs, rpn_rois_num = _C_ops.generate_proposals(
             scores, bbox_deltas, im_info, anchors, variances, *attrs)
         return rpn_rois, rpn_roi_probs, rpn_rois_num
 
@@ -3744,11 +3760,11 @@ def distribute_fpn_proposals(fpn_rois,
     """
     num_lvl = max_level - min_level + 1
 
-    if in_dygraph_mode():
+    if _non_static_mode():
         assert rois_num is not None, "rois_num should not be None in dygraph mode."
         attrs = ('min_level', min_level, 'max_level', max_level, 'refer_level',
                  refer_level, 'refer_scale', refer_scale)
-        multi_rois, restore_ind, rois_num_per_level = core.ops.distribute_fpn_proposals(
+        multi_rois, restore_ind, rois_num_per_level = _C_ops.distribute_fpn_proposals(
             fpn_rois, rois_num, num_lvl, num_lvl, *attrs)
         return multi_rois, restore_ind, rois_num_per_level
 
@@ -3937,18 +3953,18 @@ def collect_fpn_proposals(multi_rois,
                 max_level=5, 
                 post_nms_top_n=2000)
     """
-    check_type(multi_rois, 'multi_rois', list, 'collect_fpn_proposals')
-    check_type(multi_scores, 'multi_scores', list, 'collect_fpn_proposals')
     num_lvl = max_level - min_level + 1
     input_rois = multi_rois[:num_lvl]
     input_scores = multi_scores[:num_lvl]
 
-    if in_dygraph_mode():
+    if _non_static_mode():
         assert rois_num_per_level is not None, "rois_num_per_level should not be None in dygraph mode."
         attrs = ('post_nms_topN', post_nms_top_n)
-        output_rois, rois_num = core.ops.collect_fpn_proposals(
+        output_rois, rois_num = _C_ops.collect_fpn_proposals(
             input_rois, input_scores, rois_num_per_level, *attrs)
 
+    check_type(multi_rois, 'multi_rois', list, 'collect_fpn_proposals')
+    check_type(multi_scores, 'multi_scores', list, 'collect_fpn_proposals')
     helper = LayerHelper('collect_fpn_proposals', **locals())
     dtype = helper.input_dtype('multi_rois')
     check_dtype(dtype, 'multi_rois', ['float32', 'float64'],

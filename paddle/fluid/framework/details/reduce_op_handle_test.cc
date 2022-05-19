@@ -25,6 +25,8 @@ namespace details {
 namespace f = paddle::framework;
 namespace p = paddle::platform;
 
+using DeviceType = paddle::platform::DeviceType;
+
 // test data amount
 const f::DDim kDims = {20, 20};
 
@@ -38,7 +40,7 @@ struct TestReduceOpHandle {
   std::vector<p::Place> gpu_list_;
   std::vector<std::unique_ptr<p::DeviceContext>> ctxs_;
 
-#if defined(PADDLE_WITH_NCCL)
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
   std::unique_ptr<platform::NCCLContextMap> nccl_ctxs_;
 #endif
 
@@ -46,7 +48,7 @@ struct TestReduceOpHandle {
     for (size_t j = 0; j < ctxs_.size(); ++j) {
       ctxs_[j]->Wait();
     }
-#if defined(PADDLE_WITH_NCCL)
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
     if (nccl_ctxs_) {
       nccl_ctxs_->WaitAll();
     }
@@ -56,8 +58,8 @@ struct TestReduceOpHandle {
   void InitCtxOnGpu(bool use_gpu) {
     use_gpu_ = use_gpu;
     if (use_gpu) {
-#if defined(PADDLE_WITH_NCCL)
-      int count = p::GetCUDADeviceCount();
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
+      int count = p::GetGPUDeviceCount();
       if (count <= 1) {
         LOG(WARNING) << "Cannot test multi-gpu Broadcast, because the CUDA "
                         "device count is "
@@ -81,7 +83,7 @@ struct TestReduceOpHandle {
         gpu_list_.push_back(p);
         ctxs_.emplace_back(new p::CPUDeviceContext(p));
       }
-#if defined(PADDLE_WITH_NCCL)
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
       nccl_ctxs_.reset(nullptr);
 #endif
     }
@@ -102,7 +104,7 @@ struct TestReduceOpHandle {
 
     nodes.emplace_back(new ir::Node("node"));
     if (use_gpu_) {
-#if defined(PADDLE_WITH_NCCL)
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
       op_handle_.reset(new ReduceOpHandle(nodes.back().get(), local_scopes_,
                                           gpu_list_, nccl_ctxs_.get()));
 #else
@@ -110,7 +112,7 @@ struct TestReduceOpHandle {
           platform::errors::PreconditionNotMet("Not compiled with NCLL."));
 #endif
     } else {
-#if defined(PADDLE_WITH_NCCL)
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
       op_handle_.reset(new ReduceOpHandle(nodes.back().get(), local_scopes_,
                                           gpu_list_, nccl_ctxs_.get()));
 #else
@@ -160,7 +162,7 @@ struct TestReduceOpHandle {
     int height = kDims[0] * 2;
     std::vector<int64_t> rows{0, 1, 2, 3, 3, 0, 14, 7, 3, 1,
                               2, 4, 6, 3, 1, 1, 1,  1, 3, 7};
-    std::vector<float> send_vector(f::product(kDims));
+    std::vector<float> send_vector(phi::product(kDims));
     for (size_t k = 0; k < send_vector.size(); ++k) {
       send_vector[k] = k;
     }
@@ -172,7 +174,7 @@ struct TestReduceOpHandle {
       PADDLE_ENFORCE_NOT_NULL(
           in_var, platform::errors::NotFound(
                       "Variable %s is not found in scope.", "input"));
-      auto in_selected_rows = in_var->GetMutable<f::SelectedRows>();
+      auto in_selected_rows = in_var->GetMutable<phi::SelectedRows>();
       auto value = in_selected_rows->mutable_value();
       value->mutable_data<float>(kDims, gpu_list_[input_scope_idx]);
 
@@ -188,21 +190,22 @@ struct TestReduceOpHandle {
     PADDLE_ENFORCE_NOT_NULL(out_var,
                             platform::errors::NotFound(
                                 "Variable %s is not found in scope.", "out"));
-    auto out_selected_rows = out_var->GetMutable<f::SelectedRows>();
+    auto out_selected_rows = out_var->GetMutable<phi::SelectedRows>();
 
     auto in_var = param_scopes_[output_scope_idx]->FindVar("input");
-    auto in_selected_rows = in_var->GetMutable<f::SelectedRows>();
+    auto in_selected_rows = in_var->GetMutable<phi::SelectedRows>();
 
     out_selected_rows->mutable_value()->ShareDataWith(
         in_selected_rows->value());
 
-    op_handle_->Run(false);
+    DeviceType use_device = p::kCPU;
+    op_handle_->Run(use_device);
 
     WaitAll();
 
     p::CPUPlace cpu_place;
 
-    auto &out_select_rows = out_var->Get<f::SelectedRows>();
+    auto &out_select_rows = out_var->Get<phi::SelectedRows>();
     auto rt = out_select_rows.value();
 
     PADDLE_ENFORCE_EQ(out_select_rows.height(), height,
@@ -223,13 +226,13 @@ struct TestReduceOpHandle {
     f::TensorCopySync(rt, cpu_place, &result_tensor);
     float *ct = result_tensor.data<float>();
 
-    for (int64_t j = 0; j < f::product(result_tensor.dims()); ++j) {
+    for (int64_t j = 0; j < phi::product(result_tensor.dims()); ++j) {
       ASSERT_NEAR(ct[j], send_vector[j % send_vector.size()], 1e-5);
     }
   }  // namespace details
 
   void TestReduceLodTensors(size_t output_scope_idx) {
-    std::vector<float> send_vector(static_cast<size_t>(f::product(kDims)));
+    std::vector<float> send_vector(static_cast<size_t>(phi::product(kDims)));
     for (size_t k = 0; k < send_vector.size(); ++k) {
       send_vector[k] = k;
     }
@@ -260,7 +263,8 @@ struct TestReduceOpHandle {
 
     out_lodtensor->ShareDataWith(in_lodtensor);
 
-    op_handle_->Run(false);
+    DeviceType use_device = p::kCPU;
+    op_handle_->Run(use_device);
 
     WaitAll();
 
@@ -272,7 +276,7 @@ struct TestReduceOpHandle {
     f::TensorCopySync(rt, cpu_place, &result_tensor);
     float *ct = result_tensor.data<float>();
 
-    for (int64_t j = 0; j < f::product(result_tensor.dims()); ++j) {
+    for (int64_t j = 0; j < phi::product(result_tensor.dims()); ++j) {
       ASSERT_NEAR(ct[j], send_vector[j] * gpu_list_.size(), 1e-5);
     }
   }
@@ -292,7 +296,7 @@ TEST(ReduceTester, TestCPUReduceTestLodTensor) {
   test_op.InitReduceOp(out_scope_idx);
   test_op.TestReduceLodTensors(out_scope_idx);
 }
-#ifdef PADDLE_WITH_CUDA
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
 
 TEST(ReduceTester, TestGPUReduceTestSelectedRows) {
   TestReduceOpHandle test_op;

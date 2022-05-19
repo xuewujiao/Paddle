@@ -13,22 +13,15 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #include <glog/logging.h>
-#include <algorithm>
-#include <map>
 #include <memory>
-#include <set>
 #include <sstream>
 #include <string>
-#include <utility>
-#include <vector>
 
 #include "paddle/fluid/framework/feed_fetch_method.h"
 #include "paddle/fluid/inference/api/api_impl.h"
-#include "paddle/fluid/inference/api/details/reset_tensor_array.h"
 #include "paddle/fluid/inference/api/helper.h"
-#include "paddle/fluid/inference/api/paddle_inference_api.h"
-#include "paddle/fluid/memory/memcpy.h"
 #include "paddle/fluid/platform/cpu_helper.h"
+#include "paddle/fluid/platform/place.h"
 #include "paddle/fluid/platform/profiler.h"
 
 DEFINE_bool(profile, false, "Turn on profiler for fluid");
@@ -80,7 +73,14 @@ bool NativePaddlePredictor::Init(
   paddle::platform::SetNumThreads(config_.cpu_math_library_num_threads());
 
   if (config_.use_gpu) {
+    PADDLE_ENFORCE_EQ(config_.use_xpu, false,
+                      platform::errors::InvalidArgument(
+                          "Only one choice can be made between CPU and XPU."));
     place_ = paddle::platform::CUDAPlace(config_.device);
+  } else if (config_.use_xpu) {
+    place_ = paddle::platform::XPUPlace(config_.device);
+  } else if (config_.use_npu) {
+    place_ = paddle::platform::NPUPlace(config_.device);
   } else {
     place_ = paddle::platform::CPUPlace();
   }
@@ -92,6 +92,7 @@ bool NativePaddlePredictor::Init(
                                 "The sub_scope should not be nullptr."));
   } else {
     paddle::framework::InitDevices();
+    paddle::framework::InitDefaultKernelSignatureMap();
     scope_.reset(new paddle::framework::Scope());
   }
 
@@ -192,14 +193,7 @@ std::unique_ptr<PaddlePredictor> NativePaddlePredictor::Clone() {
     LOG(ERROR) << "fail to call Init";
     return nullptr;
   }
-
-#ifdef __clang__
-  // fix clang compile error
   return cls;
-#else
-  // fix manylinux compile error.
-  return std::move(cls);
-#endif
 }
 
 bool NativePaddlePredictor::SetFeed(const std::vector<PaddleTensor> &inputs,
@@ -216,7 +210,7 @@ bool NativePaddlePredictor::SetFeed(const std::vector<PaddleTensor> &inputs,
 
   for (size_t i = 0; i < inputs.size(); ++i) {
     auto &input = feed_tensors_[i];
-    framework::DDim ddim = framework::make_ddim(inputs[i].shape);
+    framework::DDim ddim = phi::make_ddim(inputs[i].shape);
     void *input_ptr;
     if (inputs[i].dtype == PaddleDType::INT64) {
       input_ptr = input.mutable_data<int64_t>(ddim, place_);
@@ -240,19 +234,47 @@ bool NativePaddlePredictor::SetFeed(const std::vector<PaddleTensor> &inputs,
       // TODO(panyx0718): Init LoDTensor from existing memcpy to save a copy.
       std::memcpy(static_cast<void *>(input_ptr), inputs[i].data.data(),
                   inputs[i].data.length());
-    } else {
-#ifdef PADDLE_WITH_CUDA
+    } else if (platform::is_gpu_place(place_)) {
+      PADDLE_ENFORCE_EQ(
+          platform::is_xpu_place(place_), false,
+          platform::errors::InvalidArgument(
+              "Only one choice can be made between CPU and XPU."));
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
       platform::DeviceContextPool &pool =
           platform::DeviceContextPool::Instance();
       auto *dev_ctx =
           static_cast<const platform::CUDADeviceContext *>(pool.Get(place_));
-      auto dst_gpu_place = BOOST_GET_CONST(platform::CUDAPlace, place_);
+      auto dst_gpu_place = place_;
       memory::Copy(dst_gpu_place, static_cast<void *>(input_ptr),
                    platform::CPUPlace(), inputs[i].data.data(),
                    inputs[i].data.length(), dev_ctx->stream());
 #else
       PADDLE_THROW(platform::errors::Unavailable(
           "Not compile with CUDA, should not reach here."));
+#endif
+    } else if (platform::is_xpu_place(place_)) {
+#ifdef PADDLE_WITH_XPU
+      auto dst_xpu_place = place_;
+      memory::Copy(dst_xpu_place, static_cast<void *>(input_ptr),
+                   platform::CPUPlace(), inputs[i].data.data(),
+                   inputs[i].data.length());
+#else
+      PADDLE_THROW(platform::errors::Unavailable(
+          "Not compile with XPU, should not reach here."));
+#endif
+    } else {
+#ifdef PADDLE_WITH_ASCEND_CL
+      platform::DeviceContextPool &pool =
+          platform::DeviceContextPool::Instance();
+      auto *dev_ctx =
+          static_cast<const platform::NPUDeviceContext *>(pool.Get(place_));
+      auto dst_npu_place = place_;
+      memory::Copy(dst_npu_place, static_cast<void *>(input_ptr),
+                   platform::CPUPlace(), inputs[i].data.data(),
+                   inputs[i].data.length(), dev_ctx->stream());
+#else
+      PADDLE_THROW(platform::errors::Unavailable(
+          "Not compile with NPU, should not reach here."));
 #endif
     }
 
@@ -276,7 +298,7 @@ template <typename T>
 void NativePaddlePredictor::GetFetchOne(const framework::LoDTensor &fetch,
                                         PaddleTensor *output) {
   // set shape.
-  auto shape = framework::vectorize(fetch.dims());
+  auto shape = phi::vectorize(fetch.dims());
   output->shape.assign(shape.begin(), shape.end());
   // set data.
   const T *data = fetch.data<T>();
@@ -306,7 +328,7 @@ bool NativePaddlePredictor::GetFetch(std::vector<PaddleTensor> *outputs,
     framework::FetchType &fetch_var =
         framework::GetFetchVariable(*scope, "fetch", idx);
     auto fetch = BOOST_GET_CONST(framework::LoDTensor, fetch_var);
-    auto type = fetch.type();
+    auto type = framework::TransToProtoVarType(fetch.dtype());
     auto output = &(outputs->at(i));
     output->name = fetchs_[idx]->Input("X")[0];
     if (type == framework::DataTypeTrait<float>::DataType()) {
@@ -362,12 +384,7 @@ std::unique_ptr<PaddlePredictor> CreatePaddlePredictor<
   if (!dynamic_cast<NativePaddlePredictor *>(predictor.get())->Init(nullptr)) {
     return nullptr;
   }
-#ifdef __clang__
-  // fix clang compile error
   return predictor;
-#else
-  return std::move(predictor);
-#endif
 }
 
 template <>

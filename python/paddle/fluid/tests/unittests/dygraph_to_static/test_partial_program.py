@@ -118,7 +118,8 @@ class TestWithNestedOutput(unittest.TestCase):
         self.assertTrue(len(dygraph_res) == len(static_res))
 
         for dy_var, st_var in zip(dygraph_res, static_res):
-            if isinstance(dy_var, fluid.core.VarBase):
+            if isinstance(dy_var,
+                          (fluid.core.VarBase, fluid.core.eager.Tensor)):
                 self.assertTrue(np.allclose(dy_var.numpy(), st_var.numpy()))
             else:
                 self.assertTrue(dy_var, st_var)
@@ -150,6 +151,21 @@ class TestWithTrainAndEval(unittest.TestCase):
             linear_net(x)
             self.assertEqual(partial_layer.program,
                              partial_layer._train_program)
+
+
+class TestWithNoGrad(unittest.TestCase):
+    def test_with_no_grad(self):
+        with fluid.dygraph.guard():
+            linear_net = Linear()
+            x_data = np.random.random((5, 10)).astype('float32')
+            x = fluid.dygraph.to_variable(x_data)
+
+            with paddle.no_grad():
+                linear_net.train()
+                linear_net(x)
+                _, partial_layer = linear_net.forward.program_cache.last()[-1]
+                self.assertEqual(partial_layer.program,
+                                 partial_layer._train_program)
 
 
 class GPT2LMHeadModel(fluid.dygraph.Layer):

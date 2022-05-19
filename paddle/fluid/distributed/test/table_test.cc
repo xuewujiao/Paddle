@@ -12,30 +12,21 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#include <ThreadPool.h>
-
-#include <unistd.h>
-#include <string>
-#include <thread>  // NOLINT
-
-#include "google/protobuf/text_format.h"
 #include "gtest/gtest.h"
 #include "paddle/fluid/distributed/ps.pb.h"
-#include "paddle/fluid/distributed/table/common_dense_table.h"
-#include "paddle/fluid/distributed/table/common_sparse_table.h"
-#include "paddle/fluid/distributed/table/sparse_geo_table.h"
-#include "paddle/fluid/distributed/table/table.h"
+#include "paddle/fluid/distributed/ps/table/memory_dense_table.h"
+//#include "paddle/fluid/distributed/ps/table/sparse_geo_table.h"
 
 namespace paddle {
 namespace distributed {
 
 TEST(Table, Initialize) {
   TableParameter table_config;
-  table_config.set_table_class("SparseGeoTable");
+  table_config.set_table_class("MemoryDenseTable");
   FsClientParameter fs_config;
   // case 1. no accessor
-  Table *table = new SparseGeoTable();
-  auto ret = table->initialize(table_config, fs_config);
+  Table *table = new MemoryDenseTable();
+  auto ret = table->Initialize(table_config, fs_config);
   ASSERT_EQ(ret, -1);
 }
 }  // namespace distributed

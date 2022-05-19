@@ -22,12 +22,12 @@
 #include "paddle/fluid/framework/details/op_handle_base.h"
 #include "paddle/fluid/framework/lod_tensor.h"
 #include "paddle/fluid/framework/scope.h"
-#include "paddle/fluid/framework/selected_rows.h"
+#include "paddle/fluid/framework/selected_rows_utils.h"
 #include "paddle/fluid/platform/device_context.h"
 
 namespace paddle {
 namespace framework {
-class SelectedRows;
+
 namespace details {
 struct VarHandle;
 }  // namespace details
@@ -39,8 +39,10 @@ namespace platform {
 struct NCCLContextMap;
 }  // namespace platform
 }  // namespace paddle
-#if defined(PADDLE_WITH_NCCL)
-#include "paddle/fluid/platform/nccl_helper.h"
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
+#include "paddle/fluid/platform/device/gpu/nccl_helper.h"
+#elif defined(PADDLE_WITH_XPU_BKCL)
+#include "paddle/fluid/platform/device/xpu/bkcl_helper.h"
 #endif
 
 namespace paddle {
@@ -77,7 +79,7 @@ struct ReduceOpHandle : public OpHandleBase {
   std::vector<Scope *> local_scopes_;
   std::vector<platform::Place> places_;
 
-#if defined(PADDLE_WITH_NCCL)
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
   const platform::NCCLContextMap *nccl_ctxs_;
   ReduceOpHandle(ir::Node *node, const std::vector<Scope *> &local_scopes,
                  const std::vector<platform::Place> &places,
@@ -89,6 +91,22 @@ struct ReduceOpHandle : public OpHandleBase {
     if (nccl_ctxs_) {
       for (auto &p_ctx : nccl_ctxs_->contexts_) {
         this->SetDeviceContext(platform::CUDAPlace(p_ctx.first),
+                               p_ctx.second.ctx_.get());
+      }
+    }
+  }
+#elif defined(PADDLE_WITH_XPU_BKCL)
+  const platform::BKCLContextMap *bkcl_ctxs_;
+  ReduceOpHandle(ir::Node *node, const std::vector<Scope *> &local_scopes,
+                 const std::vector<platform::Place> &places,
+                 const platform::BKCLContextMap *bkcl_ctxs)
+      : OpHandleBase(node),
+        local_scopes_(local_scopes),
+        places_(places),
+        bkcl_ctxs_(bkcl_ctxs) {
+    if (bkcl_ctxs_) {
+      for (auto &p_ctx : bkcl_ctxs_->contexts_) {
+        this->SetDeviceContext(platform::XPUPlace(p_ctx.first),
                                p_ctx.second.ctx_.get());
       }
     }
@@ -108,14 +126,15 @@ struct ReduceOpHandle : public OpHandleBase {
 
   std::vector<Scope *> GetLocalScopes() override { return local_scopes_; }
 
-#if defined PADDLE_WITH_CUDA && defined PADDLE_WITH_DISTRIBUTE
+#if (defined PADDLE_WITH_CUDA || defined PADDLE_WITH_HIP) && \
+    defined PADDLE_WITH_DISTRIBUTE
   template <typename DevCtx, typename DataType>
   void GatherSelectedRows(
-      const std::vector<const SelectedRows *> &src_selecte_rows_,
+      const std::vector<const phi::SelectedRows *> &src_selecte_rows_,
       const std::vector<platform::Place> &in_places,
       const std::map<platform::Place, platform::DeviceContext *> &dev_ctxes,
       VarHandle *out_var_handle, const platform::Place &out_place,
-      SelectedRows *dst_selecte_rows);
+      phi::SelectedRows *dst_selecte_rows);
 #endif
 
   void Wait(

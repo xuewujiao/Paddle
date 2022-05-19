@@ -14,8 +14,8 @@
 
 from __future__ import print_function
 
+import paddle
 from .. import framework
-import paddle.dataset.common
 
 __all__ = [
     "Dataset", "IterableDataset", "TensorDataset", "ComposeDataset",
@@ -97,10 +97,10 @@ class IterableDataset(Dataset):
         .. code-block:: python
 
             import numpy as np
-            from paddle.io import Dataset
+            from paddle.io import IterableDataset
             
             # define a random dataset
-            class RandomDataset(Dataset):
+            class RandomDataset(IterableDataset):
                 def __init__(self, num_samples):
                     self.num_samples = num_samples
             
@@ -233,7 +233,7 @@ class TensorDataset(Dataset):
     each sample by indexing tensors in the 1st dimension.
 
     Args:
-        tensors(list of Tensor): tensors with same shape in the 1st dimension.
+        tensors(list|tuple): A list/tuple of tensors with same shape in the 1st dimension.
 
     Returns:
         Dataset: a Dataset instance wrapping tensors.
@@ -261,7 +261,7 @@ class TensorDataset(Dataset):
     """
 
     def __init__(self, tensors):
-        if not framework.in_dygraph_mode():
+        if not framework._non_static_mode():
             raise RuntimeError(
                 "TensorDataset con only be used in imperative mode")
         assert all([tensor.shape[0] == tensors[0].shape[0] for tensor in tensors]), \

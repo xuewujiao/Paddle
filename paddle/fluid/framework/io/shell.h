@@ -15,6 +15,7 @@
 #pragma once
 
 #include <fcntl.h>
+#include <stdio.h>
 #include <sys/stat.h>
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -33,8 +34,8 @@
 #include <utility>
 #include <vector>
 
-#include "paddle/fluid/platform/port.h"
 #include "paddle/fluid/string/string_helper.h"
+#include "paddle/phi/backends/dynload/port.h"
 
 #if defined(__arm__) || defined(__aarch64__) || defined(__ARM_NEON) || \
     defined(__ARM_NEON__)

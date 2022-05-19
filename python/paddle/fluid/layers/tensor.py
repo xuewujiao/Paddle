@@ -1,4 +1,4 @@
-#   Copyright (c) 2018 PaddlePaddle Authors. All Rights Reserved.
+#   Copyright (c) 2022 PaddlePaddle Authors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,15 +14,14 @@
 
 from __future__ import print_function
 
+import math
 import numpy
-import six
 import warnings
-from six.moves import reduce
 
 from ..layer_helper import LayerHelper
 from ..param_attr import ParamAttr
 from ..initializer import Initializer
-from ..framework import convert_np_dtype_to_dtype_, in_dygraph_mode, _varbase_creator, device_guard
+from ..framework import _current_expected_place, convert_np_dtype_to_dtype_, _non_static_mode, _varbase_creator, device_guard, _in_legacy_dygraph, in_dygraph_mode, _get_paddle_place
 from ..framework import Variable
 from ..initializer import Constant
 from ..core import VarDesc
@@ -33,13 +32,35 @@ from ..data_feeder import check_variable_and_dtype, check_type, check_dtype, con
 from paddle.utils import deprecated
 
 from .utils import check_shape
+from paddle import _C_ops
 
 __all__ = [
-    'create_tensor', 'create_parameter', 'create_global_var', 'cast',
-    'tensor_array_to_tensor', 'concat', 'sums', 'assign',
-    'fill_constant_batch_size_like', 'fill_constant', 'argmin', 'argmax',
-    'argsort', 'ones', 'zeros', 'reverse', 'has_inf', 'has_nan', 'isfinite',
-    'range', 'linspace', 'zeros_like', 'ones_like', 'diag', 'eye', 'triu'
+    'create_tensor',
+    'create_parameter',
+    'create_global_var',
+    'cast',
+    'tensor_array_to_tensor',
+    'concat',
+    'sums',
+    'assign',
+    'fill_constant_batch_size_like',
+    'fill_constant',
+    'argmin',
+    'argmax',
+    'argsort',
+    'ones',
+    'zeros',
+    'reverse',
+    'has_inf',
+    'has_nan',
+    'isfinite',
+    'range',
+    'linspace',
+    'zeros_like',
+    'ones_like',
+    'diag',
+    'eye',
+    'triu',
 ]
 
 
@@ -112,14 +133,9 @@ def create_parameter(shape,
     """
     check_type(shape, 'shape', (list, tuple, numpy.ndarray), 'create_parameter')
     for item in shape:
-        if six.PY2:
-            check_type(item, 'item of shape',
-                       (int, long, numpy.uint8, numpy.int8, numpy.int16,
-                        numpy.int32, numpy.int64), 'create_parameter')
-        else:
-            check_type(item, 'item of shape',
-                       (int, numpy.uint8, numpy.int8, numpy.int16, numpy.int32,
-                        numpy.int64), 'create_parameter')
+        check_type(item, 'item of shape',
+                   (int, numpy.uint8, numpy.int8, numpy.int16, numpy.int32,
+                    numpy.int64), 'create_parameter')
 
     check_dtype(dtype, 'dtype', [
         'bool', 'float16', 'float32', 'float64', 'int8', 'int16', 'int32',
@@ -147,7 +163,7 @@ def create_global_var(shape,
     This function creates a new tensor variable with value in the global block(block 0).
 
     Parameters:
-        shape (list of int): Shape of the variable
+        shape (list[int]|tuple[int]): Shape of the variable
         value (float): The value of the variable. The new created
                       variable will be filled with it.
         dtype (str): Data type of the variable
@@ -172,18 +188,21 @@ def create_global_var(shape,
     check_type(shape, 'shape', (list, tuple, numpy.ndarray),
                'create_global_var')
     for item in shape:
-        if six.PY2:
-            check_type(item, 'item of shape',
-                       (int, long, numpy.uint8, numpy.int8, numpy.int16,
-                        numpy.int32, numpy.int64), 'create_global_var')
-        else:
-            check_type(item, 'item of shape',
-                       (int, numpy.uint8, numpy.int8, numpy.int16, numpy.int32,
-                        numpy.int64), 'create_global_var')
+        check_type(item, 'item of shape',
+                   (int, numpy.uint8, numpy.int8, numpy.int16, numpy.int32,
+                    numpy.int64), 'create_global_var')
 
     check_dtype(dtype, 'dtype', [
-        'bool', 'float16', 'float32', 'float64', 'int8', 'int16', 'int32',
-        'int64', 'uint8'
+        'bool',
+        'float16',
+        'float32',
+        'float64',
+        'int8',
+        'int16',
+        'int32',
+        'int64',
+        'uint8',
+        'uint16',
     ], 'create_global_var')
 
     helper = LayerHelper("global_var", **locals())
@@ -210,7 +229,7 @@ def cast(x, dtype):
     Args:
         x(Tensor): An input N-D Tensor with data type bool, float16,
             float32, float64, int32, int64, uint8.
-        dtype(np.dtype|core.VarDesc.VarType|str): Data type of the output:
+        dtype(np.dtype|str): Data type of the output:
             bool, float16, float32, float64, int8, int32, int64, uint8.
 
     Returns:
@@ -227,15 +246,21 @@ def cast(x, dtype):
     if in_dygraph_mode():
         if not isinstance(dtype, core.VarDesc.VarType):
             dtype = convert_np_dtype_to_dtype_(dtype)
-        out = core.ops.cast(x, 'in_dtype', x.dtype, 'out_dtype', dtype)
+        return _C_ops.final_state_cast(x, dtype)
 
-    check_variable_and_dtype(
-        x, 'x',
-        ['bool', 'float16', 'float32', 'float64', 'int32', 'int64', 'uint8'],
-        'cast')
+    if _non_static_mode():
+        if not isinstance(dtype, core.VarDesc.VarType):
+            dtype = convert_np_dtype_to_dtype_(dtype)
+        out = _C_ops.cast(x, 'in_dtype', x.dtype, 'out_dtype', dtype)
+        return out
+
+    check_variable_and_dtype(x, 'x', [
+        'bool', 'float16', 'float32', 'float64', 'int16', 'int32', 'int64',
+        'uint8', 'uint16'
+    ], 'cast')
     check_dtype(dtype, 'dtype', [
-        'bool', 'float16', 'float32', 'float64', 'int8', 'int32', 'int64',
-        'uint8'
+        'bool', 'float16', 'float32', 'float64', 'int8', 'int16', 'int32',
+        'int64', 'uint8', 'uint16'
     ], 'cast')
 
     helper = LayerHelper('cast', **locals())
@@ -302,7 +327,21 @@ def concat(input, axis=0, name=None):
         if isinstance(axis, Variable):
             axis = axis.numpy()
             axis = axis.item(0)
-        return core.ops.concat(input, 'axis', axis)
+        if not isinstance(input, Variable):
+            input = [t for t in input if t.shape.count(0) == 0]
+        out = _varbase_creator()
+        _C_ops.concat(input, out, 'axis', axis)
+        return out
+
+    if _in_legacy_dygraph():
+        if isinstance(axis, Variable):
+            axis = axis.numpy()
+            axis = axis.item(0)
+        if not isinstance(input, Variable):
+            input = [t for t in input if t.shape.count(0) == 0]
+        out = _varbase_creator()
+        _C_ops.concat(input, out, 'axis', axis)
+        return out
 
     check_type(input, 'input', (list, tuple, Variable), 'concat')
     if not isinstance(input, Variable):
@@ -435,7 +474,7 @@ def tensor_array_to_tensor(input, axis=1, name=None, use_stack=False):
             fluid.layers.array_write(x1, i + 1, array)
             output, output_index = fluid.layers.tensor_array_to_tensor(input=array)
     """
-    if in_dygraph_mode():
+    if _non_static_mode():
         assert isinstance(
             input, list), "The 'input' in tensor_array_to_tensor must be list"
         from .nn import stack, concat
@@ -518,10 +557,10 @@ def sums(input, out=None):
     if isinstance(input, list) or isinstance(input, tuple):
         for input_section in input:
             check_variable_and_dtype(input_section, "input", \
-                    ['float32', 'float64', 'int32', 'int64'], 'sums')
+                    ['float16', 'float32', 'float64', 'int32', 'int64'], 'sums')
     else:
         check_variable_and_dtype(input, "input", \
-                ['float32', 'float64', 'int32', 'int64'], 'sums')
+                ['float16', 'float32', 'float64', 'int32', 'int64'], 'sums')
 
     helper = LayerHelper('sum', **locals())
     if out is None:
@@ -545,8 +584,10 @@ def assign(input, output=None):
     The OP copies the :attr:`input` to the :attr:`output`.
 
     Parameters:
-        input (Tensor|numpy.ndarray): A tensor or numpy ndarray, its data type supports
-            float16, float32, float64, int32 and int64.
+        input (Tensor|numpy.ndarray|list|tuple|scalar): A tensor, numpy ndarray, tuple/list of scalar,
+            or scalar. Its data type supports float16, float32, float64, int32, int64, and bool.
+            Note: the float64 data will be converted to float32 because of current platform protobuf
+            data limitation.
         output (Tensor, optional): A tensor. If :attr:`output` is None, a new tensor will
             be created as :attr:`output`. Default: None.
 
@@ -563,29 +604,64 @@ def assign(input, output=None):
                             [3, 4],
                             [1, 3]]).astype(np.int64)
           result1 = paddle.zeros(shape=[3, 3], dtype='float32')
-          paddle.nn.functional.assign(array, result1) # result1 = [[1, 1], [3 4], [1, 3]]
-          result2 = paddle.nn.functional.assign(data)  # result2 = [[2.5, 2.5], [2.5, 2.5], [2.5, 2.5]]
-          result3 = paddle.nn.functional.assign(np.array([[2.5, 2.5], [2.5, 2.5], [2.5, 2.5]], dtype='float32')) # result3 = [[2.5, 2.5], [2.5, 2.5], [2.5, 2.5]]
+          paddle.assign(array, result1) # result1 = [[1, 1], [3 4], [1, 3]]
+          result2 = paddle.assign(data)  # result2 = [[2.5, 2.5], [2.5, 2.5], [2.5, 2.5]]
+          result3 = paddle.assign(np.array([[2.5, 2.5], [2.5, 2.5], [2.5, 2.5]], dtype='float32')) # result3 = [[2.5, 2.5], [2.5, 2.5], [2.5, 2.5]]
     """
     helper = LayerHelper('assign', **locals())
-    check_type(input, 'input', (Variable, numpy.ndarray), 'assign')
+    check_type(input, 'input', (Variable, numpy.ndarray, list, tuple, float,
+                                int, bool), 'assign')
     is_inplace = True if output is not None else False
 
-    if isinstance(input, Variable):
-        check_dtype(
-            input.dtype, 'input',
-            ['float16', 'float32', 'float64', 'int32', 'int64', 'bool'],
-            'assign', '(When the type of input in assign is Variable.)')
-        if output is None:
-            output = helper.create_variable_for_type_inference(
-                dtype=input.dtype)
-        helper.append_op(
-            type='assign', inputs={'X': [input]}, outputs={'Out': [output]})
+    if numpy.isscalar(input) and not isinstance(input, str):
+        input = numpy.array([input])
+    elif isinstance(input, (list, tuple)):
+        input = numpy.array(input)
+    # NOTE(Aurelius84): Why we judge core.VarBase?
+    # In case of @to_static, a VarBase can be as input of `assign`,
+    # but _non_static_mode()==False under @to_static, which means
+    # isinstance(VarBase, Variable) == False. It will cause return None
+    # after this api.
+    if isinstance(input, (Variable, core.VarBase)):
+        if _non_static_mode():
+            if in_dygraph_mode() and output is None:
+                output = _C_ops.final_state_assign(input)
+            else:
+                if output is None:
+                    if _in_legacy_dygraph():
+                        output = core.VarBase()
+                    else:
+                        output = core.eager.Tensor()
+                _C_ops.assign(input, output)
+        else:
+            check_dtype(input.dtype, 'input', [
+                'float16', 'uint16', 'float32', 'float64', 'int32', 'int64',
+                'uint8', 'bool'
+            ], 'assign', '(When the type of input in assign is Variable.)')
+            if output is None:
+                output = helper.create_variable_for_type_inference(
+                    dtype=input.dtype)
+            helper.append_op(
+                type='assign', inputs={'X': [input]},
+                outputs={'Out': [output]})
     elif isinstance(input, numpy.ndarray):
+        # Not support [var, var, ...] currently.
+        if len(input.shape) > 0 and any(isinstance(x, Variable) for x in input):
+            raise TypeError(
+                "Required type(input) numpy.ndarray, but found `list(Variable)` in input."
+            )
         dtype = convert_np_dtype_to_dtype_(input.dtype)
+        if dtype == VarDesc.VarType.FP64:
+            # Setting FP64 numpy data is not supported in Paddle, so we
+            # use FP32 here
+            warnings.warn(
+                "paddle.assign doesn't support float64 input now due "
+                "to current platform protobuf data limitation, we convert "
+                "it to float32")
+            dtype = VarDesc.VarType.FP32
         if dtype == VarDesc.VarType.BOOL:
             value_name = "bool_values"
-            values = [bool(v) for v in input.flat]
+            values = [int(v) for v in input.flat]
         elif dtype == VarDesc.VarType.FP32:
             value_name = "fp32_values"
             values = [float(v) for v in input.flat]
@@ -604,8 +680,7 @@ def assign(input, output=None):
             raise ValueError("The size of input is too big. Please consider "
                              "saving it to file and 'load_op' to load it")
         if output is None:
-            output = helper.create_variable_for_type_inference(
-                dtype=input.dtype)
+            output = helper.create_variable_for_type_inference(dtype=dtype)
         helper.append_op(
             type='assign_value',
             outputs={'Out': [output]},
@@ -615,7 +690,7 @@ def assign(input, output=None):
                 value_name: values
             })
 
-    if is_inplace and in_dygraph_mode():
+    if is_inplace and _non_static_mode():
         output._bump_inplace_version()
 
     return output
@@ -634,7 +709,7 @@ def fill_constant(shape, dtype, value, force_cpu=False, out=None, name=None):
             If ``shape`` is a list or tuple, the elements of it should be integers or Tensors with shape [1].
             If ``shape`` is an Tensor, it should be an 1-D Tensor with date type int32 or int64.
         dtype(np.dtype|str): Data type of the output Tensor which can
-            be float16, float32, float64, int32, int64.
+            be float16, float32, float64, uint8, int16, int32, int64.
         value(bool|float|int|Tensor): The constant value used to initialize 
             the Tensor to be created. If ``value`` is an Tensor, it should be an 1-D Tensor.
         force_cpu(bool, optional): data should be on CPU if it's true, default value is False.
@@ -672,30 +747,50 @@ def fill_constant(shape, dtype, value, force_cpu=False, out=None, name=None):
     attrs = {'force_cpu': force_cpu}
     dtype = convert_dtype(dtype)
     if not isinstance(value, Variable):
-        if dtype in ['int64', 'int32']:
+        if dtype in ['uint8', 'int16', 'int32', 'int64']:
             attrs['str_value'] = str(int(value))
             attrs['value'] = int(value)
         else:
             attrs['str_value'] = str(float(value))
             attrs['value'] = float(value)
 
-    if in_dygraph_mode():
-        shape = utils.convert_shape_to_list(shape)
-        if out is None:
-            out = _varbase_creator(dtype=dtype)
+    if _non_static_mode():
+        if out is None and in_dygraph_mode():
+            #Currently, final state mode don't support out is None.
+            place = _current_expected_place()
+            if force_cpu:
+                place = core.CPUPlace()
+            if isinstance(shape, (list, tuple)):
+                for item in shape:
+                    if not isinstance(item, Variable):
+                        shape = list(
+                            map(lambda x: x.numpy().flat[0] if isinstance(x, Variable) else x,
+                                shape))
+                        break
 
-        if isinstance(value, Variable):
-            if dtype in ['int64', 'int32']:
-                attrs['str_value'] = str(int(value.numpy().item(0)))
-            else:
-                attrs['str_value'] = str(float(value.numpy().item(0)))
+            if not isinstance(dtype, core.VarDesc.VarType):
+                dtype = convert_np_dtype_to_dtype_(dtype)
+            out = _C_ops.final_state_full(shape, float(value), dtype, place)
+            out.stop_gradient = True
+            return out
 
-        core.ops.fill_constant(out, 'value',
-                               float(value), 'force_cpu', force_cpu, 'dtype',
-                               out.dtype, 'str_value', attrs['str_value'],
-                               'shape', shape)
-        out.stop_gradient = True
-        return out
+        else:
+            shape = utils.convert_shape_to_list(shape)
+            if out is None:
+                out = _varbase_creator(dtype=dtype)
+
+            if isinstance(value, Variable):
+                if dtype in ['uint8', 'int16', 'int32', 'int64']:
+                    attrs['str_value'] = str(int(value.numpy().item(0)))
+                else:
+                    attrs['str_value'] = str(float(value.numpy().item(0)))
+
+            _C_ops.fill_constant(out, 'value',
+                                 float(value), 'force_cpu', force_cpu, 'dtype',
+                                 out.dtype, 'str_value', attrs['str_value'],
+                                 'shape', shape)
+            out.stop_gradient = True
+            return out
 
     helper = LayerHelper("fill_constant", **locals())
     inputs = {}
@@ -705,9 +800,10 @@ def fill_constant(shape, dtype, value, force_cpu=False, out=None, name=None):
         inputs['ValueTensor'] = value
 
     check_shape(shape)
-    check_dtype(dtype, 'dtype',
-                ['bool', 'float16', 'float32', 'float64', 'int32', 'int64'],
-                'fill_constant')
+    check_dtype(dtype, 'dtype', [
+        'bool', 'float16', 'float32', 'float64', 'uint8', 'int16', 'int32',
+        'int64', 'complex64', 'complex128'
+    ], 'fill_constant')
     check_type(shape, 'shape', (Variable, list, tuple), 'fill_constant')
 
     if out is not None:
@@ -774,6 +870,18 @@ def fill_constant_batch_size_like(input,
                     input=like, shape=[1], value=0, dtype='int64') #like=[[10, 10]] data=[0]
 
     """
+    if in_dygraph_mode():
+        if not isinstance(dtype, core.VarDesc.VarType):
+            dtype = convert_np_dtype_to_dtype_(dtype)
+
+        place = _current_expected_place()
+        if force_cpu:
+            place = core.CPUPlace()
+        out = _C_ops.final_state_full_batch_size_like(
+            input, shape, dtype, value, input_dim_idx, output_dim_idx, place)
+        out.stop_gradient = True
+        return out
+
     helper = LayerHelper("fill_constant_batch_size_like", **locals())
     out = helper.create_variable_for_type_inference(dtype=dtype)
     attrs = {
@@ -1248,8 +1356,8 @@ def has_inf(x):
           # [False]
 
     """
-    if in_dygraph_mode():
-        return core.ops.isinf(x)
+    if _non_static_mode():
+        return _C_ops.isinf(x)
 
     check_type(x, 'x', (Variable), 'has_inf')
     helper = LayerHelper("isinf", **locals())
@@ -1277,8 +1385,8 @@ def has_nan(x):
           # [False]
 
     """
-    if in_dygraph_mode():
-        return core.ops.isnan(x)
+    if _non_static_mode():
+        return _C_ops.isnan(x)
 
     check_type(x, 'x', (Variable), 'has_nan')
     helper = LayerHelper("isnan", **locals())
@@ -1368,34 +1476,45 @@ def range(start, end, step, dtype, name=None):
             # [3, 4, 5, 6]
 
     """
+    out_shape = None
+    if not isinstance(start, Variable) and not isinstance(
+            end, Variable) and not isinstance(step, Variable):
+        out_shape = [int(math.ceil((end - start) / step))]
+
     if not isinstance(dtype, core.VarDesc.VarType):
         dtype = convert_np_dtype_to_dtype_(dtype)
 
     if not isinstance(start, Variable):
         with device_guard("cpu"):
-            start = fill_constant([1], dtype, start)
+            start = fill_constant([1], dtype, start, force_cpu=True)
     elif start.dtype != dtype:
         start = cast(start, dtype)
 
     if not isinstance(end, Variable):
         with device_guard("cpu"):
-            end = fill_constant([1], dtype, end)
+            end = fill_constant([1], dtype, end, force_cpu=True)
     elif end.dtype != dtype:
         end = cast(end, dtype)
 
     if not isinstance(step, Variable):
         with device_guard("cpu"):
-            step = fill_constant([1], dtype, step)
+            step = fill_constant([1], dtype, step, force_cpu=True)
     elif step.dtype != dtype:
         step = cast(step, dtype)
 
     if in_dygraph_mode():
-        return core.ops.range(start, end, step)
+        return _C_ops.final_state_arange(start, end, step, dtype,
+                                         _current_expected_place())
+
+    if _in_legacy_dygraph():
+        out = _C_ops.range(start, end, step)
+        out.stop_gradient = True
+        return out
 
     check_dtype(dtype, 'dtype', ['float32', 'float64', 'int32', 'int64'],
                 'range/arange')
     helper = LayerHelper('range', **locals())
-    out = helper.create_variable_for_type_inference(dtype)
+    out = helper.create_variable_for_type_inference(dtype, shape=out_shape)
     helper.append_op(
         type='range',
         inputs={'Start': start,
@@ -1403,6 +1522,8 @@ def range(start, end, step, dtype, name=None):
                 'Step': step},
         outputs={'Out': out})
     out.stop_gradient = True
+    if out_shape is not None:
+        out.desc.set_shape(out_shape)
     return out
 
 
@@ -1453,10 +1574,12 @@ def linspace(start, stop, num, dtype=None, name=None):
     if not isinstance(num, Variable):
         with device_guard("cpu"):
             tensor_num = fill_constant([1], 'int32', num)
+    if _in_legacy_dygraph():
+        return _C_ops.linspace(tensor_start, tensor_stop, tensor_num, 'dtype',
+                               dtype)
     if in_dygraph_mode():
-        return core.ops.linspace(tensor_start, tensor_stop, tensor_num, 'dtype',
-                                 dtype)
-
+        return _C_ops.final_state_linspace(tensor_start, tensor_stop,
+                                           tensor_num, dtype)
     helper = LayerHelper("linspace", **locals())
 
     start_dtype = convert_dtype(tensor_start.dtype)
@@ -1642,9 +1765,11 @@ def eye(num_rows,
         num_columns = num_rows
 
     if in_dygraph_mode():
-        out = core.ops.eye('dtype', dtype, 'num_rows', num_rows, 'num_columns',
-                           num_columns)
-
+        out = _C_ops.final_state_eye(num_rows, num_columns, dtype,
+                                     _current_expected_place())
+    elif _in_legacy_dygraph():
+        out = _C_ops.eye('dtype', dtype, 'num_rows', num_rows, 'num_columns',
+                         num_columns)
     else:
         helper = LayerHelper("eye", **locals())
         check_dtype(dtype, 'dtype',
@@ -1667,9 +1792,9 @@ def eye(num_rows,
         re_shape = [1] * len(batch_shape)
         re_shape = re_shape + [num_rows, num_columns]
         expand_times = batch_shape + [1, 1]
-        if in_dygraph_mode():
-            out = core.ops.reshape(out, 'shape', re_shape)
-            return core.ops.expand(out, 'expand_times', expand_times)
+        if _non_static_mode():
+            out = _C_ops.reshape(out, 'shape', re_shape)
+            return _C_ops.expand(out, None, 'expand_times', expand_times)
 
         if not isinstance(batch_shape, list):
             raise TypeError("batch_shape should be a list")

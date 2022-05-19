@@ -12,241 +12,247 @@ limitations under the License. */
 #include "paddle/fluid/framework/ir/mkldnn/cpu_bfloat16_pass.h"
 
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 #include "paddle/fluid/framework/ir/graph_pattern_detector.h"
 #include "paddle/fluid/framework/op_version_registry.h"
-#include "paddle/fluid/platform/mkldnn_helper.h"
 #include "paddle/fluid/string/pretty_log.h"
 
 namespace paddle {
 namespace framework {
 namespace ir {
 
-using string::PrettyLogDetail;
+namespace {
+class Quanter {
+ public:
+  void AddQuantOps() {
+    if (IsNotPermittedOpType()) return;
 
-void UnlinkNodes(ir::Node* a, ir::Node* b) {
-  a->outputs.erase(std::remove(a->outputs.begin(), a->outputs.end(), b),
-                   a->outputs.end());
-  b->inputs.erase(std::remove(b->inputs.begin(), b->inputs.end(), a),
-                  b->inputs.end());
-}
+    std::vector<std::string> linked_xputs;
 
-void AddQuantize(Graph* g, ir::Node* op, ir::Node* op_in,
-                 int* quantize_counter) {
-  VarDesc quantize_out_desc(patterns::PDNodeName("quantize", "out"));
-  auto* quantize_out_node = g->CreateVarNode(&quantize_out_desc);
+    for (const auto& logical_xput : op_xputs) {
+      std::vector<std::string> quant_xput_names;
+      quant_xput_names.reserve(xputs_map.size());
 
-  OpDesc q_desc;
-  q_desc.SetType("quantize");
-  q_desc.SetInput("Input", std::vector<std::string>({op_in->Name()}));
-  q_desc.SetOutput("Output",
-                   std::vector<std::string>({quantize_out_node->Name()}));
-  q_desc.SetAttr("Scale", 1.f);
-  q_desc.SetAttr("bfloat16", true);
-  q_desc.SetAttr("output_format", op->Op()->HasAttr("data_layout")
-                                      ? op->Op()->GetAttr("data_layout")
-                                      : std::string("NCHW"));
-  auto quantize_op = g->CreateOpNode(&q_desc);
+      const auto& logical_xput_name = logical_xput.first;
+      if (IsNotPermittedName(logical_xput_name)) continue;
 
-  std::vector<std::string> input_names;
-  for (auto name : op->Op()->InputNames()) {
-    for (auto input_name : op->Op()->Input(name)) {
-      if (input_name == op_in->Name()) input_names.push_back(name);
-    }
-  }
+      const auto& physical_xputs_names = logical_xput.second;
+      for (const auto& physical_xput_name : physical_xputs_names) {
+        if (IsAlreadyLinked(linked_xputs, physical_xput_name)) continue;
 
-  PADDLE_ENFORCE_NE(
-      input_names.empty(), true,
-      platform::errors::NotFound(
-          "Operator before operator should have input as op output"));
+        VarDesc quant_x_desc(
+            patterns::PDNodeName(get_op_type(), get_op_edge()));
+        auto quant_x_node = graph.CreateVarNode(&quant_x_desc);
+        const auto xput_name = quant_x_node->Name();
+        quant_xput_names.emplace_back(xput_name);
 
-  for (auto name = input_names.begin(); name < input_names.end(); name++)
-    op->Op()->SetInput(*name,
-                       std::vector<std::string>({quantize_out_node->Name()}));
+        auto quant_op = create_quant_op(physical_xput_name, xput_name);
 
-  UnlinkNodes(op_in, op);
-  IR_NODE_LINK_TO(op_in, quantize_op);
-  IR_NODE_LINK_TO(quantize_op, quantize_out_node);
-  IR_NODE_LINK_TO(quantize_out_node, op);
-  (*quantize_counter)++;
-}
-
-void AddQuantizes(Graph* g, ir::Node* op, int* quantize_counter) {
-  auto inputs = op->inputs;
-  PADDLE_ENFORCE_GE(inputs.size(), 1,
-                    platform::errors::InvalidArgument(
-                        "OP(%s)'s inputs(%d) must be equal or greater than 1.",
-                        op->Name(), inputs.size()));
-  PADDLE_ENFORCE_EQ(op->outputs.size(), 1,
-                    platform::errors::InvalidArgument(
-                        "OP(%s)'s outputs(%d) must be equal to 1.", op->Name(),
-                        op->outputs.size()));
-
-  OpDesc q_desc;
-  q_desc.SetType("quantize");
-
-  std::vector<Node*> quantize_out_nodes(inputs.size());
-  std::vector<std::string> quantize_out_node_names(inputs.size());
-
-  for (size_t i = 0; i < inputs.size(); i++) {
-    VarDesc quantize_out_desc(patterns::PDNodeName("quantize", "out"));
-    quantize_out_nodes[i] = g->CreateVarNode(&quantize_out_desc);
-    quantize_out_node_names[i] = quantize_out_nodes[i]->Name();
-
-    q_desc.SetInput("Input", std::vector<std::string>({inputs[i]->Name()}));
-    q_desc.SetOutput("Output",
-                     std::vector<std::string>({quantize_out_node_names[i]}));
-    q_desc.SetAttr("Scale", 1.f);
-    q_desc.SetAttr("bfloat16", true);
-    q_desc.SetAttr("output_format", op->Op()->HasAttr("data_layout")
-                                        ? op->Op()->GetAttr("data_layout")
-                                        : std::string("NCHW"));
-    auto quantize_op = g->CreateOpNode(&q_desc);
-
-    UnlinkNodes(inputs[i], op);
-    IR_NODE_LINK_TO(inputs[i], quantize_op);
-    IR_NODE_LINK_TO(quantize_op, quantize_out_nodes[i]);
-    IR_NODE_LINK_TO(quantize_out_nodes[i], op);
-    (*quantize_counter)++;
-  }
-
-  op->Op()->SetInput("X", quantize_out_node_names);
-}
-
-void AddReoderBeforeDuplicatedInputs(ir::Graph* graph, int* quantize_counter) {
-  GraphPatternDetector gpd;
-  patterns::DuplicatedInputs duplicated_inputs{gpd.mutable_pattern(),
-                                               "duplicated_inputs"};
-  duplicated_inputs();
-  auto handler = [&](const GraphPatternDetector::subgraph_t& subgraph,
-                     Graph* g) {
-    GET_IR_NODE_FROM_SUBGRAPH(op, op, duplicated_inputs);
-    AddQuantizes(g, op, quantize_counter);
-  };
-  gpd(graph, handler);
-}
-
-void RemoveUnnecessaryReorders(ir::Graph* graph, int* quantize_counter) {
-  GraphPatternDetector gpd;
-  patterns::UnnecessaryReorders unnecessary_reorders{gpd.mutable_pattern(),
-                                                     "unnecessary_reorders"};
-  unnecessary_reorders();
-  auto handler = [&](const GraphPatternDetector::subgraph_t& subgraph,
-                     Graph* g) {
-    GET_IR_NODE_FROM_SUBGRAPH(prev_op, prev_op, unnecessary_reorders);
-    GET_IR_NODE_FROM_SUBGRAPH(quant_in, quant_in, unnecessary_reorders);
-    GET_IR_NODE_FROM_SUBGRAPH(quant_op, quant_op, unnecessary_reorders);
-    GET_IR_NODE_FROM_SUBGRAPH(quant_out, quant_out, unnecessary_reorders);
-
-    std::string op_output_name;
-    for (auto name : prev_op->Op()->OutputNames())
-      for (auto output_name : prev_op->Op()->Output(name))
-        if (output_name == quant_in->Name()) op_output_name = name;
-
-    PADDLE_ENFORCE_NE(
-        op_output_name.empty(), true,
-        platform::errors::NotFound(
-            "Operator before operator should have input as op output"));
-
-    prev_op->Op()->SetOutput(op_output_name,
-                             std::vector<std::string>({quant_out->Name()}));
-
-    IR_NODE_LINK_TO(prev_op, quant_out);
-    GraphSafeRemoveNodes(graph, {quant_in, quant_op});
-    (*quantize_counter)--;
-  };
-  gpd(graph, handler);
-}
-
-void AddReoderBeforeSingleInputs(ir::Graph* graph, int* quantize_counter) {
-  GraphPatternDetector gpd;
-  patterns::FirstBfloat16Ops bfloat16_ops{gpd.mutable_pattern(),
-                                          "first_bfloat16_ops"};
-  bfloat16_ops();
-  auto handler = [&](const GraphPatternDetector::subgraph_t& subgraph,
-                     Graph* g) {
-    GET_IR_NODE_FROM_SUBGRAPH(prev_op, prev_op, bfloat16_ops);
-    GET_IR_NODE_FROM_SUBGRAPH(op_in, op_in, bfloat16_ops);
-    GET_IR_NODE_FROM_SUBGRAPH(op, op, bfloat16_ops);
-    auto prev_op_type = prev_op->Op()->Type();
-    if (op->Op()->Type() != "conv2d" && prev_op_type != "quantize" &&
-        prev_op_type != "sum" && prev_op_type != "concat") {
-      AddQuantize(g, op, op_in, quantize_counter);
-    }
-  };
-  gpd(graph, handler);
-}
-
-void CPUBFloat16Pass::SetInputDataType(ir::Graph* graph) const {
-  int quantize_counter = 0;
-  AddReoderBeforeDuplicatedInputs(graph, &quantize_counter);
-  RemoveUnnecessaryReorders(graph, &quantize_counter);
-  AddReoderBeforeSingleInputs(graph, &quantize_counter);
-  PrettyLogDetail("---    added %d quantize op before bfloat16 op",
-                  quantize_counter);
-}
-
-void CPUBFloat16Pass::SetOutputDataType(ir::Graph* graph) const {
-  GraphPatternDetector gpd;
-  patterns::LastBfloat16Ops bfloat16_ops{gpd.mutable_pattern(),
-                                         "last_bfloat16_ops"};
-  bfloat16_ops();
-  int force_fp32_counter = 0, dequantize_counter = 0;
-
-  auto handler = [&](const GraphPatternDetector::subgraph_t& subgraph,
-                     Graph* g) {
-    GET_IR_NODE_FROM_SUBGRAPH(op, op, bfloat16_ops);
-    GET_IR_NODE_FROM_SUBGRAPH(op_out, op_out, bfloat16_ops);
-    GET_IR_NODE_FROM_SUBGRAPH(next_op, next_op, bfloat16_ops);
-    if ((op->Op()->HasAttr("force_fp32_output") ||
-         op->Op()->HasProtoAttr("force_fp32_output")) &&
-        !op->Op()->GetAttrIfExists<bool>("fuse_residual_connection")) {
-      op->Op()->SetAttr("force_fp32_output", true);
-      force_fp32_counter++;
-    } else if (op->Op()->Type() != "prior_box") {
-      VarDesc dequantize_out_desc(patterns::PDNodeName("dequantize", "out"));
-      auto* dequantize_out_node = g->CreateVarNode(&dequantize_out_desc);
-
-      OpDesc deq_desc;
-      deq_desc.SetType("dequantize");
-      deq_desc.SetInput("Input", std::vector<std::string>({op_out->Name()}));
-      deq_desc.SetOutput(
-          "Output", std::vector<std::string>({dequantize_out_node->Name()}));
-      deq_desc.SetAttr("Scale", 1.0f);
-      auto dequantize_op = g->CreateOpNode(&deq_desc);
-
-      std::string next_op_input_name;
-      for (auto name : next_op->Op()->InputNames()) {
-        for (auto input_name : next_op->Op()->Input(name)) {
-          if (input_name == op_out->Name()) next_op_input_name = name;
-        }
+        auto physical_xput_node = xputs_map[physical_xput_name];
+        link_nodes(physical_xput_node, quant_op, quant_x_node);
+        counter++;
+        linked_xputs.push_back(physical_xput_name);
       }
 
-      PADDLE_ENFORCE_NE(
-          next_op_input_name.empty(), true,
-          platform::errors::NotFound(
-              "Operator before operator should have input as op output"));
-
-      next_op->Op()->SetInput(
-          next_op_input_name,
-          std::vector<std::string>({dequantize_out_node->Name()}));
-      UnlinkNodes(op_out, next_op);
-      IR_NODE_LINK_TO(op_out, dequantize_op);
-      IR_NODE_LINK_TO(dequantize_op, dequantize_out_node);
-      IR_NODE_LINK_TO(dequantize_out_node, next_op);
-      dequantize_counter++;
+      set_edge(logical_xput_name, quant_xput_names);
     }
+  }
+
+  int get_counter() const { return counter; }
+
+  virtual ~Quanter() = default;
+
+ protected:
+  Graph& graph;
+  ir::Node* const op;
+
+  std::map<std::string, ir::Node*> xputs_map;
+  const VariableNameMap& op_xputs;
+
+  int counter = 0;
+
+  Quanter(Graph& graph, ir::Node* const op, const VariableNameMap& op_xputs)
+      : graph(graph), op(op), op_xputs(op_xputs){};
+
+  virtual bool IsNotPermittedOpType() const = 0;
+  virtual bool IsNotPermittedName(const std::string& input_name) const = 0;
+  virtual std::string get_op_type() const = 0;
+  virtual std::string get_op_edge() const = 0;
+  virtual void link_nodes(ir::Node* const physical_xput_node,
+                          ir::Node* const quant_op,
+                          ir::Node* const quant_x_node) = 0;
+  virtual void set_edge(const std::string& logical_xput_name,
+                        const std::vector<std::string>& quant_xput_names) = 0;
+
+  bool IsAlreadyLinked(const std::vector<std::string>& node_names,
+                       const std::string& node_name) const {
+    return std::find(node_names.begin(), node_names.end(), node_name) !=
+           node_names.end();
+  }
+
+  virtual ir::Node* create_quant_op(const std::string& input_name,
+                                    const std::string& output_name) const {
+    OpDesc op_desc;
+    op_desc.SetType(get_op_type());
+
+    op_desc.SetInput("Input", std::vector<std::string>({input_name}));
+    op_desc.SetOutput("Output", std::vector<std::string>({output_name}));
+    op_desc.SetAttr("Scale", 1.f);
+    op_desc.SetAttr("Shift", 0.0f);
+    op_desc.SetAttr("bfloat16", true);
+    op_desc.SetAttr("output_format", op->Op()->HasAttr("data_layout")
+                                         ? op->Op()->GetAttr("data_layout")
+                                         : std::string("NCHW"));
+    return graph.CreateOpNode(&op_desc);  // OpDesc will be copied.
+  }
+
+  void UnlinkNodes(ir::Node* a, ir::Node* b) const {
+    a->outputs.erase(std::remove(a->outputs.begin(), a->outputs.end(), b),
+                     a->outputs.end());
+    b->inputs.erase(std::remove(b->inputs.begin(), b->inputs.end(), a),
+                    b->inputs.end());
+  }
+};
+
+class Quantizer final : public Quanter {
+ public:
+  Quantizer(Graph* const graph, ir::Node* const op)
+      : Quanter(*graph, op, op->Op()->Inputs()) {
+    auto inputs = op->inputs;
+    PADDLE_ENFORCE_GE(
+        inputs.size(), 1,
+        platform::errors::InvalidArgument(
+            "OP(%s)'s inputs(%d) must be equal or greater than 1.", op->Name(),
+            inputs.size()));
+
+    for (auto input : inputs) xputs_map[input->Name()] = input;
   };
-  gpd(graph, handler);
-  PrettyLogDetail("---    added %d dequantize op and used %d force_fp32_output",
-                  dequantize_counter, force_fp32_counter);
+
+ protected:
+  bool IsNotPermittedOpType() const override { return false; }
+
+  // Checking whether a reorder from FP32 to BF16
+  // should be added before the input to the operator
+  bool IsNotPermittedName(const std::string& input_name) const override {
+    // Only the inputs listed in \"permitted_names\"
+    // requires quanitization before the bfloat16 operator.
+    // Other inputs, such as Filter and Bias are reordered in the kernel.
+    const std::vector<std::string> permitted_names = {"X", "Y", "Input",
+                                                      "ResidualData"};
+
+    return std::none_of(
+        permitted_names.begin(), permitted_names.end(),
+        [&input_name](const std::string& name) { return name == input_name; });
+  }
+
+  std::string get_op_type() const override { return "quantize"; };
+  std::string get_op_edge() const override { return "out"; };
+
+  void link_nodes(ir::Node* const physical_xput_node, ir::Node* const quant_op,
+                  ir::Node* const quant_x_node) override {
+    UnlinkNodes(physical_xput_node, op);
+    IR_NODE_LINK_TO(physical_xput_node, quant_op);
+    IR_NODE_LINK_TO(quant_op, quant_x_node);
+    IR_NODE_LINK_TO(quant_x_node, op);
+  }
+
+  void set_edge(const std::string& logical_xput_name,
+                const std::vector<std::string>& quant_xput_names) override {
+    op->Op()->SetInput(logical_xput_name, quant_xput_names);
+  }
+};
+
+class DeQuantizer final : public Quanter {
+ public:
+  DeQuantizer(Graph* const graph, ir::Node* const op)
+      : Quanter(*graph, op, op->Op()->Outputs()) {
+    auto outputs = op->outputs;
+    PADDLE_ENFORCE_GE(
+        outputs.size(), 1,
+        platform::errors::InvalidArgument(
+            "OP(%s)'s outputs(%d) must be equal or greater than 1.", op->Name(),
+            outputs.size()));
+
+    for (auto output : outputs) xputs_map[output->Name()] = output;
+  };
+
+ protected:
+  bool IsNotPermittedOpType() const override {
+    // Prior_box operator output is always FP32 so no dequantization is needed.
+    return op->Op()->Type() == "prior_box";
+  }
+
+  // Checking whether a reorder from BF16 to FP32
+  // should be added after the output to the operator
+  bool IsNotPermittedName(const std::string& output_name) const override {
+    std::unordered_map<std::string, std::vector<std::string>> block_list{
+        {"layer_norm",
+         {"Mean", "Variance"}}};  // not used in inference in MKLDNN
+
+    std::vector<std::string> blocked_outputs{"XShape"};  // blocklist for any op
+    auto op_name = op->Name();
+    if (block_list.count(op_name)) {
+      const auto& op_blocklist = block_list[op_name];
+      blocked_outputs.insert(blocked_outputs.begin(), op_blocklist.begin(),
+                             op_blocklist.end());
+    }
+
+    return std::any_of(blocked_outputs.begin(), blocked_outputs.end(),
+                       [&output_name](const std::string& name) {
+                         return name == output_name;
+                       });
+  }
+
+  std::string get_op_type() const override { return "dequantize"; };
+  std::string get_op_edge() const override { return "in"; };
+
+  void link_nodes(ir::Node* const physical_xput_node, ir::Node* const quant_op,
+                  ir::Node* const quant_x_node) override {
+    UnlinkNodes(op, physical_xput_node);
+    IR_NODE_LINK_TO(quant_op, physical_xput_node);
+    IR_NODE_LINK_TO(quant_x_node, quant_op);
+    IR_NODE_LINK_TO(op, quant_x_node);
+  }
+
+  void set_edge(const std::string& logical_xput_name,
+                const std::vector<std::string>& quant_xput_names) override {
+    op->Op()->SetOutput(logical_xput_name, quant_xput_names);
+  }
+
+  ir::Node* create_quant_op(const std::string& input_name,
+                            const std::string& output_name) const override {
+    return Quanter::create_quant_op(output_name, input_name);
+  }
+};
 }
+using string::PrettyLogDetail;
 
 void CPUBFloat16Pass::ApplyImpl(ir::Graph* graph) const {
-  SetInputDataType(graph);
-  SetOutputDataType(graph);
+  int quantize_counter = 0;
+  int dequantize_counter = 0;
+
+  GraphPatternDetector gpd;
+  patterns::Bloat16Ops Bloat16Ops{gpd.mutable_pattern(), "Bloat16Ops"};
+  Bloat16Ops();
+  auto handler = [&](const GraphPatternDetector::subgraph_t& subgraph,
+                     Graph* graph) {
+    GET_IR_NODE_FROM_SUBGRAPH(op, op, Bloat16Ops);
+
+    Quantizer quantizer(graph, op);
+    quantizer.AddQuantOps();
+    quantize_counter += quantizer.get_counter();
+
+    DeQuantizer dequantizer(graph, op);
+    dequantizer.AddQuantOps();
+    dequantize_counter += dequantizer.get_counter();
+  };
+  gpd(graph, handler);
+
+  PrettyLogDetail("---    added %d quantize ops before bfloat16 op",
+                  quantize_counter);
+  PrettyLogDetail("---    added %d dequantize ops after bfloat16 op",
+                  dequantize_counter);
 }
 
 }  // namespace ir

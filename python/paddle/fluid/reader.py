@@ -18,15 +18,20 @@ import six
 import numpy as np
 import threading
 import paddle
-from .framework import Program, Variable, program_guard, default_main_program, default_startup_program, in_dygraph_mode, cpu_places, _current_expected_place
+import time
+import copy
+
+from .framework import Program, Variable, program_guard, default_main_program, default_startup_program, _non_static_mode, cpu_places, _current_expected_place, _in_eager_without_dygraph_check
 from .executor import global_scope
 from .data_feeder import DataFeeder, BatchedTensorProvider
 from .multiprocess_utils import multiprocess_queue_set, CleanupFuncRegistrar, _cleanup_mmap, _cleanup, _set_SIGCHLD_handler
-from .dataloader import BatchSampler, Dataset, IterableDataset
+from .dataloader import BatchSampler, Dataset, IterableDataset, Subset
 from .dataloader.dataloader_iter import _DataLoaderIterSingleProcess, _DataLoaderIterMultiProcess, _DatasetKind, default_collate_fn
 from .dataloader.batch_sampler import _InfiniteIterableSampler
 from .layers.io import monkey_patch_reader_methods, _copy_reader_var_, double_buffer
 from .unique_name import UniqueNameGenerator
+from .framework import _get_paddle_place, _get_paddle_place_list
+from paddle.fluid.framework import _set_expected_place, _current_expected_place
 import logging
 import warnings
 
@@ -34,13 +39,8 @@ import warnings
 import os
 import multiprocessing
 import signal
-
 # NOTE: queue has a different name in python2 and python3
-if six.PY2:
-    import Queue as queue
-else:
-    import queue
-
+import queue
 # NOTE: [ avoid hanging & failed quickly ] These value is used in getting data from another process
 QUEUE_GET_TIMEOUT = 60
 
@@ -50,6 +50,16 @@ data_loader_unique_name_generator = UniqueNameGenerator()
 
 KEEP_DATA_LOADER_ORDER = True
 USE_PINNED_MEMORY = None
+# AutoTune Flags
+USE_AUTOTUNE = False
+TUNING_STEPS = 500
+
+
+def set_autotune_config(use_autotune, tuning_steps=500):
+    global USE_AUTOTUNE
+    USE_AUTOTUNE = use_autotune
+    global TUNING_STEPS
+    TUNING_STEPS = tuning_steps
 
 
 def keep_data_loader_order(*args):
@@ -144,6 +154,122 @@ class DataLoaderBase(object):
         return arr
 
 
+class AuToTune(object):
+    def __init__(self, loader):
+        self.loader = loader
+        self.max_num_worker = multiprocessing.cpu_count() / 2
+
+    def __call__(self):
+        # use default loader
+        if (not USE_AUTOTUNE) or (not self.need_autotune()):
+            return self.loader.num_workers
+
+        # get autotune loader
+        auto_tune_loader = self.get_autotune_loader()
+        if auto_tune_loader is None:
+            return self.loader.num_workers
+
+        # pick the best num_workers
+        auto_tune_start = time.time()
+        logging.debug("========= DataLoader Auto Tune =========")
+        logging.debug("User config for DataLoader: " + str(
+            self.loader.num_workers))
+        best_num_workers = 0
+        min_cost = float("inf")
+        logging.debug("Tuning Range for num_workers: 0 ~ " + str(
+            self.max_num_worker))
+        num_workers = 0
+        while num_workers < self.max_num_worker:
+            auto_tune_loader.num_workers = num_workers
+            avg_cost = self.evaluate_reader_cost(auto_tune_loader)
+            if min_cost * 0.75 > avg_cost:
+                min_cost = avg_cost
+                best_num_workers = num_workers
+            else:
+                update_num = self.is_best(auto_tune_loader, best_num_workers,
+                                          min_cost, self.max_num_worker)
+                if update_num == best_num_workers:
+                    break
+                else:
+                    best_num_workers = update_num
+            logging.debug("num_workers: " + str(num_workers) + " avg_cost: " +
+                          str(avg_cost))
+            num_workers += 2
+        logging.info("auto_tune dataLoader best_num_workers: " + str(
+            best_num_workers))
+        logging.debug("AutoTuning Cost for DataLoader: " + str(time.time(
+        ) - auto_tune_start) + ' seconds')
+
+        # tune the default loader's num_workers
+        return best_num_workers
+
+    def need_autotune(self):
+        if (sys.platform == 'darwin' or sys.platform == 'win32'):
+            return False
+        else:
+            return True
+
+    def get_sub_dataset(self, dataset, batch_size):
+        num_samples = min(batch_size * TUNING_STEPS, len(dataset))
+        sub_dataset = Subset(dataset, indices=list(range(num_samples)))
+        return sub_dataset
+
+    def get_autotune_loader(self):
+        loader = copy.copy(self.loader)
+        batch_size = self.loader.batch_sampler.batch_size
+        if isinstance(self.loader.batch_sampler,
+                      paddle.io.DistributedBatchSampler):
+            dataset = self.loader.batch_sampler.dataset
+            sub_dataset = self.get_sub_dataset(dataset, batch_size)
+            loader.batch_sampler = paddle.io.DistributedBatchSampler(
+                dataset=sub_dataset,
+                batch_size=batch_size,
+                num_replicas=self.loader.batch_sampler.nranks,
+                rank=self.loader.batch_sampler.local_rank,
+                shuffle=self.loader.batch_sampler.shuffle,
+                drop_last=self.loader.batch_sampler.drop_last)
+        elif isinstance(self.loader.batch_sampler, paddle.io.BatchSampler):
+            dataset = self.loader.batch_sampler.sampler.data_source
+            sub_dataset = self.get_sub_dataset(dataset, batch_size)
+            loader.batch_sampler = paddle.io.BatchSampler(
+                dataset=sub_dataset,
+                batch_size=batch_size,
+                drop_last=self.loader.batch_sampler.drop_last)
+        else:
+            loader = None
+        return loader
+
+    def evaluate_reader_cost(self, reader):
+        costs = []
+        avg_cost = 0
+        start = time.time()
+        for i, data in enumerate(reader):
+            costs.append(time.time() - start)
+            start = time.time()
+        if len(costs) > 2:
+            avg_cost = sum(costs[2:]) / len(costs[2:])
+        else:
+            avg_cost = sum(costs[0:]) / len(costs[0:])
+        return avg_cost
+
+    def is_best(self, reader, best_workers, best_time, num_work_boundary):
+        step = 0
+        num_workers = best_workers + 1
+        boundary = 1
+        while num_workers < num_work_boundary and step < 5:
+            self.loader.num_workers = num_workers
+            time = self.evaluate_reader_cost(reader)
+            logging.debug("for back num_workers: " + str(num_workers) +
+                          " avg_cost: " + str(time))
+            step += 1
+            if (time < best_time * 0.70 * boundary):
+                return num_workers
+            else:
+                num_workers += 1
+            boundary *= 0.80
+        return best_workers
+
+
 class DataLoader(object):
     """
     DataLoader prodives an iterator which iterates given dataset
@@ -162,6 +288,12 @@ class DataLoader(object):
     like a Python iterator), please see :code:`paddle.io.IterableDataset`.
 
     For :code:`batch_sampler` please see :code:`paddle.io.BatchSampler`
+
+    .. note::
+        GPU tensor operation is not supported in subprocess currently,
+        please don't use GPU tensor operations in pipeline which will
+        be performed in subprocess, such as dataset transforms, collte_fn,
+        etc. Numpy array and CPU tensor operation is supported.
 
     **Disable automatic batching**
 
@@ -186,10 +318,12 @@ class DataLoader(object):
             The Tensors should be created by :code:`paddle.static.data()`.
             :attr:`feed_list` must be set if :attr:`return_list` is
             False. Default None.
-        places(list(Place)|tuple(Place)|optional): a list of Place,
+        places(list(Place)|tuple(Place)|list(str)|optional): a list of Place,
             to put data onto, :attr:`places` can be None, if 
             :attr:`places` is None, default place(CPUPlace or CUDAPlace(0))
-            will be used. Default None.
+            will be used. Default None. If ``places`` is list of string,
+            the string in the list can be ``cpu``, ``gpu:x`` and ``gpu_pinned``,
+            where ``x`` is the index of the GPUs.
         return_list (bool): whether the return value on each device is 
             presented as a list. If :attr:`return_list=False`, the return
             value on each device would be a dict of str -> Tensor, where
@@ -318,23 +452,26 @@ class DataLoader(object):
                  use_buffer_reader=True,
                  use_shared_memory=True,
                  timeout=0,
-                 worker_init_fn=None):
+                 worker_init_fn=None,
+                 persistent_workers=False):
         self.return_list = return_list
         self.collate_fn = collate_fn
         self.use_buffer_reader = use_buffer_reader
         self.worker_init_fn = worker_init_fn
 
-        assert isinstance(dataset, Dataset), \
-            "dataset should be subclass instance of paddle.io.Dataset"
         self.dataset = dataset
 
-        if not return_list and not in_dygraph_mode():
+        if not return_list and not _non_static_mode():
             assert feed_list is not None, \
                     "feed_list should be set when return_list=False"
         self.feed_list = feed_list
 
         if places is None:
             places = _current_expected_place()
+        if isinstance(places, (list, tuple)):
+            places = _get_paddle_place_list(places)
+        else:
+            places = _get_paddle_place(places)
         self.places = _convert_places(places)
 
         assert num_workers >= 0, "num_workers should be a non-negative value"
@@ -389,12 +526,17 @@ class DataLoader(object):
                     shuffle=shuffle,
                     drop_last=drop_last)
 
+        self.drop_last = drop_last
         self.auto_collate_batch = self.batch_sampler is not None
 
         self.pin_memory = False
-        if in_dygraph_mode():
+        if _non_static_mode():
             self.pin_memory = True if use_pinned_memory(
             ) is None else use_pinned_memory()
+
+        self._persistent_workers = persistent_workers
+        self._iterator = None
+        self.num_workers = AuToTune(self).__call__()
 
     def __len__(self):
         if self.dataset_kind == _DatasetKind.ITER:
@@ -408,6 +550,12 @@ class DataLoader(object):
     def __iter__(self):
         if self.num_workers == 0:
             return _DataLoaderIterSingleProcess(self)
+        elif self._persistent_workers:
+            if self._iterator is None:
+                self._iterator = _DataLoaderIterMultiProcess(self)
+            else:
+                self._iterator._reset()
+            return self._iterator
         else:
             return _DataLoaderIterMultiProcess(self)
 
@@ -732,7 +880,7 @@ class DataLoader(object):
                 # number is less than CPU core number can be tested.
                 print(run_inference(drop_last=False)) # [1.0, 4.0, 9.0]
         """
-        if in_dygraph_mode():
+        if _non_static_mode():
             return DygraphGeneratorLoader(feed_list, capacity,
                                           use_double_buffer, iterable,
                                           return_list, use_multiprocess)
@@ -752,8 +900,9 @@ class DataLoader(object):
 
         Args:
             dataset (InMemoryDataset|QueueDataset): the dataset object.
-            places (list(CUDAPlace)|list(CPUPlace)): places where the result 
-                data should be converted.   
+            places (list(CUDAPlace)|list(CPUPlace)|list(str)): places where the result 
+                data should be converted. If places is list of string, the string in the list 
+                can be ``cpu``, ``gpu:x`` and ``gpu_pinned``, where x is the index of the GPUs.   
             drop_last (bool): whether to drop the last batch whose sample 
                 number is less than batch size. If drop_last = True, they
                 would be dropped. If drop_last = False, they would be kept. 
@@ -920,12 +1069,14 @@ class DygraphGeneratorLoader(DataLoaderBase):
             # Set reader_thread
             self._thread_done_event = threading.Event()
             self._thread = threading.Thread(
-                target=self._reader_thread_loop_for_multiprocess)
+                target=self._reader_thread_loop_for_multiprocess,
+                args=(_current_expected_place(), ))
             self._thread.daemon = True
             self._thread.start()
         else:
             self._thread = threading.Thread(
-                target=self._reader_thread_loop_for_singleprocess)
+                target=self._reader_thread_loop_for_singleprocess,
+                args=(_current_expected_place(), ))
             self._thread.daemon = True
             self._thread.start()
 
@@ -946,7 +1097,11 @@ class DygraphGeneratorLoader(DataLoaderBase):
 
     def __next__(self):
         try:
-            return self._reader.read_next_var_list()
+            if _in_eager_without_dygraph_check():
+                return core.eager.read_next_tensor_list(
+                    self._reader.read_next_list()[0])
+            else:
+                return self._reader.read_next_var_list()
         except StopIteration:
             self._reset()
             six.reraise(*sys.exc_info())
@@ -960,7 +1115,10 @@ class DygraphGeneratorLoader(DataLoaderBase):
         self._blocking_queue.kill()
         logging.error("DataLoader reader thread raised an exception!")
 
-    def _reader_thread_loop_for_multiprocess(self):
+    def _reader_thread_loop_for_multiprocess(self, legacy_expected_place):
+        # See _DataLoaderIterSingleProcess._thread_loop() for why set expected place here.
+        _set_expected_place(legacy_expected_place)
+
         while not self._thread_done_event.is_set():
             try:
                 # NOTE: [ avoid hanging ] Even with carefully designed data dependencies 
@@ -999,8 +1157,11 @@ class DygraphGeneratorLoader(DataLoaderBase):
                 else:
                     self._exit_thread_expectedly()
 
-    def _reader_thread_loop_for_singleprocess(self):
+    def _reader_thread_loop_for_singleprocess(self, legacy_expected_place):
         try:
+            # See _DataLoaderIterSingleProcess._thread_loop() for why set expected place here.
+            _set_expected_place(legacy_expected_place)
+
             for sample in self._batch_reader():
                 array = core.LoDTensorArray()
                 for item in sample:
@@ -1030,6 +1191,10 @@ class DygraphGeneratorLoader(DataLoaderBase):
                              drop_last=True,
                              places=None):
         assert batch_size > 0, "batch_size must be larger than 0"
+        if isinstance(places, (list, tuple)):
+            places = _get_paddle_place_list(places)
+        else:
+            places = _get_paddle_place(places)
         self.set_sample_list_generator(
             paddle.batch(
                 reader, batch_size=batch_size, drop_last=drop_last),
@@ -1037,6 +1202,11 @@ class DygraphGeneratorLoader(DataLoaderBase):
         return self
 
     def set_sample_list_generator(self, reader, places=None):
+        if isinstance(places, (list, tuple)):
+            places = _get_paddle_place_list(places)
+        else:
+            places = _get_paddle_place(places)
+
         def __batch_reader_impl__():
             for batch in reader():
                 slots = []
@@ -1052,6 +1222,10 @@ class DygraphGeneratorLoader(DataLoaderBase):
         return self
 
     def set_batch_generator(self, reader, places=None):
+        if isinstance(places, (list, tuple)):
+            places = _get_paddle_place_list(places)
+        else:
+            places = _get_paddle_place(places)
         self._batch_reader = reader
         if places is None:
             places = _current_expected_place()
@@ -1210,7 +1384,10 @@ class GeneratorLoader(DataLoaderBase):
     def __next__(self):
         try:
             if self._return_list:
-                return self._reader.read_next_list()
+                data = self._reader.read_next_list()
+                for i in range(len(data)):
+                    data[i] = data[i]._move_to_list()
+                return data
             else:
                 return self._reader.read_next()
         except StopIteration:
@@ -1227,8 +1404,11 @@ class GeneratorLoader(DataLoaderBase):
         self._reset()
 
     def _start(self):
-        def __thread_main__():
+        def __thread_main__(legacy_expected_place):
             try:
+                # See _DataLoaderIterSingleProcess._thread_loop() for why set expected place here.
+                _set_expected_place(legacy_expected_place)
+
                 while not self._queue.wait_for_inited(1):
                     if self._exited:
                         return
@@ -1252,10 +1432,11 @@ class GeneratorLoader(DataLoaderBase):
             except Exception as ex:
                 self._queue.kill()
                 self._thread = None
-                logging.warn('Your reader has raised an exception!')
+                logging.warning('Your reader has raised an exception!')
                 six.reraise(*sys.exc_info())
 
-        self._thread = threading.Thread(target=__thread_main__)
+        self._thread = threading.Thread(
+            target=__thread_main__, args=(_current_expected_place(), ))
         self._thread.daemon = True
         self._thread.start()
 
@@ -1275,6 +1456,10 @@ class GeneratorLoader(DataLoaderBase):
                              drop_last=True,
                              places=None):
         assert batch_size > 0, "batch_size must be larger than 0"
+        if isinstance(places, (list, tuple)):
+            places = _get_paddle_place_list(places)
+        else:
+            places = _get_paddle_place(places)
         has_lod = False
         for f in self._feed_list:
             if f.lod_level != 0:
@@ -1297,6 +1482,10 @@ class GeneratorLoader(DataLoaderBase):
         return self
 
     def set_sample_list_generator(self, reader, places=None):
+        if isinstance(places, (list, tuple)):
+            places = _get_paddle_place_list(places)
+        else:
+            places = _get_paddle_place(places)
         with program_guard(Program(), Program()):
             feeder = DataFeeder(
                 feed_list=self._feed_list, place=core.CPUPlace())
@@ -1310,6 +1499,10 @@ class GeneratorLoader(DataLoaderBase):
         return self
 
     def set_batch_generator(self, reader, places=None):
+        if isinstance(places, (list, tuple)):
+            places = _get_paddle_place_list(places)
+        else:
+            places = _get_paddle_place(places)
         self._tensor_reader = reader
         if self._iterable:
             assert places is not None, "Places cannot be None when DataLoader is iterable"
@@ -1782,8 +1975,12 @@ class DatasetLoader(DataLoaderBase):
     def __init__(self, dataset, places, drop_last):
         assert isinstance(dataset, paddle.distributed.fleet.dataset.
                           DatasetBase), "dataset must be type of DatasetBase"
-        assert not in_dygraph_mode(
+        assert not _non_static_mode(
         ), "DatasetLoader is not supported in dygraph mode yet"
+        if isinstance(places, (list, tuple)):
+            places = _get_paddle_place_list(places)
+        else:
+            places = _get_paddle_place(places)
 
         thread_num = len(places)
 

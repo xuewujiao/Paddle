@@ -18,6 +18,8 @@ PADDLE_DIR=/paddle
 BUILD_DIR=$PWD/build
 
 echo ">>> paddle: $PADDLE_DIR"
+export PADDLE_ROOT="$PADDLE_DIR"
+
 echo ">>> python: $PYTHON_VERSION"
 
 # exit when any command fails
@@ -49,6 +51,7 @@ if [ "$pip_index" ]; then
 fi
 
 if [ "$WITH_REQUIREMENT" ]; then
+    echo "pyyaml" >> $WITH_REQUIREMENT
     echo ">>> install python requirement: $WITH_REQUIREMENT";
     pip install $PIP_ARGS -r "$WITH_REQUIREMENT";
 fi
@@ -64,7 +67,7 @@ fi
 echo ">>> compile source code"
 set -x
 
-export FLAGS_call_stack_level=2
+export FLAGS_call_stack_level="${FLAGS_call_stack_level-2}"
 
 cmake "$PADDLE_DIR" \
     -DWITH_MUSL=ON \

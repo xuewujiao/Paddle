@@ -17,7 +17,8 @@ limitations under the License. */
 #include <string>
 #include <unordered_map>
 #include "paddle/fluid/framework/data_layout.h"
-#include "paddle/fluid/operators/math/math_function.h"
+#include "paddle/fluid/framework/op_version_registry.h"
+#include "paddle/phi/kernels/funcs/math_function.h"
 
 namespace paddle {
 namespace operators {
@@ -31,6 +32,13 @@ void InstanceNormOp::InferShape(framework::InferShapeContext *ctx) const {
                  "InstanceNorm");
 
   const auto x_dims = ctx->GetInputDim("X");
+  PADDLE_ENFORCE_NE(phi::product(x_dims), 0,
+                    platform::errors::PreconditionNotMet(
+                        "The Input variable X(%s) has not "
+                        "been initialized. You may need to confirm "
+                        "if you put exe.run(startup_program) "
+                        "after optimizer.minimize function.",
+                        ctx->Inputs("X").front()));
   PADDLE_ENFORCE_GE(
       x_dims.size(), 2,
       platform::errors::InvalidArgument(
@@ -60,7 +68,7 @@ void InstanceNormOp::InferShape(framework::InferShapeContext *ctx) const {
             "of scale is [%d]",
             scale_dim, scale_dim.size()));
 
-    bool check = !((!ctx->IsRuntime()) && (framework::product(scale_dim) <= 0));
+    bool check = !((!ctx->IsRuntime()) && (phi::product(scale_dim) <= 0));
 
     if (check) {
       PADDLE_ENFORCE_EQ(scale_dim[0], C,
@@ -80,7 +88,7 @@ void InstanceNormOp::InferShape(framework::InferShapeContext *ctx) const {
             "of bias is [%d]",
             bias_dim, bias_dim.size()));
 
-    bool check = !((!ctx->IsRuntime()) && (framework::product(bias_dim) <= 0));
+    bool check = !((!ctx->IsRuntime()) && (phi::product(bias_dim) <= 0));
     if (check) {
       PADDLE_ENFORCE_EQ(bias_dim[0], C,
                         platform::errors::InvalidArgument(
@@ -107,12 +115,14 @@ framework::OpKernelType InstanceNormOp::GetExpectedKernelType(
     in_param_type = framework::proto::VarType::FP64;
   }
   if (ctx.HasInput("Scale")) {
-    PADDLE_ENFORCE_EQ(in_param_type, ctx.Input<Tensor>("Scale")->type(),
+    PADDLE_ENFORCE_EQ(in_param_type, framework::TransToProtoVarType(
+                                         ctx.Input<Tensor>("Scale")->dtype()),
                       platform::errors::InvalidArgument(
                           "Scale input should be of float type"));
   }
   if (ctx.HasInput("Bias")) {
-    PADDLE_ENFORCE_EQ(in_param_type, ctx.Input<Tensor>("Bias")->type(),
+    PADDLE_ENFORCE_EQ(in_param_type, framework::TransToProtoVarType(
+                                         ctx.Input<Tensor>("Bias")->dtype()),
                       platform::errors::InvalidArgument(
                           "Bias input should be of float type"));
   }
@@ -141,11 +151,13 @@ void InstanceNormOpMaker::Make() {
   AddOutput("SavedMean",
             "Mean of the current mini batch, "
             "will apply to output when training")
-      .AsIntermediate();
+      .AsIntermediate()
+      .AsExtra();
   AddOutput("SavedVariance",
             "Variance of the current mini batch, "
             "will apply to output when training")
-      .AsIntermediate();
+      .AsIntermediate()
+      .AsExtra();
   AddComment(R"DOC(
 Instance Normalization.
 
@@ -198,7 +210,7 @@ class InstanceNormKernel<platform::CPUDeviceContext, T>
     Eigen::IndexList<Eigen::type2index<1>> rdims;
 #endif
 
-    math::SetConstant<platform::CPUDeviceContext, T> set_constant;
+    phi::funcs::SetConstant<platform::CPUDeviceContext, T> set_constant;
 
     saved_mean->mutable_data<T>(ctx.GetPlace());
     saved_variance->mutable_data<T>(ctx.GetPlace());
@@ -346,7 +358,7 @@ class InstanceNormGradKernel<platform::CPUDeviceContext, T>
     NxC_shape.set(0, NxC);
 #endif
 
-    math::SetConstant<platform::CPUDeviceContext, T> set_constant;
+    phi::funcs::SetConstant<platform::CPUDeviceContext, T> set_constant;
 
     Tensor scale_data;
     if (!scale) {
@@ -482,7 +494,7 @@ class InstanceNormDoubleGradKernel<platform::CPUDeviceContext, T>
     auto *ddY = ctx.Output<Tensor>("DDY");
 
     auto &dev_ctx = ctx.template device_context<platform::CPUDeviceContext>();
-    math::SetConstant<platform::CPUDeviceContext, T> set_constant;
+    phi::funcs::SetConstant<platform::CPUDeviceContext, T> set_constant;
 
     const auto &x_dims = X->dims();
     int N, C, H, W, D;
@@ -701,3 +713,20 @@ REGISTER_OP_CPU_KERNEL(
                                       float>,
     ops::InstanceNormDoubleGradKernel<paddle::platform::CPUDeviceContext,
                                       double>);
+
+REGISTER_OP_VERSION(instance_norm)
+    .AddCheckpoint(
+        R"ROC(
+      Change dispensable of attribute from False to True in instance_norm.
+    )ROC",
+        paddle::framework::compatible::OpVersionDesc()
+            .ModifyAttr(
+                "Bias",
+                "The arg 'dispensable' of Input 'Bias' is changed: from "
+                "'False' to 'True'.",
+                true)
+            .ModifyAttr(
+                "Scale",
+                "The arg 'dispensable' of Input 'Scale' is changed: from "
+                "'False' to 'True'.",
+                true));

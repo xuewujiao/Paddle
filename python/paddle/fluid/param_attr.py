@@ -30,15 +30,16 @@ __all__ = [
 
 class ParamAttr(object):
     """
-    Create a object to represent the attribute of parameter. The attributes are:
-    name, initializer, learning rate, regularizer, trainable, gradient clip,
-    and model average.
-    
+
     Note:
         ``gradient_clip`` of ``ParamAttr`` HAS BEEN DEPRECATED since 2.0. 
         Please use ``need_clip`` in ``ParamAttr`` to speficiy the clip scope.
         There are three clipping strategies: :ref:`api_paddle_nn_ClipGradByGlobalNorm` , 
         :ref:`api_paddle_nn_ClipGradByNorm` , :ref:`api_paddle_nn_ClipGradByValue` .
+
+    Create a object to represent the attribute of parameter. The attributes are:
+    name, initializer, learning rate, regularizer, trainable, gradient clip,
+    and model average.
 
     Parameters:
         name (str, optional): The parameter's name. Default None, meaning that the name
@@ -46,7 +47,7 @@ class ParamAttr(object):
         initializer (Initializer, optional): The method to initial this parameter. Default
                 None, meaning that the weight parameter is initialized by Xavier initializer,
                 and the bias parameter is initialized by 0.
-        learning_rate (float): The parameter's learning rate. The learning rate when
+        learning_rate (float, optional): The parameter's learning rate. The learning rate when
                 optimize is the global learning rates times the parameter's learning rate times
                 the factor of learning rate scheduler. Default 1.0.
         regularizer (WeightDecayRegularizer, optional): Regularization strategy. There are two method: 
@@ -54,12 +55,16 @@ class ParamAttr(object):
                 regularizer is also set in ``optimizer`` (such as :ref:`api_paddle_optimizer_SGD` ), 
                 that regularizer setting in optimizer will be ignored. Default None, meaning there is 
                 no regularization.
-        trainable (bool): Whether this parameter is trainable. Default True.
-        do_model_average (bool): Whether this parameter should do model average
+        trainable (bool, optional): Whether this parameter is trainable. Default True.
+        do_model_average (bool, optional): Whether this parameter should do model average
                 when model average is enabled. Only used in ExponentialMovingAverage. Default True.
-        need_clip (bool): Whether the parameter gradient need to be cliped in optimizer. Default is True.
+        need_clip (bool, optional): Whether the parameter gradient need to be cliped in optimizer. Default is True.
+
+    Returns:
+       ParamAttr Object.
 
     Examples:
+    
         .. code-block:: python
 
             import paddle
@@ -210,24 +215,22 @@ class ParamAttr(object):
 
 class WeightNormParamAttr(ParamAttr):
     r"""
-	:api_attr: Static Graph
 
     Note:
         Please use 'paddle.nn.utils.weight_norm' in dygraph mode.
-
+	
+    Note:
+        ``gradient_clip`` of ``ParamAttr`` HAS BEEN DEPRECATED since 2.0. 
+        Please use ``need_clip`` in ``ParamAttr`` to speficiy the clip scope.
+        There are three clipping strategies: :ref:`api_paddle_nn_ClipGradByGlobalNorm` , 
+        :ref:`api_paddle_nn_ClipGradByNorm` , :ref:`api_paddle_nn_ClipGradByValue` .
+	
     Parameter of weight Norm. Weight Norm is a reparameterization of the weight vectors
     in a neural network that decouples the magnitude of those weight vectors from
     their direction. Weight Norm has been implemented as discussed in this
     paper: `Weight Normalization: A Simple Reparameterization to Accelerate
     Training of Deep Neural Networks
     <https://arxiv.org/pdf/1602.07868.pdf>`_.
-      
-    Note:
-        ``gradient_clip`` of ``ParamAttr`` HAS BEEN DEPRECATED since 2.0. 
-        Please use ``need_clip`` in ``ParamAttr`` to speficiy the clip scope.
-        There are three clipping strategies: :ref:`api_paddle_nn_ClipGradByGlobalNorm` , 
-        :ref:`api_paddle_nn_ClipGradByNorm` , :ref:`api_paddle_nn_ClipGradByValue` .
-        
 
     Args:
         dim(int, optional): Dimension over which to compute the norm. Dim is a non-negative
@@ -255,6 +258,7 @@ class WeightNormParamAttr(ParamAttr):
         need_clip (bool, optional): Whether the parameter gradient need to be cliped in optimizer. Default is True.
 
     Examples:
+    
         .. code-block:: python
             
             import paddle

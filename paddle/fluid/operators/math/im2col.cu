@@ -15,7 +15,9 @@ limitations under the License. */
 #include <algorithm>
 #include <vector>
 #include "paddle/fluid/operators/math/im2col.h"
-#include "paddle/fluid/platform/cuda_primitives.h"
+#include "paddle/fluid/platform/device/gpu/gpu_launch_config.h"
+#include "paddle/fluid/platform/device/gpu/gpu_primitives.h"
+#include "paddle/phi/backends/gpu/gpu_context.h"
 
 namespace paddle {
 namespace operators {
@@ -72,12 +74,12 @@ __global__ void im2col(const T* data_im, int num_outs, int im_height,
  * col =
  *   [input_channels, filter_height, filter_width, output_height, output_width]
  */
-template <class T>
-class Im2ColFunctor<paddle::operators::math::ColFormat::kCFO,
-                    platform::CUDADeviceContext, T> {
+template <class DeviceContext, class T>
+class Im2ColFunctor<paddle::operators::math::ColFormat::kCFO, DeviceContext,
+                    T> {
  public:
-  void operator()(const platform::CUDADeviceContext& context,
-                  const framework::Tensor& im, const std::vector<int>& dilation,
+  void operator()(const DeviceContext& context, const framework::Tensor& im,
+                  const std::vector<int>& dilation,
                   const std::vector<int>& stride,
                   const std::vector<int>& padding, framework::Tensor* col,
                   const DataLayout data_layout) {
@@ -104,10 +106,14 @@ class Im2ColFunctor<paddle::operators::math::ColFormat::kCFO,
     int col_width = col->dims()[4];
 
     int num_outputs = im_channels * col_height * col_width;
-    int blocks = (num_outputs + 1024 - 1) / 1024;
+    int num_thread = 1024;
+#ifdef WITH_NV_JETSON
+    platform::ChangeThreadNum(context, &num_thread);
+#endif
+    int blocks = (num_outputs + num_thread - 1) / num_thread;
     int block_x = 512;
     int block_y = (blocks + 512 - 1) / 512;
-    dim3 threads(1024, 1);
+    dim3 threads(num_thread, 1);
     dim3 grid(block_x, block_y);
     im2col<T><<<grid, threads, 0, context.stream()>>>(
         im.data<T>(), num_outputs, im_height, im_width, dilation[0],
@@ -179,12 +185,11 @@ __global__ void col2im(int n, const T* data_col, int im_height, int im_width,
  * col =
  *   [input_channels, filter_height, filter_width, output_height, output_width]
  */
-template <class T>
-class Col2ImFunctor<paddle::operators::math::ColFormat::kCFO,
-                    platform::CUDADeviceContext, T> {
+template <class DeviceContext, class T>
+class Col2ImFunctor<paddle::operators::math::ColFormat::kCFO, DeviceContext,
+                    T> {
  public:
-  void operator()(const platform::CUDADeviceContext& context,
-                  const framework::Tensor& col,
+  void operator()(const DeviceContext& context, const framework::Tensor& col,
                   const std::vector<int>& dilation,
                   const std::vector<int>& stride,
                   const std::vector<int>& padding, framework::Tensor* im,
@@ -228,10 +233,14 @@ class Col2ImFunctor<paddle::operators::math::ColFormat::kCFO,
 
     size_t num_kernels = im_channels * im_height * im_width;
 
-    size_t blocks = (num_kernels + 1024 - 1) / 1024;
+    int num_thread = 1024;
+#ifdef WITH_NV_JETSON
+    platform::ChangeThreadNum(context, &num_thread);
+#endif
+    size_t blocks = (num_kernels + num_thread - 1) / num_thread;
     size_t block_x = 512;
     size_t block_y = (blocks + 512 - 1) / 512;
-    dim3 threads(1024, 1);
+    dim3 threads(num_thread, 1);
     dim3 grid(block_x, block_y);
 
     // To avoid involving atomic operations, we will launch one kernel per
@@ -248,10 +257,18 @@ template class Im2ColFunctor<paddle::operators::math::ColFormat::kCFO,
                              platform::CUDADeviceContext, float>;
 template class Im2ColFunctor<paddle::operators::math::ColFormat::kCFO,
                              platform::CUDADeviceContext, double>;
+template class Im2ColFunctor<paddle::operators::math::ColFormat::kCFO,
+                             phi::GPUContext, float>;
+template class Im2ColFunctor<paddle::operators::math::ColFormat::kCFO,
+                             phi::GPUContext, double>;
 template class Col2ImFunctor<paddle::operators::math::ColFormat::kCFO,
                              platform::CUDADeviceContext, float>;
 template class Col2ImFunctor<paddle::operators::math::ColFormat::kCFO,
                              platform::CUDADeviceContext, double>;
+template class Col2ImFunctor<paddle::operators::math::ColFormat::kCFO,
+                             phi::GPUContext, float>;
+template class Col2ImFunctor<paddle::operators::math::ColFormat::kCFO,
+                             phi::GPUContext, double>;
 
 template <class T>
 __global__ void im2colOCF(const T* im_data, int im_channels, int im_height,
@@ -290,12 +307,12 @@ __global__ void im2colOCF(const T* im_data, int im_channels, int im_height,
  * col =
  *   [output_height, output_width, input_channels, filter_height, filter_width]
  */
-template <class T>
-class Im2ColFunctor<paddle::operators::math::ColFormat::kOCF,
-                    platform::CUDADeviceContext, T> {
+template <class DeviceContext, class T>
+class Im2ColFunctor<paddle::operators::math::ColFormat::kOCF, DeviceContext,
+                    T> {
  public:
-  void operator()(const platform::CUDADeviceContext& context,
-                  const framework::Tensor& im, const std::vector<int>& dilation,
+  void operator()(const DeviceContext& context, const framework::Tensor& im,
+                  const std::vector<int>& dilation,
                   const std::vector<int>& stride,
                   const std::vector<int>& padding, framework::Tensor* col,
                   const DataLayout data_layout) {
@@ -381,12 +398,11 @@ __global__ void col2imOCF(const T* col_data, int im_channels, int im_height,
  * col =
  *   [output_height, output_width, input_channels, filter_height, filter_width]
  */
-template <class T>
-class Col2ImFunctor<paddle::operators::math::ColFormat::kOCF,
-                    platform::CUDADeviceContext, T> {
+template <class DeviceContext, class T>
+class Col2ImFunctor<paddle::operators::math::ColFormat::kOCF, DeviceContext,
+                    T> {
  public:
-  void operator()(const platform::CUDADeviceContext& context,
-                  const framework::Tensor& col,
+  void operator()(const DeviceContext& context, const framework::Tensor& col,
                   const std::vector<int>& dilation,
                   const std::vector<int>& stride,
                   const std::vector<int>& padding, framework::Tensor* im,
@@ -455,10 +471,19 @@ template class Im2ColFunctor<paddle::operators::math::ColFormat::kOCF,
                              platform::CUDADeviceContext, float>;
 template class Im2ColFunctor<paddle::operators::math::ColFormat::kOCF,
                              platform::CUDADeviceContext, double>;
+template class Im2ColFunctor<paddle::operators::math::ColFormat::kOCF,
+                             phi::GPUContext, float>;
+template class Im2ColFunctor<paddle::operators::math::ColFormat::kOCF,
+                             phi::GPUContext, double>;
+
 template class Col2ImFunctor<paddle::operators::math::ColFormat::kOCF,
                              platform::CUDADeviceContext, float>;
 template class Col2ImFunctor<paddle::operators::math::ColFormat::kOCF,
                              platform::CUDADeviceContext, double>;
+template class Col2ImFunctor<paddle::operators::math::ColFormat::kOCF,
+                             phi::GPUContext, float>;
+template class Col2ImFunctor<paddle::operators::math::ColFormat::kOCF,
+                             phi::GPUContext, double>;
 
 }  // namespace math
 }  // namespace operators

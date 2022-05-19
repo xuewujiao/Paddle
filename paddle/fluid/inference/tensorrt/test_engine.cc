@@ -27,6 +27,22 @@ class TensorRTEngineTest : public ::testing::Test {
  protected:
   void SetUp() override {
     ctx_ = new platform::CUDADeviceContext(platform::CUDAPlace(0));
+    ctx_->SetAllocator(paddle::memory::allocation::AllocatorFacade::Instance()
+                           .GetAllocator(platform::CUDAPlace(0), ctx_->stream())
+                           .get());
+    ctx_->SetHostAllocator(
+        paddle::memory::allocation::AllocatorFacade::Instance()
+            .GetAllocator(paddle::platform::CPUPlace())
+            .get());
+    ctx_->SetZeroAllocator(
+        paddle::memory::allocation::AllocatorFacade::Instance()
+            .GetZeroAllocator(platform::CUDAPlace(0))
+            .get());
+    ctx_->SetPinnedAllocator(
+        paddle::memory::allocation::AllocatorFacade::Instance()
+            .GetAllocator(paddle::platform::CUDAPinnedPlace())
+            .get());
+    ctx_->PartialInitWithAllocator();
 
     engine_ = new TensorRTEngine(10, 1 << 10);
     engine_->InitNetwork();
@@ -41,12 +57,12 @@ class TensorRTEngineTest : public ::testing::Test {
 
   void PrepareInputOutput(const std::vector<float> &input,
                           std::vector<int> output_shape) {
-    TensorFromVector(input, *ctx_, &input_);
-    output_.Resize(framework::make_ddim(output_shape));
+    paddle::framework::TensorFromVector(input, *ctx_, &input_);
+    output_.Resize(phi::make_ddim(output_shape));
   }
 
   void GetOutput(std::vector<float> *output) {
-    TensorToVector(output_, *ctx_, output);
+    paddle::framework::TensorToVector(output_, *ctx_, output);
   }
 
  protected:
@@ -68,7 +84,7 @@ TEST_F(TensorRTEngineTest, add_layer) {
   TensorRTEngine::Weight weight(nvinfer1::DataType::kFLOAT, raw_weight, size);
   TensorRTEngine::Weight bias(nvinfer1::DataType::kFLOAT, raw_bias, size);
   auto *x = engine_->DeclareInput("x", nvinfer1::DataType::kFLOAT,
-                                  nvinfer1::DimsCHW{1, 1, 1});
+                                  nvinfer1::Dims3{1, 1, 1});
   auto *fc_layer = TRT_ENGINE_ADD_LAYER(engine_, FullyConnected, *x, size,
                                         weight.get(), bias.get());
   PADDLE_ENFORCE_NOT_NULL(fc_layer,
@@ -91,6 +107,15 @@ TEST_F(TensorRTEngineTest, add_layer) {
   buffers[0] = reinterpret_cast<void *>(x_v_gpu_data);
   buffers[1] = reinterpret_cast<void *>(y_gpu_data);
 
+  LOG(INFO) << "Set attr";
+  engine_->Set("test_attr", new std::string("test_attr"));
+  if (engine_->Has("test_attr")) {
+    auto attr_val = engine_->Get<std::string>("test_attr");
+    engine_->Erase("test_attr");
+  }
+  std::string *attr_key = new std::string("attr_key");
+  engine_->SetNotOwned("attr1", attr_key);
+
   LOG(INFO) << "to execute";
   engine_->Execute(1, &buffers, ctx_->stream());
 
@@ -99,6 +124,8 @@ TEST_F(TensorRTEngineTest, add_layer) {
 
   LOG(INFO) << "to checkout output";
   ASSERT_EQ(y_cpu[0], x_v[0] * 2 + 3);
+
+  delete attr_key;
 }
 
 TEST_F(TensorRTEngineTest, add_layer_multi_dim) {
@@ -112,7 +139,7 @@ TEST_F(TensorRTEngineTest, add_layer_multi_dim) {
   TensorRTEngine::Weight weight(nvinfer1::DataType::kFLOAT, raw_weight, 4);
   TensorRTEngine::Weight bias(nvinfer1::DataType::kFLOAT, raw_bias, 2);
   auto *x = engine_->DeclareInput("x", nvinfer1::DataType::kFLOAT,
-                                  nvinfer1::DimsCHW{1, 2, 1});
+                                  nvinfer1::Dims3{1, 2, 1});
   auto *fc_layer = TRT_ENGINE_ADD_LAYER(engine_, FullyConnected, *x, 2,
                                         weight.get(), bias.get());
   PADDLE_ENFORCE_NOT_NULL(fc_layer,

@@ -26,7 +26,6 @@ class OpBase;
 }  // namespace imperative
 namespace platform {
 class CPUDeviceContext;
-struct CPUPlace;
 }  // namespace platform
 }  // namespace paddle
 
@@ -231,3 +230,10 @@ REGISTER_OP_CPU_KERNEL(
 REGISTER_OP_CPU_KERNEL(
     rank_loss_grad,
     ops::RankLossGradKernel<paddle::platform::CPUDeviceContext, float>);
+
+REGISTER_OP_CUDA_KERNEL(rank_loss,
+                        paddle::operators::RankLossKernel<
+                            paddle::platform::CUDADeviceContext, float>);
+REGISTER_OP_CUDA_KERNEL(rank_loss_grad,
+                        paddle::operators::RankLossGradKernel<
+                            paddle::platform::CUDADeviceContext, float>);

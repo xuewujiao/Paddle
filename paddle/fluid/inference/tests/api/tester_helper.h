@@ -33,11 +33,12 @@
 #include "paddle/fluid/inference/analysis/ut_helper.h"
 #include "paddle/fluid/inference/api/analysis_predictor.h"
 #include "paddle/fluid/inference/api/helper.h"
+#include "paddle/fluid/inference/api/paddle_inference_api.h"
 #include "paddle/fluid/inference/api/paddle_inference_pass.h"
 #include "paddle/fluid/inference/tests/api/config_printer.h"
 #include "paddle/fluid/inference/tests/test_helper.h"
 #include "paddle/fluid/inference/utils/benchmark.h"
-#include "paddle/fluid/platform/profiler.h"
+#include "paddle/fluid/platform/profiler/event_tracing.h"
 
 DEFINE_string(model_name, "", "model name");
 DEFINE_string(infer_model, "", "model path");
@@ -52,6 +53,7 @@ DEFINE_bool(with_accuracy_layer, true,
 DEFINE_bool(enable_fp32, true, "Enable FP32 type prediction");
 DEFINE_bool(enable_bf16, false, "Enable BF16 type prediction");
 DEFINE_bool(enable_int8, false, "Enable INT8 type prediction");
+DEFINE_bool(enable_quant_int8, false, "Enable QUANT INT8 type prediction");
 DEFINE_int32(warmup_batch_size, 100, "batch size for quantization warmup");
 // setting iterations to 0 means processing the whole dataset
 DEFINE_int32(iterations, 0, "number of batches to process");
@@ -72,11 +74,26 @@ DEFINE_int32(warmup_iters, 1, "Number of batches to process during warmup.");
 
 DEFINE_bool(enable_profile, false, "Turn on profiler for fluid");
 DEFINE_int32(cpu_num_threads, 1, "Number of threads for each paddle instance.");
+DEFINE_bool(fuse_multi_gru, false,
+            "Running the inference program with multi_gru_fuse_pass");
+
+// ipu related
+DEFINE_int32(ipu_micro_batch_size, 1, "micro batch size");
+DEFINE_int32(ipu_device_num, 1, "device num");
+DEFINE_bool(ipu_enable_pipelining, false, "enable pipelining");
+DEFINE_int32(ipu_batches_per_step, 1,
+             "the number of batches per run in pipelining");
+DEFINE_bool(ipu_enable_fp16, false, "enable fp16");
+DEFINE_int32(ipu_replica_num, 1, "replica num");
+DEFINE_double(ipu_available_memory_proportion, 1.0,
+              "available memory proportion");
+DEFINE_bool(ipu_enable_half_partial, false, "enable half partial");
 
 namespace paddle {
 namespace inference {
 
 using paddle::framework::proto::VarType;
+using float16 = paddle::platform::float16;
 
 template <typename T>
 constexpr paddle::PaddleDType GetPaddleDType();
@@ -197,15 +214,15 @@ std::shared_ptr<std::vector<PaddleTensor>> GetWarmupData(
                     element_in_batch * 3 * 224 * 224,
                 3 * 224 * 224,
                 static_cast<float *>(images.data.data()) + i * 3 * 224 * 224);
-
-    std::copy_n(static_cast<int64_t *>(test_data[batch][1].data.data()) +
-                    element_in_batch,
-                1, static_cast<int64_t *>(labels.data.data()) + i);
+    if (FLAGS_with_accuracy_layer)
+      std::copy_n(static_cast<int64_t *>(test_data[batch][1].data.data()) +
+                      element_in_batch,
+                  1, static_cast<int64_t *>(labels.data.data()) + i);
   }
-
-  auto warmup_data = std::make_shared<std::vector<PaddleTensor>>(2);
+  auto warmup_data = std::make_shared<std::vector<PaddleTensor>>(
+      FLAGS_with_accuracy_layer ? 2 : 1);
   (*warmup_data)[0] = std::move(images);
-  (*warmup_data)[1] = std::move(labels);
+  if (FLAGS_with_accuracy_layer) (*warmup_data)[1] = std::move(labels);
   return warmup_data;
 }
 
@@ -238,9 +255,13 @@ void SetInputs(std::vector<std::vector<PaddleTensor>> *inputs,
   }
   for (auto i = 0; i < iterations; i++) {
     auto images = image_reader.NextBatch();
-    auto labels = label_reader.NextBatch();
-    inputs->emplace_back(
-        std::vector<PaddleTensor>{std::move(images), std::move(labels)});
+    std::vector<PaddleTensor> tmp_vec;
+    tmp_vec.push_back(std::move(images));
+    if (FLAGS_with_accuracy_layer) {
+      auto labels = label_reader.NextBatch();
+      tmp_vec.push_back(std::move(labels));
+    }
+    inputs->push_back(std::move(tmp_vec));
   }
 }
 
@@ -257,40 +278,29 @@ void CompareResult(const std::vector<PaddleTensor> &outputs,
     EXPECT_GT(size, 0UL);
     EXPECT_EQ(size, ref_size);
     EXPECT_EQ(out.dtype, ref_out.dtype);
+
+#define COMPARE(paddle_type, type, func)                        \
+  case paddle_type: {                                           \
+    type *pdata = static_cast<type *>(out.data.data());         \
+    type *pdata_ref = static_cast<type *>(ref_out.data.data()); \
+    for (size_t j = 0; j < size; ++j) {                         \
+      func(pdata_ref[j], pdata[j]);                             \
+    }                                                           \
+    break;                                                      \
+  }
+
     switch (out.dtype) {
-      case PaddleDType::INT64: {
-        int64_t *pdata = static_cast<int64_t *>(out.data.data());
-        int64_t *pdata_ref = static_cast<int64_t *>(ref_out.data.data());
-        for (size_t j = 0; j < size; ++j) {
-          EXPECT_EQ(pdata_ref[j], pdata[j]);
-        }
-        break;
-      }
-      case PaddleDType::FLOAT32: {
-        float *pdata = static_cast<float *>(out.data.data());
-        float *pdata_ref = static_cast<float *>(ref_out.data.data());
-        for (size_t j = 0; j < size; ++j) {
-          CheckError(pdata_ref[j], pdata[j]);
-        }
-        break;
-      }
-      case PaddleDType::INT32: {
-        int32_t *pdata = static_cast<int32_t *>(out.data.data());
-        int32_t *pdata_ref = static_cast<int32_t *>(ref_out.data.data());
-        for (size_t j = 0; j < size; ++j) {
-          EXPECT_EQ(pdata_ref[j], pdata[j]);
-        }
-        break;
-      }
-      case PaddleDType::UINT8: {
-        uint8_t *pdata = static_cast<uint8_t *>(out.data.data());
-        uint8_t *pdata_ref = static_cast<uint8_t *>(ref_out.data.data());
-        for (size_t j = 0; j < size; ++j) {
-          EXPECT_EQ(pdata_ref[j], pdata[j]);
-        }
-        break;
-      }
+      COMPARE(PaddleDType::INT64, int64_t, EXPECT_EQ);
+      COMPARE(PaddleDType::FLOAT32, float, CheckError);
+      COMPARE(PaddleDType::INT32, int32_t, EXPECT_EQ);
+      COMPARE(PaddleDType::UINT8, uint8_t, EXPECT_EQ);
+      COMPARE(PaddleDType::INT8, int8_t, EXPECT_EQ);
+      default:
+        PADDLE_THROW(platform::errors::InvalidArgument(
+            "VarMessageToVarType: Unsupported dtype %d",
+            static_cast<int>(out.dtype)));
     }
+#undef COMPARE
   }
 }
 
@@ -306,44 +316,30 @@ void CompareResult(const std::vector<PaddleTensor> &outputs,
     EXPECT_GT(size, 0UL);
     int ref_size = 0;  // this is the number of elements not memory size
     PaddlePlace place;
+
+#define COMPARE(paddle_type, type, func)                     \
+  case paddle_type: {                                        \
+    type *pdata = static_cast<type *>(out.data.data());      \
+    type *pdata_ref = ref_out.data<type>(&place, &ref_size); \
+    EXPECT_EQ(size, static_cast<size_t>(ref_size));          \
+    for (size_t j = 0; j < size; ++j) {                      \
+      func(pdata_ref[j], pdata[j]);                          \
+    }                                                        \
+    break;                                                   \
+  }
+
     switch (out.dtype) {
-      case PaddleDType::INT64: {
-        int64_t *pdata = static_cast<int64_t *>(out.data.data());
-        int64_t *pdata_ref = ref_out.data<int64_t>(&place, &ref_size);
-        EXPECT_EQ(size, static_cast<size_t>(ref_size));
-        for (size_t j = 0; j < size; ++j) {
-          EXPECT_EQ(pdata_ref[j], pdata[j]);
-        }
-        break;
-      }
-      case PaddleDType::FLOAT32: {
-        float *pdata = static_cast<float *>(out.data.data());
-        float *pdata_ref = ref_out.data<float>(&place, &ref_size);
-        EXPECT_EQ(size, static_cast<size_t>(ref_size));
-        for (size_t j = 0; j < size; ++j) {
-          CheckError(pdata_ref[j], pdata[j]);
-        }
-        break;
-      }
-      case PaddleDType::INT32: {
-        int32_t *pdata = static_cast<int32_t *>(out.data.data());
-        int32_t *pdata_ref = ref_out.data<int32_t>(&place, &ref_size);
-        EXPECT_EQ(size, static_cast<size_t>(ref_size));
-        for (size_t j = 0; j < size; ++j) {
-          EXPECT_EQ(pdata_ref[j], pdata[j]);
-        }
-        break;
-      }
-      case PaddleDType::UINT8: {
-        uint8_t *pdata = static_cast<uint8_t *>(out.data.data());
-        uint8_t *pdata_ref = ref_out.data<uint8_t>(&place, &ref_size);
-        EXPECT_EQ(size, static_cast<size_t>(ref_size));
-        for (size_t j = 0; j < size; ++j) {
-          EXPECT_EQ(pdata_ref[j], pdata[j]);
-        }
-        break;
-      }
+      COMPARE(PaddleDType::INT64, int64_t, EXPECT_EQ);
+      COMPARE(PaddleDType::FLOAT32, float, CheckError);
+      COMPARE(PaddleDType::INT32, int32_t, EXPECT_EQ);
+      COMPARE(PaddleDType::UINT8, uint8_t, EXPECT_EQ);
+      COMPARE(PaddleDType::INT8, int8_t, EXPECT_EQ);
+      default:
+        PADDLE_THROW(platform::errors::InvalidArgument(
+            "VarMessageToVarType: Unsupported dtype %d",
+            static_cast<int>(out.dtype)));
     }
+#undef COMPARE
   }
 }
 
@@ -487,7 +483,8 @@ void PredictionWarmUp(PaddlePredictor *predictor,
   }
   int iterations = 1;
   if (FLAGS_warmup_iters > 1)
-    iterations = std::min(FLAGS_warmup_iters, static_cast<int>(inputs.size()));
+    iterations =
+        (std::min)(FLAGS_warmup_iters, static_cast<int>(inputs.size()));
   outputs->resize(iterations);
   Timer warmup_timer;
   double elapsed_time = 0;
@@ -833,7 +830,8 @@ void CompareQuantizedAndAnalysis(
   SummarizePerformance("FP32", sample_latency_fp32, "INT8",
                        sample_latency_int8);
 
-  CompareAccuracy(quantized_outputs, analysis_outputs, compared_idx);
+  if (FLAGS_with_accuracy_layer)
+    CompareAccuracy(quantized_outputs, analysis_outputs, compared_idx);
 }
 
 void CompareBFloat16AndAnalysis(
@@ -872,7 +870,8 @@ void CompareBFloat16AndAnalysis(
   SummarizePerformance("FP32", sample_latency_fp32, "BF16",
                        sample_latency_bf16);
 
-  CompareAccuracy(bf16_outputs, analysis_outputs, compared_idx);
+  if (FLAGS_with_accuracy_layer)
+    CompareAccuracy(bf16_outputs, analysis_outputs, compared_idx);
 }
 
 void CompareAnalysisAndAnalysis(
@@ -1029,8 +1028,8 @@ static bool CompareShape(const std::vector<int64_t> &a,
 
 static bool CompareTensorData(const framework::LoDTensor &a,
                               const framework::LoDTensor &b) {
-  auto a_shape = framework::vectorize(a.dims());
-  auto b_shape = framework::vectorize(b.dims());
+  auto a_shape = phi::vectorize(a.dims());
+  auto b_shape = phi::vectorize(b.dims());
   size_t a_size = std::accumulate(a_shape.begin(), a_shape.end(), size_t{1},
                                   [](int a, int b) { return a * b; });
   size_t b_size = std::accumulate(b_shape.begin(), b_shape.end(), size_t{1},
@@ -1041,7 +1040,7 @@ static bool CompareTensorData(const framework::LoDTensor &a,
   }
 
   for (size_t i = 0; i < a_size; i++) {
-    if (a.type() == VarType::FP32) {
+    if (framework::TransToProtoVarType(a.dtype()) == VarType::FP32) {
       const auto *a_data = a.data<float>();
       const auto *b_data = b.data<float>();
       if (std::abs(a_data[i] - b_data[i]) > 1e-3) {
@@ -1050,7 +1049,7 @@ static bool CompareTensorData(const framework::LoDTensor &a,
             b_data[i]);
         return false;
       }
-    } else if (a.type() == VarType::INT64) {
+    } else if (framework::TransToProtoVarType(a.dtype()) == VarType::INT64) {
       const auto *a_data = a.data<int64_t>();
       const auto *b_data = b.data<int64_t>();
       if (std::abs(a_data[i] - b_data[i]) > 1e-3) {
@@ -1070,8 +1069,7 @@ static bool CompareTensor(const framework::LoDTensor &a,
   if (!CompareLoD(a.lod(), b.lod())) {
     return false;
   }
-  if (!CompareShape(framework::vectorize(a.dims()),
-                    framework::vectorize(b.dims()))) {
+  if (!CompareShape(phi::vectorize(a.dims()), phi::vectorize(b.dims()))) {
     return false;
   }
 
@@ -1080,6 +1078,45 @@ static bool CompareTensor(const framework::LoDTensor &a,
   }
 
   return true;
+}
+
+void ConvertFP32toFP16(paddle::PaddleTensor &tensor  // NOLINT
+                       ) {
+  int num = 1;
+  for (auto dim : tensor.shape) {
+    num *= dim;
+  }
+  PADDLE_ENFORCE_EQ(
+      tensor.dtype, PaddleDType::FLOAT32,
+      platform::errors::InvalidArgument(
+          "The tensor dtype is not float32, only support float32 as input"));
+  float *fp32_data = reinterpret_cast<float *>(tensor.data.data());
+  float16 *fp16_data = new float16[num];
+  for (int i = 0; i < num; i++) {
+    fp16_data[i] = float16(fp32_data[i]);
+  }
+  tensor.data =
+      PaddleBuf(static_cast<void *>(fp16_data), num * sizeof(float16));
+  tensor.dtype = PaddleDType::FLOAT16;
+}
+
+void ConvertFP16toFP32(paddle::PaddleTensor &tensor  // NOLINT
+                       ) {
+  int num = 1;
+  for (auto dim : tensor.shape) {
+    num *= dim;
+  }
+  PADDLE_ENFORCE_EQ(
+      tensor.dtype, PaddleDType::FLOAT16,
+      platform::errors::InvalidArgument(
+          "The tensor dtype is not float16, only support float16 as input"));
+  float16 *fp16_data = reinterpret_cast<float16 *>(tensor.data.data());
+  float *fp32_data = new float[num];
+  for (int i = 0; i < num; i++) {
+    fp32_data[i] = static_cast<float>(fp16_data[i]);
+  }
+  tensor.data = PaddleBuf(static_cast<void *>(fp32_data), num * sizeof(float));
+  tensor.dtype = PaddleDType::FLOAT32;
 }
 
 }  // namespace inference

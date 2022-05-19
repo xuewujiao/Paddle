@@ -31,7 +31,7 @@ import paddle.fluid.core as core
 
 from paddle.fluid.executor import Executor
 from paddle.fluid import framework
-
+from paddle.fluid.framework import _test_eager_guard
 paddle.enable_static()
 
 
@@ -178,16 +178,14 @@ class Seq2SeqModel(object):
                  beam_size=4):
         self.start_token, self.end_token = start_token, end_token
         self.max_decoding_length, self.beam_size = max_decoding_length, beam_size
-        self.src_embeder = lambda x: fluid.embedding(
-            input=x,
-            size=[src_vocab_size, hidden_size],
-            dtype="float32",
-            param_attr=fluid.ParamAttr(name="source_embedding"))
-        self.trg_embeder = lambda x: fluid.embedding(
-            input=x,
-            size=[trg_vocab_size, hidden_size],
-            dtype="float32",
-            param_attr=fluid.ParamAttr(name="target_embedding"))
+        self.src_embeder = paddle.nn.Embedding(
+            src_vocab_size,
+            hidden_size,
+            weight_attr=fluid.ParamAttr(name="source_embedding"))
+        self.trg_embeder = paddle.nn.Embedding(
+            trg_vocab_size,
+            hidden_size,
+            weight_attr=fluid.ParamAttr(name="target_embedding"))
         self.encoder = Encoder(num_layers, hidden_size, dropout_prob)
         self.decoder = Decoder(num_layers, hidden_size, dropout_prob,
                                decoding_strategy, max_decoding_length)
@@ -195,7 +193,7 @@ class Seq2SeqModel(object):
             x,
             size=trg_vocab_size,
             num_flatten_dims=len(x.shape) - 1,
-            param_attr=fluid.ParamAttr(name="output_w"),
+            param_attr=fluid.ParamAttr(),
             bias_attr=False)
 
     def __call__(self, src, src_length, trg=None, trg_length=None):
@@ -556,6 +554,19 @@ class TestDynamicDecode(unittest.TestCase):
                 },
                 fetch_list=[output])[0]
 
+    def func_dynamic_basic_decoder(self):
+        paddle.disable_static()
+        src = paddle.to_tensor(np.random.randint(8, size=(8, 4)))
+        src_length = paddle.to_tensor(np.random.randint(8, size=(8)))
+        model = Seq2SeqModel(**self.model_hparams)
+        probs, samples, sample_length = model(src, src_length)
+        paddle.enable_static()
+
+    def test_dynamic_basic_decoder(self):
+        with _test_eager_guard():
+            self.func_dynamic_basic_decoder()
+        self.func_dynamic_basic_decoder()
+
 
 class ModuleApiTest(unittest.TestCase):
     @classmethod
@@ -672,8 +683,8 @@ class TestBeamSearch(ModuleApiTest):
                    hidden_size,
                    bos_id=0,
                    eos_id=1,
-                   beam_size=2,
-                   max_step_num=2):
+                   beam_size=4,
+                   max_step_num=20):
         embedder = paddle.fluid.dygraph.Embedding(
             size=[vocab_size, embed_dim], dtype="float64")
         output_layer = nn.Linear(hidden_size, vocab_size)
@@ -702,8 +713,15 @@ class TestBeamSearch(ModuleApiTest):
         ]
         return inputs
 
-    def test_check_output(self):
+    def func_check_output(self):
+        self.setUp()
+        self.make_inputs()
         self.check_output()
+
+    def test_check_output(self):
+        with _test_eager_guard():
+            self.func_check_output()
+        self.func_check_output()
 
 
 if __name__ == '__main__':

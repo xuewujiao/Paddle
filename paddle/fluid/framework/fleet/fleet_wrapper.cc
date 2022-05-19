@@ -27,14 +27,9 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #include "paddle/fluid/framework/fleet/fleet_wrapper.h"
-#include <algorithm>
-#include <utility>
-#include "paddle/fluid/framework/channel.h"
-#include "paddle/fluid/framework/data_feed.h"
-#include "paddle/fluid/framework/io/fs.h"
+
+#include "glog/logging.h"
 #include "paddle/fluid/framework/op_registry.h"
-#include "paddle/fluid/framework/scope.h"
-#include "paddle/fluid/platform/timer.h"
 
 namespace paddle {
 namespace framework {
@@ -267,7 +262,7 @@ void FleetWrapper::HeterPushSparseVars(
     int64_t* ids = tensor->data<int64_t>();
     int slot = 0;
     if (dump_slot) {
-      slot = boost::lexical_cast<int>(sparse_key_names[i]);
+      slot = std::stoi(sparse_key_names[i]);
     }
     Variable* g_var = scope.FindVar(sparse_grad_names[i]);
     if (g_var == nullptr) {
@@ -359,6 +354,7 @@ int FleetWrapper::RegisterHeterCallback(HeterCallBackFunc handler) {
   VLOG(3) << "pslib_ptr_=" << pslib_ptr_;
   VLOG(3) << "_worker_ptr=" << pslib_ptr_->_worker_ptr;
   return pslib_ptr_->_worker_ptr->registe_heter_callback(handler);
+
 #else
   VLOG(0) << "FleetWrapper::RegisterHeterCallback"
           << " does nothing when no pslib";
@@ -555,16 +551,36 @@ void FleetWrapper::PullSparseVarsSync(
   for (auto& t : *fea_values) {
     pull_result_ptr.push_back(t.data());
   }
-  auto status = pslib_ptr_->_worker_ptr->pull_sparse(
-      pull_result_ptr.data(), table_id, fea_keys->data(), fea_keys->size());
-  pull_sparse_status.push_back(std::move(status));
-  for (auto& t : pull_sparse_status) {
-    t.wait();
-    auto status = t.get();
-    if (status != 0) {
-      LOG(ERROR) << "fleet pull sparse failed, status[" << status << "]";
-      sleep(sleep_seconds_before_fail_exit_);
-      exit(-1);
+
+  int32_t cnt = 0;
+  while (true) {
+    pull_sparse_status.clear();
+    auto status = pslib_ptr_->_worker_ptr->pull_sparse(
+        pull_result_ptr.data(), table_id, fea_keys->data(), fea_keys->size());
+    pull_sparse_status.push_back(std::move(status));
+    bool flag = true;
+    for (auto& t : pull_sparse_status) {
+      t.wait();
+      int32_t status = -1;
+      try {
+        status = t.get();
+      } catch (const std::future_error& e) {
+        VLOG(0) << "Caught a future_error with code" << e.code()
+                << ", Message:" << e.what();
+      }
+      if (status != 0) {
+        VLOG(0) << "fleet pull sparse failed, status[" << status << "]";
+        sleep(sleep_seconds_before_fail_exit_);
+        flag = false;
+        cnt++;
+      }
+      if (cnt > 3) {
+        VLOG(0) << "fleet pull sparse failed, retry 3 times";
+        exit(-1);
+      }
+    }
+    if (flag) {
+      break;
     }
   }
 #endif
@@ -616,6 +632,7 @@ void FleetWrapper::PullSparseToTensorSync(const uint64_t table_id, int fea_dim,
   if (ret != 0) {
     LOG(ERROR) << "fleet pull sparse failed, status[" << ret << "]";
     sleep(sleep_seconds_before_fail_exit_);
+    exit(-1);
   }
 #else
   for (size_t index = 0; index < inputs->size(); ++index) {
@@ -669,9 +686,36 @@ void FleetWrapper::PullDenseVarsSync(
     paddle::ps::Region reg(w, tensor->numel());
     regions.emplace_back(std::move(reg));
   }
-  auto status =
-      pslib_ptr_->_worker_ptr->pull_dense(regions.data(), regions.size(), tid);
-  status.wait();
+  int32_t status = -1;
+  int32_t cnt = 0;
+  while (true) {
+    auto tt = pslib_ptr_->_worker_ptr->pull_dense(regions.data(),
+                                                  regions.size(), tid);
+    bool flag = true;
+
+    tt.wait();
+
+    try {
+      status = tt.get();
+    } catch (const std::future_error& e) {
+      VLOG(0) << "Caught a future_error with code" << e.code()
+              << ", Message:" << e.what();
+    }
+    if (status != 0) {
+      VLOG(0) << "fleet pull dense sync failed, status[" << status << "]";
+      sleep(sleep_seconds_before_fail_exit_);
+      flag = false;
+      cnt++;
+    }
+    if (cnt > 3) {
+      VLOG(0) << "fleet pull dense sync failed, retry 3 times";
+      exit(-1);
+    }
+
+    if (flag) {
+      break;
+    }
+  }
 #endif
 }
 
@@ -701,13 +745,14 @@ void FleetWrapper::PushDenseVarsSync(
     Scope* scope, const uint64_t table_id,
     const std::vector<std::string>& var_names) {}
 
-#if (defined PADDLE_WITH_CUDA) && (defined PADDLE_WITH_PSLIB)
+#if (defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)) && \
+    (defined PADDLE_WITH_PSLIB)
 void FleetWrapper::PushDenseVarsAsync(
     const Scope& scope, const uint64_t table_id,
     const std::vector<std::string>& var_names,
     std::vector<::std::future<int32_t>>* push_sparse_status,
     float scale_datanorm, int batch_size, const paddle::platform::Place& place,
-    cudaStream_t stream, cudaEvent_t event) {
+    gpuStream_t stream, gpuEvent_t event) {
   std::vector<paddle::ps::Region> regions;
   for (auto& t : var_names) {
     Variable* var = scope.FindVar(t);
@@ -719,11 +764,15 @@ void FleetWrapper::PushDenseVarsAsync(
     LoDTensor* pin_tensor = pin_var->GetMutable<LoDTensor>();
     float* pin_g = pin_tensor->mutable_data<float>(tensor->dims(),
                                                    platform::CUDAPinnedPlace());
-    memory::Copy(platform::CUDAPinnedPlace(), pin_g,
-                 BOOST_GET_CONST(platform::CUDAPlace, place), g_data,
+    memory::Copy(platform::CUDAPinnedPlace(), pin_g, place, g_data,
                  sizeof(float) * count, stream);
-    PADDLE_ENFORCE_CUDA_SUCCESS(cudaEventRecord(event, stream));
+#ifdef PADDLE_WITH_HIP
+    PADDLE_ENFORCE_GPU_SUCCESS(hipEventRecord(event, stream));
+    hipEventSynchronize(event);
+#else
+    PADDLE_ENFORCE_GPU_SUCCESS(cudaEventRecord(event, stream));
     cudaEventSynchronize(event);
+#endif
 
     float* g = pin_g;
     if (scale_datanorm >= 0) {
@@ -771,8 +820,7 @@ void FleetWrapper::PushDenseVarsAsync(
     LoDTensor* pin_tensor = pin_var->GetMutable<LoDTensor>();
     float* pin_g =
         pin_tensor->mutable_data<float>(tensor->dims(), platform::CPUPlace());
-    memory::Copy(platform::CPUPlace(), pin_g,
-                 BOOST_GET_CONST(platform::XPUPlace, place), g_data,
+    memory::Copy(platform::CPUPlace(), pin_g, place, g_data,
                  sizeof(float) * count);
 
     float* g = pin_g;
@@ -848,7 +896,8 @@ void FleetWrapper::PushSparseVarsWithLabelAsync(
     std::vector<std::vector<float>>* push_values,
     std::vector<::std::future<int32_t>>* push_sparse_status,
     const int batch_size, const bool use_cvm, const bool dump_slot,
-    std::vector<uint64_t>* sparse_push_keys, const bool no_cvm) {
+    std::vector<uint64_t>* sparse_push_keys, const bool no_cvm,
+    const bool scale_sparse_gradient_with_batch_size) {
 #ifdef PADDLE_WITH_PSLIB
   int offset = 2;
   int slot_offset = 0;
@@ -892,7 +941,19 @@ void FleetWrapper::PushSparseVarsWithLabelAsync(
     int64_t* ids = tensor->data<int64_t>();
     int slot = 0;
     if (dump_slot) {
-      slot = boost::lexical_cast<int>(sparse_key_names[i]);
+      try {
+        slot = std::stoi(sparse_key_names[i]);
+      } catch (std::invalid_argument const& e) {
+        PADDLE_THROW(platform::errors::PreconditionNotMet(
+            "sparse var's name: %s, doesn't support non-integer type name when "
+            "dump_slot=True",
+            sparse_key_names[i]));
+      } catch (std::out_of_range const& e) {
+        PADDLE_THROW(platform::errors::PreconditionNotMet(
+            "sparse var's name: %s, integer type name out of range when "
+            "dump_slot=True",
+            sparse_key_names[i]));
+      }
     }
     Variable* g_var = scope.FindVar(sparse_grad_names[i]);
     if (g_var == nullptr) {
@@ -905,7 +966,7 @@ void FleetWrapper::PushSparseVarsWithLabelAsync(
     }
     float* g = g_tensor->data<float>();
 
-    if (scale_sparse_gradient_with_batch_size_ && grad_dim > 0) {
+    if (scale_sparse_gradient_with_batch_size && grad_dim > 0) {
       int dim = emb_dim;
       Eigen::Map<
           Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>>
@@ -1092,7 +1153,7 @@ void FleetWrapper::PushSparseFromTensorWithLabelAsync(
         data[click_index] = static_cast<float>(fea_labels.at(input_idx));
       }
       if (dump_slot) {
-        int slot = boost::lexical_cast<int>(input_names[index]);
+        int slot = std::stoi(input_names[index]);
         data[0] = static_cast<float>(slot);
       }
       ++input_idx;
@@ -1213,6 +1274,7 @@ void FleetWrapper::LoadModelOneTable(const uint64_t table_id,
   if (ret.get() != 0) {
     LOG(ERROR) << "load model of table id: " << table_id
                << ", from path: " << path << " failed";
+    exit(-1);
   }
 #else
   VLOG(0) << "FleetWrapper::LoadModel does nothing when no pslib";
@@ -1228,9 +1290,28 @@ void FleetWrapper::LoadWithWhitelist(const uint64_t table_id,
   if (ret.get() != 0) {
     LOG(ERROR) << "load model of table id: " << table_id
                << ", from path: " << path << " failed";
+    exit(-1);
   }
 #else
   VLOG(0) << "FleetWrapper::LoadWhitelist does nothing when no pslib";
+#endif
+}
+
+void FleetWrapper::SaveMultiTableOnePath(const std::vector<int>& table_ids,
+                                         const std::string& path,
+                                         const int mode) {
+#ifdef PADDLE_WITH_PSLIB
+  auto ret = pslib_ptr_->_worker_ptr->save_multi_table_one_path(
+      table_ids, path, std::to_string(mode));
+  ret.wait();
+  int32_t feasign_cnt = ret.get();
+  if (feasign_cnt == -1) {
+    LOG(ERROR) << "save model failed";
+    sleep(sleep_seconds_before_fail_exit_);
+    exit(-1);
+  }
+#else
+  VLOG(0) << "FleetWrapper::SaveMultiTableOnePath does nothing when no pslib";
 #endif
 }
 
@@ -1258,6 +1339,7 @@ void FleetWrapper::SaveModelOneTable(const uint64_t table_id,
   if (ret.get() != 0) {
     LOG(ERROR) << "save model of table id: " << table_id
                << ", to path: " << path << " failed";
+    exit(-1);
   }
 #else
   VLOG(0) << "FleetWrapper::SaveModelOneTable does nothing when no pslib";
@@ -1275,9 +1357,34 @@ void FleetWrapper::SaveModelOneTablePrefix(const uint64_t table_id,
   if (ret.get() != 0) {
     LOG(ERROR) << "save model (with prefix) of table id: " << table_id
                << ", to path: " << path << " failed";
+    exit(-1);
   }
 #else
   VLOG(0) << "FleetWrapper::SaveModelOneTablePrefix does nothing when no pslib";
+#endif
+}
+
+void FleetWrapper::SetDate(const uint64_t table_id, const std::string& date) {
+#if (defined PADDLE_WITH_PSLIB) && (defined PADDLE_WITH_HETERPS)
+  assert(date.size() == 8);
+  int year = std::stoi(date.substr(0, 4));
+  int month = std::stoi(date.substr(4, 2));
+  int day = std::stoi(date.substr(6, 2));
+  struct std::tm b;
+  b.tm_year = year - 1900;
+  b.tm_mon = month - 1;
+  b.tm_mday = day;
+  b.tm_hour = b.tm_min = b.tm_sec = 0;
+  std::time_t seconds_from_1970 = std::mktime(&b);
+  int day_id = seconds_from_1970 / 86400;
+  auto ret = pslib_ptr_->_worker_ptr->set_day_id(table_id, day_id);
+  ret.wait();
+  if (ret.get() != 0) {
+    LOG(ERROR) << "setdate : " << date << " failed";
+    exit(-1);
+  }
+#else
+  VLOG(0) << "FleetWrapper::SetDate does nothing when no pslib-gpu";
 #endif
 }
 
@@ -1291,6 +1398,20 @@ void FleetWrapper::PrintTableStat(const uint64_t table_id) {
   }
 #else
   VLOG(0) << "FleetWrapper::PrintTableStat does nothing when no pslib";
+#endif
+}
+
+void FleetWrapper::SetFileNumOneShard(const uint64_t table_id, int file_num) {
+#if (defined PADDLE_WITH_PSLIB) && (defined PADDLE_WITH_HETERPS)
+  auto ret =
+      pslib_ptr_->_worker_ptr->set_file_num_one_shard(table_id, file_num);
+  ret.wait();
+  int32_t err_code = ret.get();
+  if (err_code == -1) {
+    LOG(ERROR) << "set_file_num_one_shard failed";
+  }
+#else
+  VLOG(0) << "FleetWrapper::SetFileNumOneShard does nothing when no pslib-gpu";
 #endif
 }
 
@@ -1373,6 +1494,11 @@ void FleetWrapper::ShrinkSparseTable(int table_id) {
 #ifdef PADDLE_WITH_PSLIB
   auto ret = pslib_ptr_->_worker_ptr->shrink(table_id);
   ret.wait();
+  int32_t err_code = ret.get();
+  if (err_code == -1) {
+    LOG(ERROR) << "Shrink Sparse Table failed";
+    exit(-1);
+  }
 #else
   VLOG(0) << "FleetWrapper::ShrinkSparseTable does nothing when no pslib";
 #endif
@@ -1382,6 +1508,10 @@ void FleetWrapper::ClearModel() {
 #ifdef PADDLE_WITH_PSLIB
   auto ret = pslib_ptr_->_worker_ptr->clear();
   ret.wait();
+  int32_t err_code = ret.get();
+  if (err_code == -1) {
+    LOG(ERROR) << "Clear Model failed";
+  }
 #else
   VLOG(0) << "FleetWrapper::ClearModel does nothing when no pslib";
 #endif
@@ -1391,6 +1521,10 @@ void FleetWrapper::ClearOneTable(const uint64_t table_id) {
 #ifdef PADDLE_WITH_PSLIB
   auto ret = pslib_ptr_->_worker_ptr->clear(table_id);
   ret.wait();
+  int32_t err_code = ret.get();
+  if (err_code == -1) {
+    LOG(ERROR) << "Clear One Table failed table_id: " << table_id;
+  }
 #else
   VLOG(0) << "FleetWrapper::ClearOneTable does nothing when no pslib";
 #endif
@@ -1451,6 +1585,10 @@ void FleetWrapper::ClientFlush() {
 #ifdef PADDLE_WITH_PSLIB
   auto ret = pslib_ptr_->_worker_ptr->flush();
   ret.wait();
+  int32_t err_code = ret.get();
+  if (err_code == -1) {
+    LOG(ERROR) << "Client Flush failed";
+  }
 #else
   VLOG(0) << "FleetWrapper::ServerFlush does nothing when no pslib";
 #endif

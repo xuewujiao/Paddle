@@ -18,6 +18,7 @@ import numpy as np
 import unittest
 from op_test import OpTest
 from test_sigmoid_focal_loss_op import sigmoid_focal_loss_forward
+from paddle.fluid.framework import _test_eager_guard
 
 
 def call_sfl_functional(logit,
@@ -42,8 +43,10 @@ def test_static(place,
     prog = paddle.static.Program()
     startup_prog = paddle.static.Program()
     with paddle.static.program_guard(prog, startup_prog):
-        logit = paddle.fluid.data(name='logit', shape=logit_np.shape, dtype='float64')
-        label = paddle.fluid.data(name='label', shape=label_np.shape, dtype='float64')
+        logit = paddle.fluid.data(
+            name='logit', shape=logit_np.shape, dtype='float64')
+        label = paddle.fluid.data(
+            name='label', shape=label_np.shape, dtype='float64')
         feed_dict = {"logit": logit_np, "label": label_np}
 
         normalizer = None
@@ -138,6 +141,10 @@ class TestSigmoidFocalLoss(unittest.TestCase):
                             dy_result = test_dygraph(place, logit_np, label_np,
                                                      normalizer_np, alpha,
                                                      gamma, reduction)
+                            with _test_eager_guard():
+                                eager_result = test_dygraph(
+                                    place, logit_np, label_np, normalizer_np,
+                                    alpha, gamma, reduction)
                             expected = calc_sigmoid_focal_loss(
                                 logit_np, label_np, normalizer_np, alpha, gamma,
                                 reduction)
@@ -146,6 +153,7 @@ class TestSigmoidFocalLoss(unittest.TestCase):
                             self.assertTrue(
                                 np.allclose(static_result, dy_result))
                             self.assertTrue(np.allclose(dy_result, expected))
+                            self.assertTrue(np.allclose(eager_result, expected))
 
     def test_SigmoidFocalLoss_error(self):
         paddle.disable_static()

@@ -13,9 +13,7 @@
  * limitations under the License. */
 
 #include "paddle/fluid/operators/jit/helper.h"
-#include <algorithm>  // tolower
 #include <numeric>
-#include <string>
 #include "paddle/fluid/platform/enforce.h"
 
 namespace paddle {
@@ -60,6 +58,8 @@ const char* to_string(KernelType kt) {
     ONE_CASE(kSeqPool);
     ONE_CASE(kMatMul);
     ONE_CASE(kHMax);
+    ONE_CASE(kAdam);
+    ONE_CASE(kAdamW);
     ONE_CASE(kHSum);
     ONE_CASE(kStrideASum);
     ONE_CASE(kSoftmax);

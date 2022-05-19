@@ -31,11 +31,11 @@ inline std::vector<int> get_new_shape_xpu(
   for (size_t i = 0; i < list_new_shape_tensor.size(); ++i) {
     auto tensor = list_new_shape_tensor[i];
     PADDLE_ENFORCE_EQ(
-        tensor->dims(), framework::make_ddim({1}),
+        tensor->dims(), phi::make_ddim({1}),
         platform::errors::InvalidArgument("shape of dim tensor should be [1]"));
     if (platform::is_xpu_place(tensor->place())) {
       framework::Tensor temp;
-      TensorCopySync(*tensor, platform::CPUPlace(), &temp);
+      paddle::framework::TensorCopySync(*tensor, platform::CPUPlace(), &temp);
       vec_new_shape.push_back(static_cast<int32_t>(*temp.data<int32_t>()));
     } else {
       vec_new_shape.push_back(static_cast<int32_t>(*tensor->data<int32_t>()));
@@ -52,7 +52,8 @@ inline std::vector<T> get_new_data_from_tensor_xpu(
   auto* new_data = new_data_tensor->data<T>();
   framework::Tensor cpu_starts_tensor;
   if (platform::is_xpu_place(new_data_tensor->place())) {
-    TensorCopySync(*new_data_tensor, platform::CPUPlace(), &cpu_starts_tensor);
+    paddle::framework::TensorCopySync(*new_data_tensor, platform::CPUPlace(),
+                                      &cpu_starts_tensor);
     new_data = cpu_starts_tensor.data<T>();
   }
   vec_new_data = std::vector<T>(new_data, new_data + new_data_tensor->numel());
@@ -229,9 +230,7 @@ class InterpolateGradXPUKernel : public framework::OpKernel<T> {
     int trans_mode = (align_corners) ? (0) : ((align_mode == 0) ? (1) : (2));
 
     if (nearest) {
-      PADDLE_ENFORCE_EQ((data_layout == DataLayout::kNCHW), true,
-                        platform::errors::InvalidArgument(
-                            "XPU nearest is only support NCHW"));
+      trans_mode = (align_corners) ? (0) : (2);
     }
 
     r = xpu::interpolate2d_grad<T>(dev_ctx.x_context(), output_grad->data<T>(),
@@ -252,7 +251,10 @@ class InterpolateGradXPUKernel : public framework::OpKernel<T> {
 namespace ops = paddle::operators;
 
 REGISTER_OP_XPU_KERNEL(bilinear_interp, ops::InterpolateXPUKernel<float>);
+REGISTER_OP_XPU_KERNEL(nearest_interp, ops::InterpolateXPUKernel<float>);
 
 REGISTER_OP_XPU_KERNEL(bilinear_interp_grad,
+                       ops::InterpolateGradXPUKernel<float>);
+REGISTER_OP_XPU_KERNEL(nearest_interp_grad,
                        ops::InterpolateGradXPUKernel<float>);
 #endif

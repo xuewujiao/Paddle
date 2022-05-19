@@ -36,7 +36,7 @@ def get_uniform_min_and_max(weight):
 def check_cast_op(op):
     return op.type == 'cast' and \
            op.attr('in_dtype') == VarDesc.VarType.FP32 and \
-           op.attr('out_dtype') == VarDesc.VarType.FP16
+           op.attr('out_dtype') in [VarDesc.VarType.FP16, VarDesc.VarType.BF16]
 
 
 class TestConstantInitializer(unittest.TestCase):
@@ -54,7 +54,7 @@ class TestConstantInitializer(unittest.TestCase):
                 lod_level=0,
                 name="param",
                 initializer=init_inst)
-        num_ops = 2 if dtype == "float16" else 1
+        num_ops = 1
         self.assertEqual(len(block.ops), num_ops)
         init_op = block.ops[0]
         self.assertEqual(init_op.type, 'fill_constant')
@@ -103,11 +103,16 @@ class TestConstantInitializer(unittest.TestCase):
         """Test constant initializer with float16
         """
         block = self.test_constant_initializer_default_value_static("float16")
-        self.assertTrue(check_cast_op(block.ops[1]))
         block = self.test_constant_initializer_static("float16")
-        self.assertTrue(check_cast_op(block.ops[1]))
         self.test_constant_initializer_default_value_dygraph("float16")
         self.test_constant_initializer_dygraph("float16")
+
+    def test_constant_initializer_bf16(self):
+        """Test constant initializer with bfloat16
+            No cast operator has been added here
+        """
+        self.test_constant_initializer_default_value_static("uint16")  #bfloat16
+        self.test_constant_initializer_static("uint16")  #bfloat16
 
 
 class TestKaimingInitializer(unittest.TestCase):
@@ -332,6 +337,13 @@ class TestUniform(unittest.TestCase):
         block = self.test_uniform_initializer_two_op("float16")
         self.assertTrue(check_cast_op(block.ops[1]))
 
+    def test_uniform_initializer_bf16(self):
+        """Test uniform initializer with bfloat16
+        """
+        block = self.test_uniform_initializer_default_value("uint16")  #bfloat16
+        block = self.test_uniform_initializer(dtype="uint16")  #bfloat16
+        block = self.test_uniform_initializer_two_op("uint16")  #bfloat16
+
     def test_uniform_initializer_dygraph(self):
         """Test uniform initializer in dygraph model.
         """
@@ -388,7 +400,7 @@ class TestNormal(unittest.TestCase):
                 lod_level=0,
                 name="param",
                 initializer=initializer.Normal(2.3, 1.9))
-        num_ops = 2 if dtype == "float16" else 1
+        num_ops = 2 if dtype in ["float16", "uint16"] else 1
         self.assertEqual(len(block.ops), num_ops)
         init_op = block.ops[0]
         self.assertEqual(init_op.type, 'gaussian_random')
@@ -403,7 +415,11 @@ class TestNormal(unittest.TestCase):
         """Test normal initializer with float16
         """
         block = self.test_normal_initializer("float16")
-        self.assertTrue(check_cast_op(block.ops[1]))
+
+    def test_normal_initializer_bf16(self):
+        """Test normal initializer with bfloat16
+        """
+        block = self.test_normal_initializer("uint16")  #bfloat16
 
     def test_normal_initializer_dygraph(self):
         """Test normal initializer in dygraph model.
@@ -455,7 +471,7 @@ class TestTruncatedNormal(unittest.TestCase):
                 lod_level=0,
                 name="param",
                 initializer=initializer.TruncatedNormal(2.3, 1.9))
-        num_ops = 2 if dtype == "float16" else 1
+        num_ops = 2 if dtype in ["float16", "uint16"] else 1
         self.assertEqual(len(block.ops), num_ops)
         init_op = block.ops[0]
         self.assertEqual(init_op.type, 'truncated_gaussian_random')
@@ -472,6 +488,14 @@ class TestTruncatedNormal(unittest.TestCase):
         paddle.enable_static()
 
         block = self.test_truncated_normal_initializer("float16")
+        self.assertTrue(check_cast_op(block.ops[1]))
+
+    def test_truncated_normal_initializer_bf16(self):
+        """Test truncated normal initializer with bfloat16
+        """
+        paddle.enable_static()
+
+        block = self.test_truncated_normal_initializer("uint16")  #bfloat16
         self.assertTrue(check_cast_op(block.ops[1]))
 
     def test_truncated_normal_initializer_dygraph(self):
@@ -629,7 +653,7 @@ class TestAssign(unittest.TestCase):
                 lod_level=0,
                 name="param",
                 initializer=initializer.Assign(np_array))
-        num_ops = 2 if dtype == "float16" else 1
+        num_ops = 2 if dtype in ["float16", "uint16"] else 1
         self.assertEqual(len(block.ops), num_ops)
         init_op = block.ops[0]
         self.assertEqual(init_op.type, 'assign_value')
@@ -643,6 +667,12 @@ class TestAssign(unittest.TestCase):
         """Test the numpy array initializer with float16
         """
         block = self.test_assign_initializer("float16")
+        self.assertTrue(block.ops[1])
+
+    def test_assign_initializer_bf16(self):
+        """Test the numpy array initializer with bfloat16
+        """
+        block = self.test_assign_initializer("uint16")  #bfloat16
         self.assertTrue(block.ops[1])
 
     def test_assign_initializer_dygraph_1(self):
@@ -680,6 +710,18 @@ class TestAssign(unittest.TestCase):
         linear_3 = paddle.nn.Linear(2, 2, weight_attr=weight_attr_3)
 
         self.assertTrue((linear_3.weight.numpy() == [2.0, 2.0]).all(), '')
+
+    def test_assign_initializer_dygraph_4(self):
+        """Test assign initializer in dygraph model.
+        """
+        paddle.disable_static()
+
+        weight_attr_4 = paddle.framework.ParamAttr(
+            name="linear_weight_4",
+            initializer=paddle.nn.initializer.Assign((2, 2)))
+        linear_4 = paddle.nn.Linear(2, 2, weight_attr=weight_attr_4)
+
+        self.assertTrue((linear_4.weight.numpy() == [2.0, 2.0]).all(), '')
 
 
 if __name__ == '__main__':

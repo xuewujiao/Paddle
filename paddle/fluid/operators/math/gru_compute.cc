@@ -11,10 +11,9 @@ limitations under the License. */
 
 #include "paddle/fluid/operators/math/gru_compute.h"
 
-#include <string>
-#include "paddle/fluid/operators/math/blas.h"
 #include "paddle/fluid/operators/math/detail/gru_cpu_kernel.h"
 #include "paddle/fluid/operators/math/detail/gru_kernel.h"
+#include "paddle/phi/kernels/funcs/blas/blas.h"
 
 namespace paddle {
 namespace platform {
@@ -33,8 +32,8 @@ struct GRUUnitFunctor<platform::CPUDeviceContext, T> {
                       const detail::ActivationType active_node,
                       const detail::ActivationType active_gate,
                       bool origin_mode) {
-#ifndef __NVCC__
-    auto blas = math::GetBlas<platform::CPUDeviceContext, T>(context);
+#if !defined(__NVCC__) && !defined(__HIPCC___)
+    auto blas = phi::funcs::GetBlas<platform::CPUDeviceContext, T>(context);
     if (value.prev_out_value) {
       blas.GEMM(false, false, batch_size, frame_size * 2, frame_size, 1,
                 value.prev_out_value, frame_size, value.gate_weight,
@@ -67,11 +66,11 @@ struct GRUUnitGradFunctor<platform::CPUDeviceContext, T> {
                       const detail::ActivationType active_node,
                       const detail::ActivationType active_gate,
                       bool origin_mode) {
-#ifndef __NVCC__
+#if !defined(__NVCC__) && !defined(__HIPCC___)
     detail::backward_state_grad(detail::backward::gru_stateGrad<T>(), value,
                                 grad, frame_size, batch_size, active_node,
                                 origin_mode);
-    auto blas = math::GetBlas<platform::CPUDeviceContext, T>(context);
+    auto blas = phi::funcs::GetBlas<platform::CPUDeviceContext, T>(context);
     if (value.prev_out_value && grad.prev_out_grad) {
       blas.GEMM(false, true, batch_size, frame_size, frame_size, 1,
                 grad.gate_grad + frame_size * 2, frame_size * 3,
@@ -109,8 +108,8 @@ struct GRUUnitFunctorV2<platform::CPUDeviceContext, T> {
                       GRUMetaValue<T> value, int frame_size, int batch_size,
                       const detail::ActivationType active_node,
                       const detail::ActivationType active_gate) {
-#ifndef __NVCC__
-    auto blas = math::GetBlas<platform::CPUDeviceContext, T>(context);
+#if !defined(__NVCC__) && !defined(__HIPCC___)
+    auto blas = phi::funcs::GetBlas<platform::CPUDeviceContext, T>(context);
     if (value.prev_out_value) {
       blas.GEMM(CblasNoTrans, CblasTrans, batch_size, frame_size, frame_size, 1,
                 value.prev_out_value, value.state_weight, 0,
@@ -143,12 +142,12 @@ struct GRUUnitGradFunctorV2<platform::CPUDeviceContext, T> {
                       int frame_size, int batch_size,
                       const detail::ActivationType active_node,
                       const detail::ActivationType active_gate) {
-#ifndef __NVCC__
+#if !defined(__NVCC__) && !defined(__HIPCC___)
     // calculate grad_update_gate, grad_frame_state,
     // grad_reset_output, grad_reset_gate
     detail::cpu_gru_backward(context, detail::backward::gru<T>(), value, grad,
                              frame_size, batch_size, active_node, active_gate);
-    auto blas = math::GetBlas<platform::CPUDeviceContext, T>(context);
+    auto blas = phi::funcs::GetBlas<platform::CPUDeviceContext, T>(context);
     if (grad.prev_out_grad && value.prev_out_value) {
       // update prev_out_grad
       blas.GEMM(false, false, batch_size, frame_size, frame_size, 1,

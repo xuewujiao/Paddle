@@ -33,6 +33,8 @@ struct VarHandle;
 namespace f = paddle::framework;
 namespace p = paddle::platform;
 
+using DeviceType = paddle::platform::DeviceType;
+
 // test data amount
 const f::DDim kDims = {20, 20};
 
@@ -45,27 +47,55 @@ struct TestBroadcastOpHandle {
   std::vector<VarHandleBase*> vars_;
   std::vector<std::unique_ptr<ir::Node>> nodes_;
   std::vector<p::Place> place_list_;
-  bool use_gpu_;
-#if defined(PADDLE_WITH_NCCL)
+  DeviceType use_device_;
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
   std::unique_ptr<platform::NCCLContextMap> nccl_ctxs_;
+#endif
+
+#if defined(PADDLE_WITH_XPU_BKCL)
+  std::unique_ptr<platform::BKCLContextMap> bkcl_ctxs_;
 #endif
 
   void WaitAll() {
     for (size_t j = 0; j < ctxs_.size(); ++j) {
       ctxs_[j]->Wait();
     }
-#if defined(PADDLE_WITH_NCCL)
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
     if (nccl_ctxs_) {
       nccl_ctxs_->WaitAll();
     }
 #endif
+#if defined(PADDLE_WITH_XPU_BKCL)
+    if (bkcl_ctxs_) {
+      bkcl_ctxs_->WaitAll();
+    }
+#endif
   }
 
-  void InitCtxOnGpu(bool use_gpu) {
-    use_gpu_ = use_gpu;
-    if (use_gpu_) {
-#if defined(PADDLE_WITH_NCCL)
-      int count = p::GetCUDADeviceCount();
+  void InitCtxOnDevice(DeviceType use_device) {
+    use_device_ = use_device;
+    if (use_device_ == p::kXPU) {
+#if defined(PADDLE_WITH_XPU_BKCL)
+      int count = p::GetXPUDeviceCount();
+      if (count <= 1) {
+        LOG(WARNING) << "Cannot test multi-xpu Broadcast, because the XPU "
+                        "device count is "
+                     << count;
+        exit(0);
+      }
+      for (int i = 0; i < count; ++i) {
+        auto p = p::XPUPlace(i);
+        place_list_.push_back(p);
+        ctxs_.emplace_back(new p::XPUDeviceContext(p));
+      }
+      bkcl_ctxs_.reset(new platform::BKCLContextMap(place_list_));
+#else
+      PADDLE_THROW(
+          platform::errors::PreconditionNotMet("Not compiled with BKCL."));
+#endif
+    } else if (use_device_ == p::kCUDA) {
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
+      int count = p::GetGPUDeviceCount();
       if (count <= 1) {
         LOG(WARNING) << "Cannot test multi-gpu Broadcast, because the CUDA "
                         "device count is "
@@ -89,7 +119,10 @@ struct TestBroadcastOpHandle {
         place_list_.push_back(p);
         ctxs_.emplace_back(new p::CPUDeviceContext(p));
       }
-#if defined(PADDLE_WITH_NCCL)
+#if defined(PADDLE_WITH_XPU_BKCL)
+      bkcl_ctxs_.reset(nullptr);
+#endif
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
       nccl_ctxs_.reset(nullptr);
 #endif
     }
@@ -109,22 +142,25 @@ struct TestBroadcastOpHandle {
 
     nodes_.emplace_back(
         ir::CreateNodeForTest("node0", ir::Node::Type::kOperation));
-    if (use_gpu_) {
-#if defined(PADDLE_WITH_NCCL)
+    if (use_device_ == p::kCUDA) {
+#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
       op_handle_ = new BroadcastOpHandle(nodes_.back().get(), local_scopes_,
                                          place_list_, nccl_ctxs_.get());
 #else
       PADDLE_THROW(
-          platform::errors::PreconditionNotMet("Not compiled with NCLL."));
+          platform::errors::PreconditionNotMet("Not compiled with NCCL."));
+#endif
+    } else if (use_device_ == p::kXPU) {
+#if defined(PADDLE_WITH_XPU_BKCL)
+      op_handle_ = new BroadcastOpHandle(nodes_.back().get(), local_scopes_,
+                                         place_list_, bkcl_ctxs_.get());
+#else
+      PADDLE_THROW(
+          platform::errors::PreconditionNotMet("Not compiled with BKCL."));
 #endif
     } else {
-#if defined(PADDLE_WITH_NCCL)
-      op_handle_ = new BroadcastOpHandle(nodes_.back().get(), local_scopes_,
-                                         place_list_, nccl_ctxs_.get());
-#else
       op_handle_ = new BroadcastOpHandle(nodes_.back().get(), local_scopes_,
                                          place_list_);
-#endif
     }
 
     op_handle_->SetLocalExecScopes(scope_map);
@@ -147,7 +183,7 @@ struct TestBroadcastOpHandle {
     op_handle_->AddInput(dummy_var_handle);
 
     for (size_t j = 0; j < place_list_.size(); ++j) {
-      if (!use_gpu_) {
+      if (use_device_ != p::kCUDA) {
         op_handle_->SetDeviceContext(place_list_[j], ctxs_[j].get());
       }
       nodes_.emplace_back(
@@ -177,7 +213,7 @@ struct TestBroadcastOpHandle {
         var, platform::errors::NotFound("Variable %s is not found in scope.",
                                         varname));
     auto lod_tensor = var->GetMutable<f::LoDTensor>();
-    std::vector<float> send_vector(static_cast<size_t>(f::product(kDims)));
+    std::vector<float> send_vector(static_cast<size_t>(phi::product(kDims)));
     for (size_t k = 0; k < send_vector.size(); ++k) {
       send_vector[k] = k + val_scalar;
     }
@@ -192,7 +228,7 @@ struct TestBroadcastOpHandle {
                                       size_t input_scope_idx,
                                       const std::vector<int64_t>& rows,
                                       int height, float value_scalar = 0.0) {
-    std::vector<float> send_vector(static_cast<size_t>(f::product(kDims)));
+    std::vector<float> send_vector(static_cast<size_t>(phi::product(kDims)));
     for (size_t k = 0; k < send_vector.size(); ++k) {
       send_vector[k] = k + value_scalar;
     }
@@ -201,7 +237,7 @@ struct TestBroadcastOpHandle {
     PADDLE_ENFORCE_NOT_NULL(
         var, platform::errors::NotFound("Variable %s is not found in scope.",
                                         varname));
-    auto selected_rows = var->GetMutable<f::SelectedRows>();
+    auto selected_rows = var->GetMutable<phi::SelectedRows>();
     auto value = selected_rows->mutable_value();
     value->mutable_data<float>(kDims, place_list_[input_scope_idx]);
     selected_rows->set_height(height);
@@ -220,7 +256,7 @@ struct TestBroadcastOpHandle {
     PADDLE_ENFORCE_NOT_NULL(
         var, platform::errors::NotFound("Variable %s is not found in scope.",
                                         varname));
-    auto& selected_rows = var->Get<f::SelectedRows>();
+    auto& selected_rows = var->Get<phi::SelectedRows>();
     auto rt = selected_rows.value();
     PADDLE_ENFORCE_EQ(selected_rows.height(), height,
                       platform::errors::InvalidArgument(
@@ -242,7 +278,7 @@ struct TestBroadcastOpHandle {
     f::TensorCopySync(rt, cpu_place, &result_tensor);
     float* ct = result_tensor.data<float>();
 
-    for (int64_t i = 0; i < f::product(kDims); ++i) {
+    for (int64_t i = 0; i < phi::product(kDims); ++i) {
       ASSERT_NEAR(ct[i], send_vector[i], 1e-5);
     }
   }
@@ -264,7 +300,7 @@ struct TestBroadcastOpHandle {
     f::Tensor result_tensor;
     f::TensorCopySync(tensor, cpu_place, &result_tensor);
     float* ct = result_tensor.mutable_data<float>(cpu_place);
-    for (int64_t k = 0; k < f::product(kDims); ++k) {
+    for (int64_t k = 0; k < phi::product(kDims); ++k) {
       ASSERT_NEAR(ct[k], send_vec[k], 1e-5);
     }
   }
@@ -273,7 +309,8 @@ struct TestBroadcastOpHandle {
     f::LoD lod{{0, 10, 20}};
     auto send_vector = InitLoDTensor("input", input_scope_idx, lod);
 
-    op_handle_->Run(false);
+    DeviceType use_device = p::kCPU;
+    op_handle_->Run(use_device);
 
     WaitAll();
     for (size_t j = 0; j < place_list_.size(); ++j) {
@@ -287,7 +324,8 @@ struct TestBroadcastOpHandle {
     int height = static_cast<int>(kDims[0] * 2);
     auto send_vector = InitSelectedRows("input", input_scope_idx, rows, height);
 
-    op_handle_->Run(false);
+    DeviceType use_device = p::kCPU;
+    op_handle_->Run(use_device);
 
     WaitAll();
     for (size_t j = 0; j < place_list_.size(); ++j) {

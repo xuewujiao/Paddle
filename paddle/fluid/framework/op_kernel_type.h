@@ -65,6 +65,10 @@ class OpKernelType {
 
   size_t hash_key() const { return Hash()(*this); }
 
+  bool operator<(const OpKernelType& o) const {
+    return hash_key() < o.hash_key();
+  }
+
   bool operator==(const OpKernelType& o) const;
 
   bool operator!=(const OpKernelType& o) const { return !(*this == o); }
@@ -78,9 +82,9 @@ class OpKernelType {
 
 inline std::ostream& operator<<(std::ostream& os,
                                 const OpKernelType& kernel_key) {
-  os << "data_type[" << kernel_key.data_type_ << "]:data_layout["
-     << kernel_key.data_layout_ << "]:place[" << kernel_key.place_
-     << "]:library_type[" << kernel_key.library_type_ << "]";
+  os << "{data_type[" << kernel_key.data_type_ << "]; data_layout["
+     << kernel_key.data_layout_ << "]; place[" << kernel_key.place_
+     << "]; library_type[" << kernel_key.library_type_ << "]}";
   return os;
 }
 
@@ -99,6 +103,11 @@ inline bool NeedTransformLayout(const DataLayout& l, const DataLayout& r) {
   ret |= (l == DataLayout::kMKLDNN && r != DataLayout::kMKLDNN);
 #endif
   return ret;
+}
+
+inline bool NeedTransformDataType(const OpKernelType& l,
+                                  const OpKernelType& r) {
+  return (l.data_type_ != r.data_type_);
 }
 
 inline bool NeedTransform(const OpKernelType& l, const OpKernelType& r) {

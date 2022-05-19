@@ -17,6 +17,7 @@ limitations under the License. */
 namespace paddle {
 namespace framework {
 class Scope;
+
 namespace proto {
 class OpDesc;
 }  // namespace proto
@@ -58,7 +59,7 @@ class DropoutOpConverter : public OpConverter {
     platform::CPUPlace cpu_place;
     std::unique_ptr<framework::LoDTensor> weight_tensor(
         new framework::LoDTensor());
-    weight_tensor->Resize(framework::make_ddim({1}));
+    weight_tensor->Resize(phi::make_ddim({1}));
     auto* weight_data =
         weight_tensor->mutable_data<float>(platform::CPUPlace());
     weight_data[0] = 1 - dropout_prob;
@@ -88,5 +89,5 @@ class DropoutOpConverter : public OpConverter {
 }  // namespace inference
 }  // namespace paddle
 
-USE_OP(dropout);
+USE_OP_ITSELF(dropout);
 REGISTER_TRT_OP_CONVERTER(dropout, DropoutOpConverter);

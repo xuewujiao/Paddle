@@ -14,13 +14,18 @@
 
 #pragma once
 
+#if defined(PADDLE_WITH_CUDA) && defined(__NVCC__)
+#include <cuda.h>
+#endif  // PADDLE_WITH_CUDA && __NVCC__
 #include <cmath>
 #include <vector>
 #include "paddle/fluid/framework/operator.h"
+#include "paddle/fluid/operators/amp/fp16_type_traits.h"
 #include "paddle/fluid/platform/device_context.h"
 #include "paddle/fluid/platform/enforce.h"
 #include "paddle/fluid/platform/errors.h"
-#include "paddle/fluid/platform/hostdevice.h"
+#include "paddle/phi/core/hostdevice.h"
+#include "paddle/phi/kernels/funcs/math_function.h"
 
 namespace paddle {
 namespace operators {
@@ -28,14 +33,32 @@ namespace operators {
 using Tensor = framework::Tensor;
 
 template <typename T>
-HOSTDEVICE void Update(const bool* found_inf_data,
-                       const T* pre_loss_scaling_data, const int* good_in_data,
-                       const int* bad_in_data, const int incr_every_n_steps,
-                       const int decr_every_n_nan_or_inf,
-                       const float incr_ratio, const float decr_ratio,
-                       T* updated_loss_scaling_data, int* good_out_data,
-                       int* bad_out_data) {
-  if (*found_inf_data) {
+inline HOSTDEVICE bool check_finite(T value) {
+#if defined(PADDLE_WITH_CUDA) && defined(__NVCC__)
+  return isfinite(value);
+#else
+  return std::isfinite(value);
+#endif
+}
+
+inline HOSTDEVICE bool IsFoundNanInf(const bool found_nan_inf_data) {
+  return found_nan_inf_data;
+}
+
+inline HOSTDEVICE bool IsFoundNanInf(const bool* found_nan_inf_data) {
+  return *found_nan_inf_data;
+}
+
+template <typename T, typename FoundInfFlagT>
+inline HOSTDEVICE void Update(const FoundInfFlagT found_inf_data,
+                              const T* pre_loss_scaling_data,
+                              const int* good_in_data, const int* bad_in_data,
+                              const int incr_every_n_steps,
+                              const int decr_every_n_nan_or_inf,
+                              const float incr_ratio, const float decr_ratio,
+                              T* updated_loss_scaling_data, int* good_out_data,
+                              int* bad_out_data) {
+  if (IsFoundNanInf(found_inf_data)) {
     *good_out_data = 0;
     *bad_out_data = *bad_in_data + 1;
     if (*bad_out_data == decr_every_n_nan_or_inf) {
@@ -50,7 +73,7 @@ HOSTDEVICE void Update(const bool* found_inf_data,
     *good_out_data = *good_in_data + 1;
     if (*good_out_data == incr_every_n_steps) {
       T new_loss_scaling = *pre_loss_scaling_data * incr_ratio;
-      *updated_loss_scaling_data = std::isfinite(new_loss_scaling)
+      *updated_loss_scaling_data = check_finite(new_loss_scaling)
                                        ? new_loss_scaling
                                        : *pre_loss_scaling_data;
       *good_out_data = 0;
@@ -58,7 +81,7 @@ HOSTDEVICE void Update(const bool* found_inf_data,
   }
 }
 
-template <typename DeviceContext, typename T>
+template <typename DeviceContext, typename T, bool IsFoundInfOnCPU>
 class UpdateLossScalingFunctor {
  public:
   void operator()(const DeviceContext& dev_ctx, const bool* found_inf_data,
@@ -79,30 +102,62 @@ class LazyZeros {
 
 template <typename DeviceContext, typename T>
 class UpdateLossScalingKernel : public framework::OpKernel<T> {
+  using MPDType = typename details::MPTypeTrait<T>::Type;
+
  public:
   void Compute(const framework::ExecutionContext& ctx) const override {
-    const auto xs = ctx.MultiInput<framework::Tensor>("X");
-    const auto* found_inf = ctx.Input<Tensor>("FoundInfinite");
-    const auto* pre_loss_scaling = ctx.Input<Tensor>("PrevLossScaling");
-    const auto* good_in = ctx.Input<Tensor>("InGoodSteps");
-    const auto* bad_in = ctx.Input<Tensor>("InBadSteps");
-    auto outs = ctx.MultiOutput<framework::Tensor>("Out");
-    auto* updated_loss_scaling = ctx.Output<Tensor>("LossScaling");
-    auto* good_out = ctx.Output<Tensor>("OutGoodSteps");
-    auto* bad_out = ctx.Output<Tensor>("OutBadSteps");
+    auto& dev_ctx = ctx.template device_context<DeviceContext>();
 
+    const auto xs = ctx.MultiInput<framework::Tensor>("X");
+    auto outs = ctx.MultiOutput<framework::Tensor>("Out");
+    const auto* found_inf = ctx.Input<Tensor>("FoundInfinite");
     PADDLE_ENFORCE_EQ(found_inf->numel(), 1,
                       platform::errors::InvalidArgument(
                           "FoundInfinite must has only one element."));
-
     const bool* found_inf_data = found_inf->data<bool>();
-    const T* pre_loss_scaling_data = pre_loss_scaling->data<T>();
+    bool is_found_inf_on_cpu = platform::is_cpu_place(found_inf->place());
+
+    if (is_found_inf_on_cpu) {
+      if (*found_inf_data) {
+        phi::funcs::SetConstant<DeviceContext, T> set_constant;
+        for (auto* out : outs) {
+          out->mutable_data<T>(dev_ctx.GetPlace());
+          set_constant(dev_ctx, out, static_cast<T>(0));
+        }
+      }
+    } else {
+      LazyZeros<DeviceContext, T>{}(dev_ctx, found_inf_data, xs, outs);
+    }
+
+    const auto* stop_update_tensor = ctx.Input<Tensor>("StopUpdate");
+    bool stop_update = false;
+    if (stop_update_tensor && stop_update_tensor->IsInitialized()) {
+      if (platform::is_cpu_place(stop_update_tensor->place())) {
+        stop_update = stop_update_tensor->data<bool>()[0];
+      } else {
+        framework::Tensor tmp_tensor;
+        framework::TensorCopySync(*stop_update_tensor, platform::CPUPlace(),
+                                  &tmp_tensor);
+        stop_update = tmp_tensor.data<bool>()[0];
+      }
+    }
+    stop_update |= ctx.Attr<bool>("stop_update");
+    if (stop_update) {
+      return;
+    }
+
+    const auto* pre_loss_scaling = ctx.Input<Tensor>("PrevLossScaling");
+    const auto* good_in = ctx.Input<Tensor>("InGoodSteps");
+    const auto* bad_in = ctx.Input<Tensor>("InBadSteps");
+    auto* updated_loss_scaling = ctx.Output<Tensor>("LossScaling");
+    auto* good_out = ctx.Output<Tensor>("OutGoodSteps");
+    auto* bad_out = ctx.Output<Tensor>("OutBadSteps");
+    const MPDType* pre_loss_scaling_data = pre_loss_scaling->data<MPDType>();
     const int* good_in_data = good_in->data<int>();
     const int* bad_in_data = bad_in->data<int>();
 
-    auto& dev_ctx = ctx.template device_context<DeviceContext>();
-    T* updated_loss_scaling_data =
-        updated_loss_scaling->mutable_data<T>(dev_ctx.GetPlace());
+    MPDType* updated_loss_scaling_data =
+        updated_loss_scaling->mutable_data<MPDType>(dev_ctx.GetPlace());
     int* good_out_data = good_out->mutable_data<int>(dev_ctx.GetPlace());
     int* bad_out_data = bad_out->mutable_data<int>(dev_ctx.GetPlace());
 
@@ -111,11 +166,17 @@ class UpdateLossScalingKernel : public framework::OpKernel<T> {
         ctx.Attr<int>("decr_every_n_nan_or_inf");
     const float incr_ratio = ctx.Attr<float>("incr_ratio");
     const float decr_ratio = ctx.Attr<float>("decr_ratio");
-    UpdateLossScalingFunctor<DeviceContext, T>{}(
-        dev_ctx, found_inf_data, pre_loss_scaling_data, good_in_data,
-        bad_in_data, incr_every_n_steps, decr_every_n_nan_or_inf, incr_ratio,
-        decr_ratio, updated_loss_scaling_data, good_out_data, bad_out_data);
-    LazyZeros<DeviceContext, T>{}(dev_ctx, found_inf_data, xs, outs);
+    if (is_found_inf_on_cpu) {
+      UpdateLossScalingFunctor<DeviceContext, MPDType, true>{}(
+          dev_ctx, found_inf_data, pre_loss_scaling_data, good_in_data,
+          bad_in_data, incr_every_n_steps, decr_every_n_nan_or_inf, incr_ratio,
+          decr_ratio, updated_loss_scaling_data, good_out_data, bad_out_data);
+    } else {
+      UpdateLossScalingFunctor<DeviceContext, MPDType, false>{}(
+          dev_ctx, found_inf_data, pre_loss_scaling_data, good_in_data,
+          bad_in_data, incr_every_n_steps, decr_every_n_nan_or_inf, incr_ratio,
+          decr_ratio, updated_loss_scaling_data, good_out_data, bad_out_data);
+    }
   }
 };
 

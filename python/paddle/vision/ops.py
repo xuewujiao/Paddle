@@ -17,12 +17,27 @@ from ..fluid.layer_helper import LayerHelper
 from ..fluid.data_feeder import check_variable_and_dtype, check_type, check_dtype
 from ..fluid import core, layers
 from ..fluid.layers import nn, utils
-from ..nn import Layer
+from ..nn import Layer, Conv2D, Sequential, ReLU, BatchNorm2D
 from ..fluid.initializer import Normal
-
+from ..fluid.framework import _non_static_mode, in_dygraph_mode, _in_legacy_dygraph
 from paddle.common_ops_import import *
+from paddle import _C_ops
 
-__all__ = ['yolo_loss', 'yolo_box', 'deform_conv2d', 'DeformConv2D']
+__all__ = [ #noqa
+    'yolo_loss',
+    'yolo_box',
+    'deform_conv2d',
+    'DeformConv2D',
+    'read_file',
+    'decode_jpeg',
+    'roi_pool',
+    'RoIPool',
+    'psroi_pool',
+    'PSRoIPool',
+    'roi_align',
+    'RoIAlign',
+    'nms',
+]
 
 
 def yolo_loss(x,
@@ -96,8 +111,7 @@ def yolo_loss(x,
     Final loss will be represented as follows.
 
     $$
-    loss = (loss_{xy} + loss_{wh}) * weight_{box}
-         + loss_{conf} + loss_{class}
+    loss = (loss_{xy} + loss_{wh}) * weight_{box} + loss_{conf} + loss_{class}
     $$
 
     While :attr:`use_label_smooth` is set to be :attr:`True`, the classification
@@ -181,10 +195,10 @@ def yolo_loss(x,
                                              scale_x_y=1.)
     """
 
-    if in_dygraph_mode() and gt_score is None:
-        loss = core.ops.yolov3_loss(
-            x, gt_box, gt_label, 'anchors', anchors, 'anchor_mask', anchor_mask,
-            'class_num', class_num, 'ignore_thresh', ignore_thresh,
+    if _non_static_mode():
+        loss, _, _ = _C_ops.yolov3_loss(
+            x, gt_box, gt_label, gt_score, 'anchors', anchors, 'anchor_mask',
+            anchor_mask, 'class_num', class_num, 'ignore_thresh', ignore_thresh,
             'downsample_ratio', downsample_ratio, 'use_label_smooth',
             use_label_smooth, 'scale_x_y', scale_x_y)
         return loss
@@ -244,7 +258,9 @@ def yolo_box(x,
              downsample_ratio,
              clip_bbox=True,
              name=None,
-             scale_x_y=1.):
+             scale_x_y=1.,
+             iou_aware=False,
+             iou_aware_factor=0.5):
     r"""
 
     This operator generates YOLO detection boxes from output of YOLOv3 network.
@@ -253,7 +269,8 @@ def yolo_box(x,
     should be the same, H and W specify the grid size, each grid point predict 
     given number boxes, this given number, which following will be represented as S,
     is specified by the number of anchors. In the second dimension(the channel
-    dimension), C should be equal to S * (5 + class_num), class_num is the object 
+    dimension), C should be equal to S * (5 + class_num) if :attr:`iou_aware` is false,
+    otherwise C should be equal to S * (6 + class_num). class_num is the object
     category number of source dataset(such as 80 in coco dataset), so the 
     second(channel) dimension, apart from 4 box location coordinates x, y, w, h, 
     also includes confidence score of the box and class one-hot key of each anchor 
@@ -289,6 +306,15 @@ def yolo_box(x,
     score_{pred} = score_{conf} * score_{class}
     $$
 
+    where the confidence scores follow the formula bellow
+
+    .. math::
+
+        score_{conf} = \begin{case}
+                         obj, \text{if } iou_aware == flase \\
+                         obj^{1 - iou_aware_factor} * iou^{iou_aware_factor}, \text{otherwise}
+                       \end{case}
+
     Args:
         x (Tensor): The input tensor of YoloBox operator is a 4-D tensor with
                       shape of [N, C, H, W]. The second dimension(C) stores box
@@ -310,13 +336,14 @@ def yolo_box(x,
                                 should be set for the first, second, and thrid
                                 :attr:`yolo_box` layer.
         clip_bbox (bool): Whether clip output bonding box in :attr:`img_size`
-                          boundary. Default true."
-        "
+                          boundary. Default true.
         scale_x_y (float): Scale the center point of decoded bounding box.
                            Default 1.0
         name (string): The default value is None.  Normally there is no need 
                        for user to set this property.  For more information, 
                        please refer to :ref:`api_guide_Name`
+        iou_aware (bool): Whether use iou aware. Default false
+        iou_aware_factor (float): iou aware factor. Default 0.5
 
     Returns:
         Tensor: A 3-D tensor with shape [N, M, 4], the coordinates of boxes,
@@ -336,7 +363,7 @@ def yolo_box(x,
         import paddle
         import numpy as np
 
-	x = np.random.random([2, 14, 8, 8]).astype('float32')
+        x = np.random.random([2, 14, 8, 8]).astype('float32')
         img_size = np.ones((2, 2)).astype('int32')
 
         x = paddle.to_tensor(x)
@@ -352,10 +379,17 @@ def yolo_box(x,
                                                    scale_x_y=1.)
     """
     if in_dygraph_mode():
-        boxes, scores = core.ops.yolo_box(
+        boxes, scores = _C_ops.final_state_yolo_box(
+            x, img_size, anchors, class_num, conf_thresh, downsample_ratio,
+            clip_bbox, scale_x_y, iou_aware, iou_aware_factor)
+        return boxes, scores
+
+    if _non_static_mode():
+        boxes, scores = _C_ops.yolo_box(
             x, img_size, 'anchors', anchors, 'class_num', class_num,
             'conf_thresh', conf_thresh, 'downsample_ratio', downsample_ratio,
-            'clip_bbox', clip_bbox, 'scale_x_y', scale_x_y)
+            'clip_bbox', clip_bbox, 'scale_x_y', scale_x_y, 'iou_aware',
+            iou_aware, 'iou_aware_factor', iou_aware_factor)
         return boxes, scores
 
     helper = LayerHelper('yolo_box', **locals())
@@ -375,6 +409,8 @@ def yolo_box(x,
         "downsample_ratio": downsample_ratio,
         "clip_bbox": clip_bbox,
         "scale_x_y": scale_x_y,
+        "iou_aware": iou_aware,
+        "iou_aware_factor": iou_aware_factor
     }
 
     helper.append_op(
@@ -398,6 +434,7 @@ def deform_conv2d(x,
                   stride=1,
                   padding=0,
                   dilation=1,
+                  deformable_groups=1,
                   groups=1,
                   mask=None,
                   name=None):
@@ -453,15 +490,17 @@ def deform_conv2d(x,
             the number of output channels, g is the number of groups, kH is the filter's
             height, kW is the filter's width.
         bias (Tensor, optional): The bias with shape [M,].
-        stride (int|list|tuple, optional): The stride size. If stride is a tuple, it must
+        stride (int|list|tuple, optional): The stride size. If stride is a list/tuple, it must
             contain two integers, (stride_H, stride_W). Otherwise, the
             stride_H = stride_W = stride. Default: stride = 1.
-        padding (int|list|tuple, optional): The padding size. If padding is a tuple, it must
+        padding (int|list|tuple, optional): The padding size. If padding is a list/tuple, it must
             contain two integers, (padding_H, padding_W). Otherwise, the
             padding_H = padding_W = padding. Default: padding = 0.
-        dilation (int|list|tuple, optional): The dilation size. If dilation is a tuple, it must
+        dilation (int|list|tuple, optional): The dilation size. If dilation is a list/tuple, it must
             contain two integers, (dilation_H, dilation_W). Otherwise, the
             dilation_H = dilation_W = dilation. Default: dilation = 1.
+        deformable_groups (int): The number of deformable group partitions.
+            Default: deformable_groups = 1.
         groups (int, optonal): The groups number of the deformable conv layer. According to
             grouped convolution in Alex Krizhevsky's Deep CNN paper: when group=2,
             the first half of the filters is only connected to the first half
@@ -520,15 +559,23 @@ def deform_conv2d(x,
     use_deform_conv2d_v1 = True if mask is None else False
 
     if in_dygraph_mode():
+        pre_bias = _C_ops.final_state_deformable_conv(
+            x, offset, weight, mask, stride, padding, dilation,
+            deformable_groups, groups, 1)
+        if bias is not None:
+            out = nn.elementwise_add(pre_bias, bias, axis=1)
+        else:
+            out = pre_bias
+    elif _in_legacy_dygraph():
         attrs = ('strides', stride, 'paddings', padding, 'dilations', dilation,
-                 'groups', groups, 'im2col_step', 1)
+                 'deformable_groups', deformable_groups, 'groups', groups,
+                 'im2col_step', 1)
         if use_deform_conv2d_v1:
             op_type = 'deformable_conv_v1'
-            pre_bias = getattr(core.ops, op_type)(x, offset, weight, *attrs)
+            pre_bias = getattr(_C_ops, op_type)(x, offset, weight, *attrs)
         else:
             op_type = 'deformable_conv'
-            pre_bias = getattr(core.ops, op_type)(x, offset, mask, weight,
-                                                  *attrs)
+            pre_bias = getattr(_C_ops, op_type)(x, offset, mask, weight, *attrs)
         if bias is not None:
             out = nn.elementwise_add(pre_bias, bias, axis=1)
         else:
@@ -572,7 +619,7 @@ def deform_conv2d(x,
             'paddings': padding,
             'dilations': dilation,
             'groups': groups,
-            'deformable_groups': 1,
+            'deformable_groups': deformable_groups,
             'im2col_step': 1,
         }
         helper.append_op(
@@ -632,23 +679,25 @@ class DeformConv2D(Layer):
 
         .. math::
 
-            H_{out}&= \\frac{(H_{in} + 2 * paddings[0] - (dilations[0] * (H_f - 1) + 1))}{strides[0]} + 1 \\\\
-            W_{out}&= \\frac{(W_{in} + 2 * paddings[1] - (dilations[1] * (W_f - 1) + 1))}{strides[1]} + 1
+            H_{out}&= \frac{(H_{in} + 2 * paddings[0] - (dilations[0] * (H_f - 1) + 1))}{strides[0]} + 1 \\
+            W_{out}&= \frac{(W_{in} + 2 * paddings[1] - (dilations[1] * (W_f - 1) + 1))}{strides[1]} + 1
 
 
     Parameters:
         in_channels(int): The number of input channels in the input image.
         out_channels(int): The number of output channels produced by the convolution.
         kernel_size(int|list|tuple): The size of the convolving kernel.
-        stride(int|list|tuple, optional): The stride size. If stride is a tuple, it must
+        stride(int|list|tuple, optional): The stride size. If stride is a list/tuple, it must
             contain three integers, (stride_H, stride_W). Otherwise, the
             stride_H = stride_W = stride. The default value is 1.
-        padding (int|list|tuple, optional): The padding size. If padding is a tuple, it must
+        padding (int|list|tuple, optional): The padding size. If padding is a list/tuple, it must
             contain two integers, (padding_H, padding_W). Otherwise, the
             padding_H = padding_W = padding. Default: padding = 0.
-        dilation(int|list|tuple, optional): The dilation size. If dilation is a tuple, it must
+        dilation(int|list|tuple, optional): The dilation size. If dilation is a list/tuple, it must
             contain three integers, (dilation_D, dilation_H, dilation_W). Otherwise, the
             dilation_D = dilation_H = dilation_W = dilation. The default value is 1.
+        deformable_groups (int): The number of deformable group partitions.
+            Default: deformable_groups = 1.
         groups(int, optional): The groups number of the Conv3D Layer. According to grouped
             convolution in Alex Krizhevsky's Deep CNN paper: when group=2,
             the first half of the filters is only connected to the first half
@@ -658,7 +707,7 @@ class DeformConv2D(Layer):
             of conv2d. If it is set to None or one attribute of ParamAttr, conv2d
             will create ParamAttr as param_attr. If it is set to None, the parameter
             is initialized with :math:`Normal(0.0, std)`, and the :math:`std` is
-            :math:`(\\frac{2.0 }{filter\_elem\_num})^{0.5}`. The default value is None.
+            :math:`(\frac{2.0 }{filter\_elem\_num})^{0.5}`. The default value is None.
         bias_attr(ParamAttr|bool, optional): The parameter attribute for the bias of conv2d.
             If it is set to False, no bias will be added to the output units.
             If it is set to None or one attribute of ParamAttr, conv2d
@@ -672,10 +721,14 @@ class DeformConv2D(Layer):
         - offset: :math:`(N, 2 * H_f * W_f, H_{out}, W_{out})`
         - mask: :math:`(N, H_f * W_f, H_{out}, W_{out})`
         - output: :math:`(N, C_{out}, H_{out}, W_{out})`
+        
         Where
+        
         ..  math::
-           H_{out}&= \\frac{(H_{in} + 2 * paddings[0] - (dilations[0] * (kernel\_size[0] - 1) + 1))}{strides[0]} + 1
-           W_{out}&= \\frac{(W_{in} + 2 * paddings[1] - (dilations[1] * (kernel\_size[1] - 1) + 1))}{strides[1]} + 1
+
+            H_{out}&= \frac{(H_{in} + 2 * paddings[0] - (dilations[0] * (kernel\_size[0] - 1) + 1))}{strides[0]} + 1 \\
+            W_{out}&= \frac{(W_{in} + 2 * paddings[1] - (dilations[1] * (kernel\_size[1] - 1) + 1))}{strides[1]} + 1
+
     Examples:
         .. code-block:: python
 
@@ -726,6 +779,7 @@ class DeformConv2D(Layer):
                  stride=1,
                  padding=0,
                  dilation=1,
+                 deformable_groups=1,
                  groups=1,
                  weight_attr=None,
                  bias_attr=None):
@@ -733,6 +787,7 @@ class DeformConv2D(Layer):
         assert weight_attr is not False, "weight_attr should not be False in Conv."
         self._weight_attr = weight_attr
         self._bias_attr = bias_attr
+        self._deformable_groups = deformable_groups
         self._groups = groups
         self._in_channels = in_channels
         self._out_channels = out_channels
@@ -770,6 +825,709 @@ class DeformConv2D(Layer):
             stride=self._stride,
             padding=self._padding,
             dilation=self._dilation,
+            deformable_groups=self._deformable_groups,
             groups=self._groups,
             mask=mask)
         return out
+
+
+def read_file(filename, name=None):
+    """
+    Reads and outputs the bytes contents of a file as a uint8 Tensor
+    with one dimension.
+
+    Args:
+        filename (str): Path of the file to be read.
+        name (str, optional): The default value is None. Normally there is no
+            need for user to set this property. For more information, please
+            refer to :ref:`api_guide_Name`.
+
+    Returns:
+        A uint8 tensor.
+
+    Examples:
+        .. code-block:: python
+
+            import cv2
+            import paddle
+
+            fake_img = (np.random.random(
+                        (400, 300, 3)) * 255).astype('uint8')
+
+            cv2.imwrite('fake.jpg', fake_img)
+
+            img_bytes = paddle.vision.ops.read_file('fake.jpg')
+            
+            print(img_bytes.shape)
+
+    """
+
+    if _non_static_mode():
+        return _C_ops.read_file('filename', filename)
+
+    inputs = dict()
+    attrs = {'filename': filename}
+
+    helper = LayerHelper("read_file", **locals())
+    out = helper.create_variable_for_type_inference('uint8')
+    helper.append_op(
+        type="read_file", inputs=inputs, attrs=attrs, outputs={"Out": out})
+
+    return out
+
+
+def decode_jpeg(x, mode='unchanged', name=None):
+    """
+    Decodes a JPEG image into a 3 dimensional RGB Tensor or 1 dimensional Gray Tensor. 
+    Optionally converts the image to the desired format. 
+    The values of the output tensor are uint8 between 0 and 255.
+
+    Args:
+        x (Tensor): A one dimensional uint8 tensor containing the raw bytes 
+            of the JPEG image.
+        mode (str): The read mode used for optionally converting the image. 
+            Default: 'unchanged'.
+        name (str, optional): The default value is None. Normally there is no
+            need for user to set this property. For more information, please
+            refer to :ref:`api_guide_Name`.
+    Returns:
+        Tensor: A decoded image tensor with shape (imge_channels, image_height, image_width)
+
+    Examples:
+        .. code-block:: python
+
+            # required: gpu
+            import cv2
+            import numpy as np
+            import paddle
+
+            fake_img = (np.random.random(
+                        (400, 300, 3)) * 255).astype('uint8')
+
+            cv2.imwrite('fake.jpg', fake_img)
+
+            img_bytes = paddle.vision.ops.read_file('fake.jpg')
+            img = paddle.vision.ops.decode_jpeg(img_bytes)
+
+            print(img.shape)
+    """
+
+    if _non_static_mode():
+        return _C_ops.decode_jpeg(x, "mode", mode)
+
+    inputs = {'X': x}
+    attrs = {"mode": mode}
+
+    helper = LayerHelper("decode_jpeg", **locals())
+    out = helper.create_variable_for_type_inference('uint8')
+    helper.append_op(
+        type="decode_jpeg", inputs=inputs, attrs=attrs, outputs={"Out": out})
+
+    return out
+
+
+def psroi_pool(x, boxes, boxes_num, output_size, spatial_scale=1.0, name=None):
+    """
+    Position sensitive region of interest pooling (also known as PSROIPooling) is to perform
+    position-sensitive average pooling on regions of interest specified by input. It performs 
+    on inputs of nonuniform sizes to obtain fixed-size feature maps.
+
+    PSROIPooling is proposed by R-FCN. Please refer to https://arxiv.org/abs/1605.06409 for more details.
+
+    Args:
+        x (Tensor): Input features with shape (N, C, H, W). The data type can be float32 or float64.
+        boxes (Tensor): Box coordinates of ROIs (Regions of Interest) to pool over. It should be
+                         a 2-D Tensor with shape (num_rois, 4). Given as [[x1, y1, x2, y2], ...], 
+                         (x1, y1) is the top left coordinates, and (x2, y2) is the bottom
+                         right coordinates.
+        boxes_num (Tensor): The number of boxes contained in each picture in the batch.
+        output_size (int|Tuple(int, int))  The pooled output size(H, W), data type 
+                               is int32. If int, H and W are both equal to output_size.
+        spatial_scale (float): Multiplicative spatial scale factor to translate ROI coords from their 
+                               input scale to the scale used when pooling. Default: 1.0
+        name(str, optional): The default value is None.
+                             Normally there is no need for user to set this property.
+                             For more information, please refer to :ref:`api_guide_Name`
+
+    Returns:
+        4-D Tensor. The pooled ROIs with shape (num_rois, output_channels, pooled_h, pooled_w).
+        The output_channels equal to C / (pooled_h * pooled_w), where C is the channels of input.
+
+    Examples:
+        .. code-block:: python
+
+            import paddle
+            x = paddle.uniform([2, 490, 28, 28], dtype='float32')
+            boxes = paddle.to_tensor([[1, 5, 8, 10], [4, 2, 6, 7], [12, 12, 19, 21]], dtype='float32')
+            boxes_num = paddle.to_tensor([1, 2], dtype='int32')
+            pool_out = paddle.vision.ops.psroi_pool(x, boxes, boxes_num, 7, 1.0)
+    """
+
+    check_type(output_size, 'output_size', (int, tuple, list), 'psroi_pool')
+    if isinstance(output_size, int):
+        output_size = (output_size, output_size)
+    pooled_height, pooled_width = output_size
+    assert len(x.shape) == 4, \
+            "Input features with shape should be (N, C, H, W)"
+    output_channels = int(x.shape[1] / (pooled_height * pooled_width))
+    if in_dygraph_mode():
+        return _C_ops.final_state_psroi_pool(x, boxes, boxes_num, pooled_height,
+                                             pooled_width, output_channels,
+                                             spatial_scale)
+    if _in_legacy_dygraph():
+        return _C_ops.psroi_pool(x, boxes, boxes_num, "output_channels",
+                                 output_channels, "spatial_scale",
+                                 spatial_scale, "pooled_height", pooled_height,
+                                 "pooled_width", pooled_width)
+
+    helper = LayerHelper('psroi_pool', **locals())
+    dtype = helper.input_dtype()
+    out = helper.create_variable_for_type_inference(dtype)
+    helper.append_op(
+        type='psroi_pool',
+        inputs={'X': x,
+                'ROIs': boxes},
+        outputs={'Out': out},
+        attrs={
+            'output_channels': output_channels,
+            'spatial_scale': spatial_scale,
+            'pooled_height': pooled_height,
+            'pooled_width': pooled_width
+        })
+    return out
+
+
+class PSRoIPool(Layer):
+    """
+    This interface is used to construct a callable object of the ``PSRoIPool`` class. Please
+    refer to :ref:`api_paddle_vision_ops_psroi_pool`.
+
+    Args:
+        output_size (int|Tuple(int, int))  The pooled output size(H, W), data type 
+                               is int32. If int, H and W are both equal to output_size.
+        spatial_scale (float): Multiplicative spatial scale factor to translate ROI coords from their 
+                               input scale to the scale used when pooling. Default: 1.0.
+
+    Shape:
+        - x: 4-D Tensor with shape (N, C, H, W).
+        - boxes: 2-D Tensor with shape (num_rois, 4).
+        - boxes_num: 1-D Tensor.
+        - output: 4-D tensor with shape (num_rois, output_channels, pooled_h, pooled_w).
+              The output_channels equal to C / (pooled_h * pooled_w), where C is the channels of input.
+
+    Returns:
+        None
+
+    Examples:
+        .. code-block:: python
+
+            import paddle
+            
+            psroi_module = paddle.vision.ops.PSRoIPool(7, 1.0)
+            x = paddle.uniform([2, 490, 28, 28], dtype='float32')
+            boxes = paddle.to_tensor([[1, 5, 8, 10], [4, 2, 6, 7], [12, 12, 19, 21]], dtype='float32')
+            boxes_num = paddle.to_tensor([1, 2], dtype='int32')
+            pool_out = psroi_module(x, boxes, boxes_num)
+
+    """
+
+    def __init__(self, output_size, spatial_scale=1.0):
+        super(PSRoIPool, self).__init__()
+        self.output_size = output_size
+        self.spatial_scale = spatial_scale
+
+    def forward(self, x, boxes, boxes_num):
+        return psroi_pool(x, boxes, boxes_num, self.output_size,
+                          self.spatial_scale)
+
+
+def roi_pool(x, boxes, boxes_num, output_size, spatial_scale=1.0, name=None):
+    """
+    This operator implements the roi_pooling layer.
+    Region of interest pooling (also known as RoI pooling) is to perform max pooling on inputs of nonuniform sizes to obtain fixed-size feature maps (e.g. 7*7).
+    The operator has three steps: 1. Dividing each region proposal into equal-sized sections with output_size(h, w) 2. Finding the largest value in each section 3. Copying these max values to the output buffer  
+    For more information, please refer to https://stackoverflow.com/questions/43430056/what-is-roi-layer-in-fast-rcnn.
+
+    Args:
+        x (Tensor): input feature, 4D-Tensor with the shape of [N,C,H,W], 
+            where N is the batch size, C is the input channel, H is Height, W is weight. 
+            The data type is float32 or float64.
+        boxes (Tensor): boxes (Regions of Interest) to pool over. 
+            2D-Tensor with the shape of [num_boxes,4]. 
+            Given as [[x1, y1, x2, y2], ...], (x1, y1) is the top left coordinates, 
+            and (x2, y2) is the bottom right coordinates.
+        boxes_num (Tensor): the number of RoIs in each image, data type is int32. Default: None
+        output_size (int or tuple[int, int]): the pooled output size(h, w), data type is int32. If int, h and w are both equal to output_size.
+        spatial_scale (float, optional): multiplicative spatial scale factor to translate ROI coords from their input scale to the scale used when pooling. Default: 1.0
+        name(str, optional): for detailed information, please refer to :ref:`api_guide_Name`. Usually name is no need to set and None by default.
+
+    Returns:
+        pool_out (Tensor): the pooled feature, 4D-Tensor with the shape of [num_boxes, C, output_size[0], output_size[1]].  
+
+    Examples:
+        .. code-block:: python
+
+            import paddle
+            from paddle.vision.ops import roi_pool
+
+            data = paddle.rand([1, 256, 32, 32])
+            boxes = paddle.rand([3, 4])
+            boxes[:, 2] += boxes[:, 0] + 3
+            boxes[:, 3] += boxes[:, 1] + 4
+            boxes_num = paddle.to_tensor([3]).astype('int32')
+            pool_out = roi_pool(data, boxes, boxes_num=boxes_num, output_size=3)
+            assert pool_out.shape == [3, 256, 3, 3], ''
+    """
+
+    check_type(output_size, 'output_size', (int, tuple), 'roi_pool')
+    if isinstance(output_size, int):
+        output_size = (output_size, output_size)
+
+    pooled_height, pooled_width = output_size
+    if in_dygraph_mode():
+        assert boxes_num is not None, "boxes_num should not be None in dygraph mode."
+        return _C_ops.final_state_roi_pool(x, boxes, boxes_num, pooled_height,
+                                           pooled_width, spatial_scale)
+    if _in_legacy_dygraph():
+        assert boxes_num is not None, "boxes_num should not be None in dygraph mode."
+        pool_out, argmaxes = _C_ops.roi_pool(
+            x, boxes, boxes_num, "pooled_height", pooled_height, "pooled_width",
+            pooled_width, "spatial_scale", spatial_scale)
+        return pool_out
+
+    else:
+        check_variable_and_dtype(x, 'x', ['float32'], 'roi_pool')
+        check_variable_and_dtype(boxes, 'boxes', ['float32'], 'roi_pool')
+        helper = LayerHelper('roi_pool', **locals())
+        dtype = helper.input_dtype()
+        pool_out = helper.create_variable_for_type_inference(dtype)
+        argmaxes = helper.create_variable_for_type_inference(dtype='int32')
+
+        inputs = {
+            "X": x,
+            "ROIs": boxes,
+        }
+        if boxes_num is not None:
+            inputs['RoisNum'] = boxes_num
+        helper.append_op(
+            type="roi_pool",
+            inputs=inputs,
+            outputs={"Out": pool_out,
+                     "Argmax": argmaxes},
+            attrs={
+                "pooled_height": pooled_height,
+                "pooled_width": pooled_width,
+                "spatial_scale": spatial_scale
+            })
+        return pool_out
+
+
+class RoIPool(Layer):
+    """
+    This interface is used to construct a callable object of the `RoIPool` class. Please
+    refer to :ref:`api_paddle_vision_ops_roi_pool`.  
+
+    Args:
+        output_size (int or tuple[int, int]): the pooled output size(h, w), data type is int32. If int, h and w are both equal to output_size.
+        spatial_scale (float, optional): multiplicative spatial scale factor to translate ROI coords from their input scale to the scale used when pooling. Default: 1.0.
+
+    Returns:
+        pool_out (Tensor): the pooled feature, 4D-Tensor with the shape of [num_boxes, C, output_size[0], output_size[1]].  
+
+    Examples:
+        .. code-block:: python
+
+            import paddle
+            from paddle.vision.ops import RoIPool
+            
+            data = paddle.rand([1, 256, 32, 32])
+            boxes = paddle.rand([3, 4])
+            boxes[:, 2] += boxes[:, 0] + 3
+            boxes[:, 3] += boxes[:, 1] + 4
+            boxes_num = paddle.to_tensor([3]).astype('int32')
+            roi_pool = RoIPool(output_size=(4, 3))
+            pool_out = roi_pool(data, boxes, boxes_num)
+            assert pool_out.shape == [3, 256, 4, 3], ''
+    """
+
+    def __init__(self, output_size, spatial_scale=1.0):
+        super(RoIPool, self).__init__()
+        self._output_size = output_size
+        self._spatial_scale = spatial_scale
+
+    def forward(self, x, boxes, boxes_num):
+        return roi_pool(
+            x=x,
+            boxes=boxes,
+            boxes_num=boxes_num,
+            output_size=self._output_size,
+            spatial_scale=self._spatial_scale)
+
+    def extra_repr(self):
+        main_str = 'output_size={_output_size}, spatial_scale={_spatial_scale}'
+        return main_str.format(**self.__dict__)
+
+
+def roi_align(x,
+              boxes,
+              boxes_num,
+              output_size,
+              spatial_scale=1.0,
+              sampling_ratio=-1,
+              aligned=True,
+              name=None):
+    """
+    This operator implements the roi_align layer.
+    Region of Interest (RoI) Align operator (also known as RoI Align) is to
+    perform bilinear interpolation on inputs of nonuniform sizes to obtain
+    fixed-size feature maps (e.g. 7*7), as described in Mask R-CNN.
+
+    Dividing each region proposal into equal-sized sections with the pooled_width
+    and pooled_height. Location remains the origin result.
+
+    In each ROI bin, the value of the four regularly sampled locations are
+    computed directly through bilinear interpolation. The output is the mean of
+    four locations. Thus avoid the misaligned problem. 
+
+    Args:
+        x (Tensor): Input feature, 4D-Tensor with the shape of [N,C,H,W], 
+            where N is the batch size, C is the input channel, H is Height,
+            W is weight. The data type is float32 or float64.
+        boxes (Tensor): Boxes (RoIs, Regions of Interest) to pool over. It 
+            should be a 2-D Tensor of shape (num_boxes, 4). The data type is
+            float32 or float64. Given as [[x1, y1, x2, y2], ...], (x1, y1) is
+            the top left coordinates, and (x2, y2) is the bottom right coordinates.
+        boxes_num (Tensor): The number of boxes contained in each picture in
+            the batch, the data type is int32.
+        output_size (int or Tuple[int, int]): The pooled output size(h, w), data
+            type is int32. If int, h and w are both equal to output_size.
+        spatial_scale (float32): Multiplicative spatial scale factor to translate
+            ROI coords from their input scale to the scale used when pooling.
+            Default: 1.0
+        sampling_ratio (int32): number of sampling points in the interpolation
+            grid used to compute the output value of each pooled output bin.
+            If > 0, then exactly ``sampling_ratio x sampling_ratio`` sampling
+            points per bin are used.
+            If <= 0, then an adaptive number of grid points are used (computed
+            as ``ceil(roi_width / output_width)``, and likewise for height).
+            Default: -1
+        aligned (bool): If False, use the legacy implementation. If True, pixel
+            shift the box coordinates it by -0.5 for a better alignment with the
+            two neighboring pixel indices. This version is used in Detectron2.
+            Default: True
+        name(str, optional): For detailed information, please refer to :
+            ref:`api_guide_Name`. Usually name is no need to set and None by
+            default.
+
+    Returns:
+        Tensor: The output of ROIAlignOp is a 4-D tensor with shape (num_boxes,
+            channels, pooled_h, pooled_w). The data type is float32 or float64.
+
+    Examples:
+        .. code-block:: python
+
+            import paddle
+            from paddle.vision.ops import roi_align
+
+            data = paddle.rand([1, 256, 32, 32])
+            boxes = paddle.rand([3, 4])
+            boxes[:, 2] += boxes[:, 0] + 3
+            boxes[:, 3] += boxes[:, 1] + 4
+            boxes_num = paddle.to_tensor([3]).astype('int32')
+            align_out = roi_align(data, boxes, boxes_num, output_size=3)
+            assert align_out.shape == [3, 256, 3, 3]
+    """
+
+    check_type(output_size, 'output_size', (int, tuple), 'roi_align')
+    if isinstance(output_size, int):
+        output_size = (output_size, output_size)
+
+    pooled_height, pooled_width = output_size
+    if in_dygraph_mode():
+        assert boxes_num is not None, "boxes_num should not be None in dygraph mode."
+        return _C_ops.final_state_roi_align(x, boxes, boxes_num, pooled_height,
+                                            pooled_width, spatial_scale,
+                                            sampling_ratio, aligned)
+    if _in_legacy_dygraph():
+        assert boxes_num is not None, "boxes_num should not be None in dygraph mode."
+        align_out = _C_ops.roi_align(
+            x, boxes, boxes_num, "pooled_height", pooled_height, "pooled_width",
+            pooled_width, "spatial_scale", spatial_scale, "sampling_ratio",
+            sampling_ratio, "aligned", aligned)
+        return align_out
+
+    else:
+        check_variable_and_dtype(x, 'x', ['float32', 'float64'], 'roi_align')
+        check_variable_and_dtype(boxes, 'boxes', ['float32', 'float64'],
+                                 'roi_align')
+        helper = LayerHelper('roi_align', **locals())
+        dtype = helper.input_dtype()
+        align_out = helper.create_variable_for_type_inference(dtype)
+        inputs = {
+            "X": x,
+            "ROIs": boxes,
+        }
+        if boxes_num is not None:
+            inputs['RoisNum'] = boxes_num
+        helper.append_op(
+            type="roi_align",
+            inputs=inputs,
+            outputs={"Out": align_out},
+            attrs={
+                "pooled_height": pooled_height,
+                "pooled_width": pooled_width,
+                "spatial_scale": spatial_scale,
+                "sampling_ratio": sampling_ratio,
+                "aligned": aligned,
+            })
+        return align_out
+
+
+class RoIAlign(Layer):
+    """
+    This interface is used to construct a callable object of the `RoIAlign` class.
+    Please refer to :ref:`api_paddle_vision_ops_roi_align`.
+
+    Args:
+        output_size (int or tuple[int, int]): The pooled output size(h, w),
+            data type is int32. If int, h and w are both equal to output_size.
+        spatial_scale (float32, optional): Multiplicative spatial scale factor
+            to translate ROI coords from their input scale to the scale used
+            when pooling. Default: 1.0
+
+    Returns:
+        align_out (Tensor): The output of ROIAlign operator is a 4-D tensor with
+            shape (num_boxes, channels, pooled_h, pooled_w).
+
+    Examples:
+        ..  code-block:: python
+
+            import paddle
+            from paddle.vision.ops import RoIAlign
+
+            data = paddle.rand([1, 256, 32, 32])
+            boxes = paddle.rand([3, 4])
+            boxes[:, 2] += boxes[:, 0] + 3
+            boxes[:, 3] += boxes[:, 1] + 4
+            boxes_num = paddle.to_tensor([3]).astype('int32')
+            roi_align = RoIAlign(output_size=(4, 3))
+            align_out = roi_align(data, boxes, boxes_num)
+            assert align_out.shape == [3, 256, 4, 3]
+    """
+
+    def __init__(self, output_size, spatial_scale=1.0):
+        super(RoIAlign, self).__init__()
+        self._output_size = output_size
+        self._spatial_scale = spatial_scale
+
+    def forward(self, x, boxes, boxes_num, aligned=True):
+        return roi_align(
+            x=x,
+            boxes=boxes,
+            boxes_num=boxes_num,
+            output_size=self._output_size,
+            spatial_scale=self._spatial_scale,
+            aligned=aligned)
+
+
+class ConvNormActivation(Sequential):
+    """
+    Configurable block used for Convolution-Normalzation-Activation blocks.
+    This code is based on the torchvision code with modifications.
+    You can also see at https://github.com/pytorch/vision/blob/main/torchvision/ops/misc.py#L68
+    Args:
+        in_channels (int): Number of channels in the input image
+        out_channels (int): Number of channels produced by the Convolution-Normalzation-Activation block
+        kernel_size: (int|list|tuple, optional): Size of the convolving kernel. Default: 3
+        stride (int|list|tuple, optional): Stride of the convolution. Default: 1
+        padding (int|str|tuple|list, optional): Padding added to all four sides of the input. Default: None,
+            in wich case it will calculated as ``padding = (kernel_size - 1) // 2 * dilation``
+        groups (int, optional): Number of blocked connections from input channels to output channels. Default: 1
+        norm_layer (Callable[..., paddle.nn.Layer], optional): Norm layer that will be stacked on top of the convolutiuon layer.
+            If ``None`` this layer wont be used. Default: ``paddle.nn.BatchNorm2D``
+        activation_layer (Callable[..., paddle.nn.Layer], optional): Activation function which will be stacked on top of the normalization
+            layer (if not ``None``), otherwise on top of the conv layer. If ``None`` this layer wont be used. Default: ``paddle.nn.ReLU``
+        dilation (int): Spacing between kernel elements. Default: 1
+        bias (bool, optional): Whether to use bias in the convolution layer. By default, biases are included if ``norm_layer is None``.
+    """
+
+    def __init__(self,
+                 in_channels,
+                 out_channels,
+                 kernel_size=3,
+                 stride=1,
+                 padding=None,
+                 groups=1,
+                 norm_layer=BatchNorm2D,
+                 activation_layer=ReLU,
+                 dilation=1,
+                 bias=None):
+        if padding is None:
+            padding = (kernel_size - 1) // 2 * dilation
+        if bias is None:
+            bias = norm_layer is None
+        layers = [
+            Conv2D(
+                in_channels,
+                out_channels,
+                kernel_size,
+                stride,
+                padding,
+                dilation=dilation,
+                groups=groups,
+                bias_attr=bias)
+        ]
+        if norm_layer is not None:
+            layers.append(norm_layer(out_channels))
+        if activation_layer is not None:
+            layers.append(activation_layer())
+        super().__init__(*layers)
+
+
+def nms(boxes,
+        iou_threshold=0.3,
+        scores=None,
+        category_idxs=None,
+        categories=None,
+        top_k=None):
+    r"""
+    This operator implements non-maximum suppression. Non-maximum suppression (NMS)
+    is used to select one bounding box out of many overlapping bounding boxes in object detection. 
+    Boxes with IoU > iou_threshold will be considered as overlapping boxes, 
+    just one with highest score can be kept. Here IoU is Intersection Over Union, 
+    which can be computed by:
+
+    ..  math::
+
+        IoU = \frac{intersection\_area(box1, box2)}{union\_area(box1, box2)}
+
+    If scores are provided, input boxes will be sorted by their scores firstly.
+
+    If category_idxs and categories are provided, NMS will be performed with a batched style, 
+    which means NMS will be applied to each category respectively and results of each category
+    will be concated and sorted by scores.
+    
+    If K is provided, only the first k elements will be returned. Otherwise, all box indices sorted by scores will be returned.
+
+    Args:
+        boxes(Tensor): The input boxes data to be computed, it's a 2D-Tensor with 
+            the shape of [num_boxes, 4]. The data type is float32 or float64. 
+            Given as [[x1, y1, x2, y2], …],  (x1, y1) is the top left coordinates, 
+            and (x2, y2) is the bottom right coordinates. 
+            Their relation should be ``0 <= x1 < x2 && 0 <= y1 < y2``.
+        iou_threshold(float32, optional): IoU threshold for determine overlapping boxes. Default value: 0.3.
+        scores(Tensor, optional): Scores corresponding to boxes, it's a 1D-Tensor with 
+            shape of [num_boxes]. The data type is float32 or float64. Default: None.
+        category_idxs(Tensor, optional): Category indices corresponding to boxes. 
+            it's a 1D-Tensor with shape of [num_boxes]. The data type is int64. Default: None.
+        categories(List, optional): A list of unique id of all categories. The data type is int64. Default: None.
+        top_k(int64, optional): The top K boxes who has higher score and kept by NMS preds to 
+            consider. top_k should be smaller equal than num_boxes. Default: None.
+
+    Returns:
+        Tensor: 1D-Tensor with the shape of [num_boxes]. Indices of boxes kept by NMS.
+
+    Examples:
+        .. code-block:: python
+        
+            import paddle
+            import numpy as np
+
+            boxes = np.random.rand(4, 4).astype('float32')
+            boxes[:, 2] = boxes[:, 0] + boxes[:, 2]
+            boxes[:, 3] = boxes[:, 1] + boxes[:, 3]
+            # [[0.06287421 0.5809351  0.3443958  0.8713329 ]
+            #  [0.0749094  0.9713205  0.99241287 1.2799143 ]
+            #  [0.46246734 0.6753201  1.346266   1.3821303 ]
+            #  [0.8984796  0.5619834  1.1254641  1.0201943 ]]
+
+            out =  paddle.vision.ops.nms(paddle.to_tensor(boxes), 0.1)
+            # [0, 1, 3, 0]
+
+            scores = np.random.rand(4).astype('float32')
+            # [0.98015213 0.3156527  0.8199343  0.874901 ]
+
+            categories = [0, 1, 2, 3]
+            category_idxs = np.random.choice(categories, 4)                        
+            # [2 0 0 3]
+
+            out =  paddle.vision.ops.nms(paddle.to_tensor(boxes), 
+                                                    0.1, 
+                                                    paddle.to_tensor(scores), 
+                                                    paddle.to_tensor(category_idxs), 
+                                                    categories, 
+                                                    4)
+            # [0, 3, 2]
+    """
+
+    def _nms(boxes, iou_threshold):
+        if _non_static_mode():
+            return _C_ops.nms(boxes, 'iou_threshold', iou_threshold)
+
+        helper = LayerHelper('nms', **locals())
+        out = helper.create_variable_for_type_inference('int64')
+        helper.append_op(
+            type='nms',
+            inputs={'Boxes': boxes},
+            outputs={'KeepBoxesIdxs': out},
+            attrs={'iou_threshold': iou_threshold})
+        return out
+
+    if scores is None:
+        return _nms(boxes, iou_threshold)
+
+    import paddle
+    if category_idxs is None:
+        sorted_global_indices = paddle.argsort(scores, descending=True)
+        return _nms(boxes[sorted_global_indices], iou_threshold)
+
+    if top_k is not None:
+        assert top_k <= scores.shape[
+            0], "top_k should be smaller equal than the number of boxes"
+    assert categories is not None, "if category_idxs is given, categories which is a list of unique id of all categories is necessary"
+
+    mask = paddle.zeros_like(scores, dtype=paddle.int32)
+
+    for category_id in categories:
+        cur_category_boxes_idxs = paddle.where(category_idxs == category_id)[0]
+        shape = cur_category_boxes_idxs.shape[0]
+        cur_category_boxes_idxs = paddle.reshape(cur_category_boxes_idxs,
+                                                 [shape])
+        if shape == 0:
+            continue
+        elif shape == 1:
+            mask[cur_category_boxes_idxs] = 1
+            continue
+        cur_category_boxes = boxes[cur_category_boxes_idxs]
+        cur_category_scores = scores[cur_category_boxes_idxs]
+        cur_category_sorted_indices = paddle.argsort(
+            cur_category_scores, descending=True)
+        cur_category_sorted_boxes = cur_category_boxes[
+            cur_category_sorted_indices]
+
+        cur_category_keep_boxes_sub_idxs = cur_category_sorted_indices[_nms(
+            cur_category_sorted_boxes, iou_threshold)]
+
+        updates = paddle.ones_like(
+            cur_category_boxes_idxs[cur_category_keep_boxes_sub_idxs],
+            dtype=paddle.int32)
+        mask = paddle.scatter(
+            mask,
+            cur_category_boxes_idxs[cur_category_keep_boxes_sub_idxs],
+            updates,
+            overwrite=True)
+    keep_boxes_idxs = paddle.where(mask)[0]
+    shape = keep_boxes_idxs.shape[0]
+    keep_boxes_idxs = paddle.reshape(keep_boxes_idxs, [shape])
+    sorted_sub_indices = paddle.argsort(
+        scores[keep_boxes_idxs], descending=True)
+
+    if top_k is None:
+        return keep_boxes_idxs[sorted_sub_indices]
+
+    if _non_static_mode():
+        top_k = shape if shape < top_k else top_k
+        _, topk_sub_indices = paddle.topk(scores[keep_boxes_idxs], top_k)
+        return keep_boxes_idxs[topk_sub_indices]
+
+    return keep_boxes_idxs[sorted_sub_indices][:top_k]

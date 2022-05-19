@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <set>
-
 #include "paddle/fluid/framework/executor.h"
 #include "paddle/fluid/framework/op_registry.h"
 #include "paddle/fluid/framework/operator.h"
@@ -62,7 +60,7 @@ class WhileOp : public framework::OperatorBase {
 
     auto &cond = scope.FindVar(Input(kCondition))->Get<LoDTensor>();
     PADDLE_ENFORCE_EQ(
-        cond.dims(), paddle::framework::make_ddim({1}),
+        cond.dims(), phi::make_ddim({1}),
         platform::errors::InvalidArgument(
             "The shape of Input(Condition) of WhileOp must be 1. But now "
             "the Condition's shape is ",
@@ -200,7 +198,8 @@ class WhileOpMaker : public framework::OpProtoAndCheckerMaker {
     AddAttr<std::vector<std::string>>(kSkipEagerDeletionVars,
                                       "Vars that would skip eager deletion."
                                       "Users should not set this manually.")
-        .SetDefault(std::vector<std::string>());
+        .SetDefault(std::vector<std::string>())
+        .AsExtra();
     AddComment(R"DOC(
 )DOC");
   }
@@ -376,8 +375,9 @@ class WhileGradOp : public framework::OperatorBase {
               var->IsType<LoDTensor>()) {
             auto &inside_tensor = var->Get<framework::LoDTensor>();
             framework::AttributeMap attrs;
-            attrs["dtype"] = inside_tensor.type();
-            attrs["shape"] = framework::vectorize<int>(inside_tensor.dims());
+            attrs["dtype"] =
+                framework::TransToProtoVarType(inside_tensor.dtype());
+            attrs["shape"] = phi::vectorize<int>(inside_tensor.dims());
             attrs["value"] = 0.0f;
 
             auto var_name = pg_ig_names[param_id];
@@ -517,10 +517,8 @@ class WhileGradOpShapeInference : public framework::InferShapeBase {
     ctx->HasInputs(kOutputs);
     ctx->HasInputs(framework::GradVarName(kOutputs));
     auto pg_ig_names = ctx->Outputs(kXGRAD);
-    std::vector<framework::InferShapeVarPtr> in_var_ptrs =
-        ctx->GetInputVarPtrs(kX);
-    std::vector<framework::InferShapeVarPtr> out_var_ptrs =
-        ctx->GetOutputVarPtrs(kXGRAD);
+    auto in_var_ptrs = ctx->GetInputVarPtrs(kX);
+    auto out_var_ptrs = ctx->GetOutputVarPtrs(kXGRAD);
     PADDLE_ENFORCE_EQ(in_var_ptrs.size(), out_var_ptrs.size(),
                       platform::errors::InvalidArgument(
                           "The size of Inputs(X) must be the same as "

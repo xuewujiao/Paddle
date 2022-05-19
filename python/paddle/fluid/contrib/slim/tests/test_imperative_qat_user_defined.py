@@ -26,10 +26,11 @@ from paddle.fluid.contrib.slim.quantization import ImperativeQuantAware
 from paddle.fluid.contrib.slim.quantization import QuantizationTransformPass
 from paddle.nn import Sequential
 from paddle.fluid.dygraph import Conv2D
-from paddle.nn import Pool2D
+from paddle.fluid.dygraph import Pool2D
 from paddle.fluid.dygraph import Linear
+from paddle.nn.quant.quant_layers import QuantizedConv2DTranspose
 from paddle.fluid.log_helper import get_logger
-
+from paddle.fluid.framework import _test_eager_guard
 os.environ["CPU_NUM"] = "1"
 
 _logger = get_logger(
@@ -100,6 +101,19 @@ class CustomQAT(nn.Layer):
         return x
 
 
+class ModelForConv2dT(nn.Layer):
+    def __init__(self, num_classes=10):
+        super(ModelForConv2dT, self).__init__()
+        self.features = nn.Conv2DTranspose(4, 6, (3, 3))
+        self.fc = Linear(input_dim=600, output_dim=num_classes)
+
+    def forward(self, inputs):
+        x = self.features(inputs)
+        x = paddle.flatten(x, 1)
+        x = self.fc(x)
+        return x
+
+
 class ImperativeLenet(paddle.nn.Layer):
     def __init__(self, num_classes=10, classifier_activation='softmax'):
         super(ImperativeLenet, self).__init__()
@@ -143,7 +157,7 @@ class TestUserDefinedActPreprocess(unittest.TestCase):
         _logger.info("test act_preprocess")
         self.imperative_qat = ImperativeQuantAware(act_preprocess_layer=PACT)
 
-    def test_quant_aware_training(self):
+    def func_quant_aware_training(self):
         imperative_qat = self.imperative_qat
         seed = 1
         np.random.seed(seed)
@@ -168,6 +182,11 @@ class TestUserDefinedActPreprocess(unittest.TestCase):
         imperative_qat.quantize(lenet)
         adam = Adam(learning_rate=0.001, parameters=lenet.parameters())
         dynamic_loss_rec = []
+        #for CI coverage
+        conv_transpose = ModelForConv2dT()
+        imperative_qat.quantize(conv_transpose)
+        x_var = paddle.uniform((2, 4, 8, 8), dtype='float32', min=-1., max=1.)
+        conv_transpose(x_var)
 
         def train(model):
             adam = Adam(learning_rate=0.001, parameters=model.parameters())
@@ -223,6 +242,11 @@ class TestUserDefinedActPreprocess(unittest.TestCase):
         test_reader = paddle.batch(paddle.dataset.mnist.test(), batch_size=512)
         train(lenet)
         test(lenet)
+
+    def test_quant_aware_training(self):
+        with _test_eager_guard():
+            self.func_quant_aware_training()
+        self.func_quant_aware_training()
 
 
 class TestUserDefinedWeightPreprocess(TestUserDefinedActPreprocess):

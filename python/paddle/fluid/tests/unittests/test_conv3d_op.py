@@ -20,6 +20,7 @@ import numpy as np
 import paddle.fluid.core as core
 from op_test import OpTest
 import paddle.fluid as fluid
+import paddle
 
 
 def conv3d_forward_naive(input,
@@ -135,6 +136,8 @@ def create_test_cudnn_class(parent):
     class TestCUDNNCase(parent):
         def init_kernel_type(self):
             self.use_cudnn = True
+            self.dtype = np.float32 if core.is_compiled_with_rocm(
+            ) else np.float64
 
     cls_name = "{0}_{1}".format(parent.__name__, "CUDNN")
     TestCUDNNCase.__name__ = cls_name
@@ -169,6 +172,8 @@ def create_test_cudnn_padding_SAME_class(parent):
     class TestCUDNNPaddingSMAECase(parent):
         def init_kernel_type(self):
             self.use_cudnn = True
+            self.dtype = np.float32 if core.is_compiled_with_rocm(
+            ) else np.float64
 
         def init_paddings(self):
             self.pad = [1, 1, 1]
@@ -185,6 +190,8 @@ def create_test_cudnn_padding_VALID_class(parent):
     class TestCUDNNPaddingVALIDCase(parent):
         def init_kernel_type(self):
             self.use_cudnn = True
+            self.dtype = np.float32 if core.is_compiled_with_rocm(
+            ) else np.float64
 
         def init_paddings(self):
             self.pad = [1, 1, 1]
@@ -215,6 +222,8 @@ def create_test_cudnn_channel_last_class(parent):
     class TestCudnnChannelLastCase(parent):
         def init_kernel_type(self):
             self.use_cudnn = True
+            self.dtype = np.float32 if core.is_compiled_with_rocm(
+            ) else np.float64
 
         def init_data_format(self):
             self.data_format = "NDHWC"
@@ -410,6 +419,7 @@ class TestWithDilation(TestConv3DOp):
 class TestCUDNN(TestConv3DOp):
     def init_kernel_type(self):
         self.use_cudnn = True
+        self.dtype = np.float32 if core.is_compiled_with_rocm() else np.float64
 
 
 @unittest.skipIf(not core.is_compiled_with_cuda(),
@@ -431,6 +441,7 @@ class TestFP16CUDNN(TestConv3DOp):
 class TestWithGroup1CUDNN(TestWithGroup1):
     def init_kernel_type(self):
         self.use_cudnn = True
+        self.dtype = np.float32 if core.is_compiled_with_rocm() else np.float64
 
 
 @unittest.skipIf(not core.is_compiled_with_cuda(),
@@ -452,6 +463,7 @@ class TestFP16WithGroup1CUDNN(TestWithGroup1):
 class TestWithGroup2CUDNN(TestWithGroup2):
     def init_kernel_type(self):
         self.use_cudnn = True
+        self.dtype = np.float32 if core.is_compiled_with_rocm() else np.float64
 
 
 @unittest.skipIf(not core.is_compiled_with_cuda(),
@@ -473,6 +485,7 @@ class TestFP16WithGroup2CUDNN(TestWithGroup2):
 class TestWith1x1CUDNN(TestWith1x1):
     def init_kernel_type(self):
         self.use_cudnn = True
+        self.dtype = np.float32 if core.is_compiled_with_rocm() else np.float64
 
 
 @unittest.skipIf(not core.is_compiled_with_cuda(),
@@ -494,6 +507,7 @@ class TestFP16With1x1CUDNN(TestWith1x1):
 class TestWithInput1x1Filter1x1CUDNN(TestWithInput1x1Filter1x1):
     def init_kernel_type(self):
         self.use_cudnn = True
+        self.dtype = np.float32 if core.is_compiled_with_rocm() else np.float64
 
 
 @unittest.skipIf(not core.is_compiled_with_cuda(),
@@ -514,6 +528,7 @@ class TestCUDNNExhaustiveSearch(TestCUDNN):
     def init_kernel_type(self):
         self.use_cudnn = True
         self.exhaustive_search = True
+        self.dtype = np.float32 if core.is_compiled_with_rocm() else np.float64
 
 
 # ---- test asymmetric padding ----
@@ -970,6 +985,22 @@ class TestConv3DAPI_Error(unittest.TestCase):
 
         self.assertRaises(ValueError, run_7)
 
+        # ValueError: filter num
+        def run_8():
+            fluid.layers.conv3d(
+                input=input,
+                num_filters=0,
+                filter_size=0,
+                stride=0,
+                padding=0,
+                dilation=0,
+                groups=1,
+                use_cudnn=False,
+                data_format="NDHWC")
+
+        self.assertRaises(ValueError, run_8)
+
 
 if __name__ == '__main__':
+    paddle.enable_static()
     unittest.main()

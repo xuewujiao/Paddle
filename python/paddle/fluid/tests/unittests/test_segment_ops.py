@@ -15,8 +15,11 @@
 from __future__ import print_function
 
 import unittest
-import numpy as np
 import sys
+
+import numpy as np
+import paddle
+
 from op_test import OpTest
 
 
@@ -70,6 +73,17 @@ def compute_segment_min_max(x, segment_ids, pooltype="MAX"):
     return results, gradient / results.size
 
 
+def segment_pool_split(X, SegmentIds, pooltype):
+    if pooltype == "SUM":
+        return paddle.incubate.tensor.segment_sum(X, SegmentIds)
+    elif pooltype == "MEAN":
+        return paddle.incubate.tensor.segment_mean(X, SegmentIds)
+    elif pooltype == "MIN":
+        return paddle.incubate.tensor.segment_min(X, SegmentIds)
+    elif pooltype == "MAX":
+        return paddle.incubate.tensor.segment_max(X, SegmentIds)
+
+
 class TestSegmentOps(OpTest):
     def set_data(self):
         x = np.random.uniform(-1, 1, self.shape).astype(self.dtype)
@@ -87,6 +101,8 @@ class TestSegmentOps(OpTest):
 
     def prepare(self):
         self.op_type = "segment_pool"
+        self.python_api = segment_pool_split
+        self.python_out_sig = ["Out"]
         self.dtype = np.float64
         self.shape = [30, 15]
         self.attrs = {"pooltype": "SUM"}
@@ -102,10 +118,10 @@ class TestSegmentOps(OpTest):
         self.outputs = {'Out': result.astype(self.dtype)}
 
     def test_check_output(self):
-        self.check_output()
+        self.check_output(check_eager=True)
 
     def test_check_grad(self):
-        self.check_grad(["X"], "Out")
+        self.check_grad(["X"], "Out", check_eager=True)
 
 
 class TestSegmentSum2(TestSegmentOps):
@@ -198,5 +214,63 @@ class TestSegmentMean2(TestSegmentMean):
         self.attrs = {'pooltype': "MEAN"}
 
 
+class API_SegmentOpsTest(unittest.TestCase):
+    def test_static(self):
+        with paddle.static.program_guard(paddle.static.Program()):
+            x = paddle.static.data(name="x", shape=[3, 3], dtype="float32")
+            y = paddle.static.data(name='y', shape=[3], dtype='int32')
+
+            res_sum = paddle.incubate.segment_sum(x, y)
+            res_mean = paddle.incubate.segment_mean(x, y)
+            res_max = paddle.incubate.segment_max(x, y)
+            res_min = paddle.incubate.segment_min(x, y)
+
+            exe = paddle.static.Executor(paddle.CPUPlace())
+            data1 = np.array([[1, 2, 3], [3, 2, 1], [4, 5, 6]], dtype='float32')
+            data2 = np.array([0, 0, 1], dtype="int32")
+
+            np_sum = np.array([[4, 4, 4], [4, 5, 6]], dtype="float32")
+            np_mean = np.array([[2, 2, 2], [4, 5, 6]], dtype="float32")
+            np_max = np.array([[3, 2, 3], [4, 5, 6]], dtype="float32")
+            np_min = np.array([[1, 2, 1], [4, 5, 6]], dtype="float32")
+
+            ret = exe.run(feed={'x': data1,
+                                'y': data2},
+                          fetch_list=[res_sum, res_mean, res_max, res_min])
+
+        for np_res, ret_res in zip([np_sum, np_mean, np_max, np_min], ret):
+            self.assertTrue(
+                np.allclose(
+                    np_res, ret_res, atol=1e-6),
+                "two value is\
+                {}\n{}, check diff!".format(np_res, ret_res))
+
+    def test_dygraph(self):
+        device = paddle.CPUPlace()
+        with paddle.fluid.dygraph.guard(device):
+            x = paddle.to_tensor(
+                [[1, 2, 3], [3, 2, 1], [4, 5, 6]], dtype='float32')
+            y = paddle.to_tensor([0, 0, 1], dtype="int32")
+            res_sum = paddle.incubate.segment_sum(x, y)
+            res_mean = paddle.incubate.segment_mean(x, y)
+            res_max = paddle.incubate.segment_max(x, y)
+            res_min = paddle.incubate.segment_min(x, y)
+
+            np_sum = np.array([[4, 4, 4], [4, 5, 6]], dtype="float32")
+            np_mean = np.array([[2, 2, 2], [4, 5, 6]], dtype="float32")
+            np_max = np.array([[3, 2, 3], [4, 5, 6]], dtype="float32")
+            np_min = np.array([[1, 2, 1], [4, 5, 6]], dtype="float32")
+
+            ret = [res_sum, res_mean, res_max, res_min]
+
+        for np_res, ret_res in zip([np_sum, np_mean, np_max, np_min], ret):
+            self.assertTrue(
+                np.allclose(
+                    np_res, ret_res.numpy(), atol=1e-6),
+                "two value is\
+                {}\n{}, check diff!".format(np_res, ret_res))
+
+
 if __name__ == '__main__':
+    paddle.enable_static()
     unittest.main()

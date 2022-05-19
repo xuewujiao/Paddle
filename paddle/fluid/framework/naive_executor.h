@@ -22,6 +22,11 @@
 #include "paddle/fluid/framework/program_desc.h"
 #include "paddle/fluid/framework/scope.h"
 #include "paddle/fluid/platform/device_context.h"
+#include "paddle/fluid/platform/place.h"
+
+namespace phi {
+class DenseTensor;
+}  // namespace phi
 
 namespace paddle {
 namespace framework {
@@ -30,7 +35,6 @@ namespace framework {
  * Simple, intuitive and effective. Only single thread is supported, and
  * currently designed for inference.
  */
-class LoDTensor;
 class ProgramDesc;
 class Scope;
 
@@ -61,6 +65,8 @@ class NaiveExecutor {
   Scope* scope() { return scope_; }
 
   void CleanFeedFetchOps();
+
+  void ResetTrtOps(int num);
 
  protected:
   void CreateOps(const ProgramDesc& desc, int block_id,

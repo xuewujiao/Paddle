@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <cuda.h>
-#include <cuda_runtime.h>
 #include <stdio.h>
 
 #include "gtest/gtest.h"
@@ -33,9 +31,17 @@ TEST(LoD, data) {
   lod.push_back(std::vector<size_t>({0, 1, 6, 8, 10, 11}));
 
   auto& v = lod[0];
+  paddle::framework::MixVector<size_t> mix_vector_v(&v);
   paddle::platform::CUDAPlace gpu(0);
-  test<<<1, 1>>>(v.CUDAMutableData(gpu), v.size());
+#ifdef PADDLE_WITH_HIP
+  hipLaunchKernelGGL(test, dim3(1), dim3(1), 0, 0,
+                     mix_vector_v.CUDAMutableData(gpu), v.size());
+  hipDeviceSynchronize();
+#else
+  test<<<1, 1>>>(mix_vector_v.CUDAMutableData(gpu), v.size());
   cudaDeviceSynchronize();
+#endif
+  mix_vector_v.CopyToCPU();
   for (size_t i = 0; i < v.size(); ++i) {
     EXPECT_EQ(v[i], i * 2);
   }
@@ -58,9 +64,17 @@ TEST(LoDTensor, LoDInGPU) {
   EXPECT_EQ(lod_tensor.lod_element(0, 4).first, 8UL);
 
   auto lod = lod_tensor.lod();
+  paddle::framework::MixVector<size_t> mix_vector(&(lod[0]));
 
-  test<<<1, 8>>>(lod[0].CUDAMutableData(place), lod[0].size());
+#ifdef PADDLE_WITH_HIP
+  hipLaunchKernelGGL(test, dim3(1), dim3(8), 0, 0,
+                     mix_vector.CUDAMutableData(place), lod[0].size());
+  hipDeviceSynchronize();
+#else
+  test<<<1, 8>>>(mix_vector.CUDAMutableData(place), lod[0].size());
   cudaDeviceSynchronize();
+#endif
+  mix_vector.CopyToCPU();
 
   for (size_t i = 0; i < src_lod[0].size(); ++i) {
     EXPECT_EQ(lod[0].data()[i], src_lod[0].data()[i] * 2);

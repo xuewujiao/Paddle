@@ -14,9 +14,10 @@
 
 from __future__ import print_function
 
-import gast
+from paddle.utils import gast
 import inspect
 import numpy as np
+import paddle
 import paddle.fluid as fluid
 import unittest
 
@@ -86,11 +87,15 @@ def for_loop_dyfunc(max_len):
 
 def for_loop_dyfunc2(max_len):
     # Test case: a variable is used and created in loop, but used before created
+    x = fluid.layers.fill_constant(shape=[1, 2], dtype="int32", value=1)
+
     for i in range(max_len):
         if i > 1:
             s = a
         a = 1
-    ret = fluid.layers.fill_constant(shape=[1], dtype="int32", value=s)
+        q, _ = x.shape  # test var x.shape only used but not created in loop
+
+    ret = fluid.layers.fill_constant(shape=[1], dtype="int32", value=s + q)
     return ret
 
 
@@ -114,6 +119,13 @@ def for_loop_dyfunc_not_support(max_len):
     for i in range(10, 1, a):
         fluid.layers.increment(ret, value=2.0, in_place=True)
     return ret
+
+
+def for_break_single_return(max_len):
+    for i in range(3):
+        if i == 2:
+            break
+    return i
 
 
 def while_loop_bool_op(x):
@@ -151,6 +163,16 @@ def while_loop_class_var(x):
         foo.c = foo.b + foo.a
         i += 1
     return foo.c
+
+
+def loop_var_contains_property(x):
+    a = paddle.zeros(shape=[1], dtype='float32')
+    i = paddle.to_tensor(x)
+    s = i.shape
+    while i < 10 and s[0] >= 1:
+        a += i.shape[0]
+        i += 1
+    return a
 
 
 def for_loop_class_var(max_len):
@@ -236,9 +258,7 @@ class TestNameVisitor(unittest.TestCase):
         name_visitor = NameVisitor(gast_root)
 
         self.loop_var_names = [
-            set(["j", "two"]),
-            set(["i", "three", "b"]),
-            set(["i", "j"]),
+            set(["j", "two"]), set(["i", "three", "b"]), set(["i", "j"])
         ]
         self.create_var_names = [set(), set(["b"]), set()]
 
@@ -284,7 +304,10 @@ class TestTransformWhileLoop(unittest.TestCase):
                 ret = declarative(self.dyfunc)(tensor_x)
             else:
                 ret = self.dyfunc(tensor_x)
-            return ret.numpy()
+            if hasattr(ret, "numpy"):
+                return ret.numpy()
+            else:
+                return ret
 
     def test_ast_to_func(self):
         static_numpy = self._run_static()
@@ -307,6 +330,11 @@ class TestTransformWhileLoopWithNone(TestTransformWhileLoop):
         self.dyfunc = while_loop_dyfunc_with_none
 
 
+class TestForBreakSingleReturn(TestTransformWhileLoop):
+    def _init_dyfunc(self):
+        self.dyfunc = for_break_single_return
+
+
 class TestWhileLoopBoolOp(TestTransformWhileLoop):
     def _init_dyfunc(self):
         self.dyfunc = while_loop_bool_op
@@ -320,6 +348,11 @@ class TestWhileLoopBoolOp2(TestTransformWhileLoop):
 class TestWhileLoopClassVar(TestTransformWhileLoop):
     def _init_dyfunc(self):
         self.dyfunc = while_loop_class_var
+
+
+class TestLoopVarContainsProperty(TestTransformWhileLoop):
+    def _init_dyfunc(self):
+        self.dyfunc = loop_var_contains_property
 
 
 class TestTransformForLoop(unittest.TestCase):
@@ -388,4 +421,5 @@ class TestErrorInForLoop(TestTransformForLoop):
 
 
 if __name__ == '__main__':
-    unittest.main()
+    with fluid.framework._test_eager_guard():
+        unittest.main()

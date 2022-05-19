@@ -27,30 +27,32 @@ from paddle.fluid.backward import append_backward
 
 class TestAssignOp(op_test.OpTest):
     def setUp(self):
+        self.python_api = paddle.assign
         self.op_type = "assign"
         x = np.random.random(size=(100, 10)).astype('float64')
         self.inputs = {'X': x}
         self.outputs = {'Out': x}
 
     def test_forward(self):
-        self.check_output()
+        self.check_output(check_eager=True)
 
     def test_backward(self):
-        self.check_grad(['X'], 'Out')
+        self.check_grad(['X'], 'Out', check_eager=True)
 
 
 class TestAssignFP16Op(op_test.OpTest):
     def setUp(self):
+        self.python_api = paddle.assign
         self.op_type = "assign"
         x = np.random.random(size=(100, 10)).astype('float16')
         self.inputs = {'X': x}
         self.outputs = {'Out': x}
 
     def test_forward(self):
-        self.check_output()
+        self.check_output(check_eager=True)
 
     def test_backward(self):
-        self.check_grad(['X'], 'Out')
+        self.check_grad(['X'], 'Out', check_eager=True)
 
 
 class TestAssignOpWithLoDTensorArray(unittest.TestCase):
@@ -90,14 +92,9 @@ class TestAssignOpError(unittest.TestCase):
             x1 = fluid.create_lod_tensor(
                 np.array([[-1]]), [[1]], fluid.CPUPlace())
             self.assertRaises(TypeError, fluid.layers.assign, x1)
-            # When the type of input is Variable, the dtype of input must be float16, float32, float64, int32, int64, bool.
-            x3 = fluid.layers.data(name='x3', shape=[4], dtype="uint8")
-            self.assertRaises(TypeError, fluid.layers.assign, x3)
             # When the type of input is numpy.ndarray, the dtype of input must be float32, int32.
-            x4 = np.array([[2.5, 2.5]], dtype='float64')
-            self.assertRaises(TypeError, fluid.layers.assign, x4)
-            x5 = np.array([[2.5, 2.5]], dtype='uint8')
-            self.assertRaises(TypeError, fluid.layers.assign, x5)
+            x2 = np.array([[2.5, 2.5]], dtype='uint8')
+            self.assertRaises(TypeError, fluid.layers.assign, x2)
 
 
 class TestAssignOApi(unittest.TestCase):
@@ -157,6 +154,50 @@ class TestAssignOApi(unittest.TestCase):
             paddle.assign(array, result1)
         self.assertTrue(np.allclose(result1.numpy(), array))
 
+    def test_assign_List(self):
+        paddle.disable_static()
+        l = [1, 2, 3]
+        result = paddle.assign(l)
+        self.assertTrue(np.allclose(result.numpy(), np.array(l)))
+        paddle.enable_static()
+
+    def test_assign_BasicTypes(self):
+        paddle.disable_static()
+        result1 = paddle.assign(2)
+        result2 = paddle.assign(3.0)
+        result3 = paddle.assign(True)
+        self.assertTrue(np.allclose(result1.numpy(), np.array([2])))
+        self.assertTrue(np.allclose(result2.numpy(), np.array([3.0])))
+        self.assertTrue(np.allclose(result3.numpy(), np.array([1])))
+        paddle.enable_static()
+
+    def test_clone(self):
+        paddle.disable_static()
+        self.python_api = paddle.clone
+
+        x = paddle.ones([2])
+        x.stop_gradient = False
+        clone_x = paddle.clone(x)
+
+        y = clone_x**3
+        y.backward()
+
+        self.assertTrue(np.array_equal(x, [1, 1]), True)
+        self.assertTrue(np.array_equal(clone_x.grad.numpy(), [3, 3]), True)
+        self.assertTrue(np.array_equal(x.grad.numpy(), [3, 3]), True)
+        paddle.enable_static()
+
+        with program_guard(Program(), Program()):
+            x_np = np.random.randn(2, 3).astype('float32')
+            x = paddle.static.data("X", shape=[2, 3])
+            clone_x = paddle.clone(x)
+            exe = paddle.static.Executor()
+            y_np = exe.run(paddle.static.default_main_program(),
+                           feed={'X': x_np},
+                           fetch_list=[clone_x])[0]
+
+        self.assertTrue(np.array_equal(y_np, x_np), True)
+
 
 class TestAssignOpErrorApi(unittest.TestCase):
     def test_errors(self):
@@ -165,14 +206,16 @@ class TestAssignOpErrorApi(unittest.TestCase):
             x1 = fluid.create_lod_tensor(
                 np.array([[-1]]), [[1]], fluid.CPUPlace())
             self.assertRaises(TypeError, paddle.assign, x1)
-            # When the type of input is Variable, the dtype of input must be float16, float32, float64, int32, int64, bool.
-            x3 = fluid.layers.data(name='x3', shape=[4], dtype="uint8")
-            self.assertRaises(TypeError, paddle.assign, x3)
             # When the type of input is numpy.ndarray, the dtype of input must be float32, int32.
-            x4 = np.array([[2.5, 2.5]], dtype='float64')
-            self.assertRaises(TypeError, paddle.assign, x4)
-            x5 = np.array([[2.5, 2.5]], dtype='uint8')
-            self.assertRaises(TypeError, paddle.assign, x5)
+            x2 = np.array([[2.5, 2.5]], dtype='uint8')
+            self.assertRaises(TypeError, paddle.assign, x2)
+
+    def test_type_error(self):
+        paddle.enable_static()
+        with program_guard(Program(), Program()):
+            x = [paddle.randn([3, 3]), paddle.randn([3, 3])]
+            # not support to assign list(var)
+            self.assertRaises(TypeError, paddle.assign, x)
 
 
 if __name__ == '__main__':

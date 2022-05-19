@@ -14,14 +14,19 @@ limitations under the License. */
 
 #include "paddle/fluid/framework/generator.h"
 #include "paddle/fluid/framework/op_registry.h"
-#include "paddle/fluid/operators/cudnn_lstm_cache.h"
-#include "paddle/fluid/operators/math/math_function.h"
 #include "paddle/fluid/operators/utils.h"
+#include "paddle/phi/kernels/funcs/math_function.h"
+#ifdef PADDLE_WITH_CUDA
+#include "paddle/fluid/operators/cudnn_lstm_cache.h"
+#endif
+#ifdef PADDLE_WITH_HIP
+#include "paddle/fluid/operators/miopen_lstm_cache.h"
+#endif
 
 namespace paddle {
 namespace platform {
 class CUDADeviceContext;
-struct CUDAPlace;
+
 }  // namespace platform
 }  // namespace paddle
 
@@ -54,7 +59,7 @@ int size_sum(const std::vector<const Tensor *> &weight_list) {
 }
 
 template <typename T>
-void weight_to_tensor(const platform::Place &place, cudaStream_t stream,
+void weight_to_tensor(const platform::Place &place, gpuStream_t stream,
                       const std::vector<const Tensor *> &weight_list,
                       Tensor *weight) {
   auto weight_data = weight->data<T>();
@@ -63,16 +68,14 @@ void weight_to_tensor(const platform::Place &place, cudaStream_t stream,
     const T *in_data = weight_list[i]->data<T>();
     auto in_size = weight_list[i]->numel();
 
-    memory::Copy(BOOST_GET_CONST(platform::CUDAPlace, weight->place()),
-                 weight_data + weight_offset,
-                 BOOST_GET_CONST(platform::CUDAPlace, weight_list[i]->place()),
-                 in_data, in_size * sizeof(T), stream);
+    memory::Copy(weight->place(), weight_data + weight_offset,
+                 weight_list[i]->place(), in_data, in_size * sizeof(T), stream);
     weight_offset += in_size;
   }
 }
 
 template <typename T>
-void weight_to_tensor_list(const platform::Place &place, cudaStream_t stream,
+void weight_to_tensor_list(const platform::Place &place, gpuStream_t stream,
                            std::vector<Tensor *> *weight_grad,
                            const std::vector<const Tensor *> &weight_input,
                            const Tensor *weight) {
@@ -83,35 +86,46 @@ void weight_to_tensor_list(const platform::Place &place, cudaStream_t stream,
     T *weight_grad_data = (*weight_grad)[i]->mutable_data<T>(place);
     const T *src = weight_data + weight_offset;
 
-    memory::Copy(
-        BOOST_GET_CONST(platform::CUDAPlace, (*weight_grad)[i]->place()),
-        weight_grad_data, BOOST_GET_CONST(platform::CUDAPlace, weight->place()),
-        src, in_size * sizeof(T), stream);
+    memory::Copy((*weight_grad)[i]->place(), weight_grad_data, weight->place(),
+                 src, in_size * sizeof(T), stream);
     weight_offset += in_size;
   }
 }
 
 template <typename T>
+#ifdef PADDLE_WITH_HIP
+void LSTMInferece(const bool &has_seq_length, const miopenHandle_t &handle,
+#else
 void LSTMInferece(const bool &has_seq_length, const cudnnHandle_t &handle,
+#endif
                   const int &seq_length, ScopedRNNBase *rnn, const T *x_data,
                   const T *init_h_data, const T *init_c_data, const T *w_data,
                   T *out_data, T *last_h_data, T *last_c_data,
                   framework::Tensor *workspace_data,
                   const size_t &workspace_size) {
   if (!has_seq_length) {
-    // for inference
-    // This interface is used when the input/output is unpadded.
-    PADDLE_ENFORCE_CUDA_SUCCESS(platform::dynload::cudnnRNNForwardInference(
+// for inference
+// This interface is used when the input/output is unpadded.
+#ifdef PADDLE_WITH_HIP
+    PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::miopenRNNForwardInference(
         handle, rnn->rnn_desc(), seq_length, rnn->x_descs(), x_data,
         rnn->init_h_desc(), init_h_data, rnn->init_c_desc(), init_c_data,
         rnn->weight_desc(), w_data, rnn->y_descs(), out_data,
         rnn->last_h_desc(), last_h_data, rnn->last_c_desc(), last_c_data,
         workspace_data->data<uint8_t>(), workspace_size));
+#else
+    PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::cudnnRNNForwardInference(
+        handle, rnn->rnn_desc(), seq_length, rnn->x_descs(), x_data,
+        rnn->init_h_desc(), init_h_data, rnn->init_c_desc(), init_c_data,
+        rnn->weight_desc(), w_data, rnn->y_descs(), out_data,
+        rnn->last_h_desc(), last_h_data, rnn->last_c_desc(), last_c_data,
+        workspace_data->data<uint8_t>(), workspace_size));
+#endif
   } else {
-#if CUDNN_VERSION >= 7201
+#if !defined(PADDLE_WITH_HIP) && CUDNN_VERSION >= 7201
     // for inference
     // This interface is used when the input/output is padded.
-    PADDLE_ENFORCE_CUDA_SUCCESS(platform::dynload::cudnnRNNForwardInferenceEx(
+    PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::cudnnRNNForwardInferenceEx(
         handle, rnn->rnn_desc(), rnn->x_seq_desc(), x_data, rnn->init_h_desc(),
         init_h_data, rnn->init_c_desc(), init_c_data, rnn->weight_desc(),
         w_data, rnn->y_seq_desc(), out_data, rnn->last_h_desc(), last_h_data,
@@ -158,8 +172,7 @@ class CudnnLSTMGPUKernel : public framework::OpKernel<T> {
     int seed = ctx.Attr<int>("seed");
 
     if (!is_test) {
-      int device_id =
-          BOOST_GET_CONST(platform::CUDAPlace, ctx.GetPlace()).GetDeviceId();
+      int device_id = ctx.GetPlace().GetDeviceId();
       auto gen_cuda = framework::GetDefaultCUDAGenerator(device_id);
       if (gen_cuda->GetIsInitPy() && seed == 0) {
         // If perform `manual_seed` in python and inner seed is not specified
@@ -256,28 +269,36 @@ class CudnnLSTMGPUKernel : public framework::OpKernel<T> {
                       last_c_data, &workspace_data_, workspace_size);
     } else {
       if (!has_seq_length) {
-        // for train
-        // This interface is used when the input/output is unpadded.
-        PADDLE_ENFORCE_CUDA_SUCCESS(platform::dynload::cudnnRNNForwardTraining(
+// for train
+// This interface is used when the input/output is unpadded.
+#ifdef PADDLE_WITH_HIP
+        PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::miopenRNNForwardTraining(
             handle, rnn.rnn_desc(), seq_length, rnn.x_descs(), x_data,
             rnn.init_h_desc(), init_h_data, rnn.init_c_desc(), init_c_data,
             rnn.weight_desc(), w_data, rnn.y_descs(), out_data,
             rnn.last_h_desc(), last_h_data, rnn.last_c_desc(), last_c_data,
             workspace_data_.data<uint8_t>(), workspace_size, reserve_data,
             reserve_size));
+#else
+        PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::cudnnRNNForwardTraining(
+            handle, rnn.rnn_desc(), seq_length, rnn.x_descs(), x_data,
+            rnn.init_h_desc(), init_h_data, rnn.init_c_desc(), init_c_data,
+            rnn.weight_desc(), w_data, rnn.y_descs(), out_data,
+            rnn.last_h_desc(), last_h_data, rnn.last_c_desc(), last_c_data,
+            workspace_data_.data<uint8_t>(), workspace_size, reserve_data,
+            reserve_size));
+#endif
       } else {
-#if CUDNN_VERSION >= 7201
+#if !defined(PADDLE_WITH_HIP) && CUDNN_VERSION >= 7201
         // for train
         // This interface is used when the input/output is padded.
-        PADDLE_ENFORCE_CUDA_SUCCESS(
-            platform::dynload::cudnnRNNForwardTrainingEx(
-                handle, rnn.rnn_desc(), rnn.x_seq_desc(), x_data,
-                rnn.init_h_desc(), init_h_data, rnn.init_c_desc(), init_c_data,
-                rnn.weight_desc(), w_data, rnn.y_seq_desc(), out_data,
-                rnn.last_h_desc(), last_h_data, rnn.last_c_desc(), last_c_data,
-                nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
-                nullptr, workspace_data_.data<uint8_t>(), workspace_size,
-                reserve_data, reserve_size));
+        PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::cudnnRNNForwardTrainingEx(
+            handle, rnn.rnn_desc(), rnn.x_seq_desc(), x_data, rnn.init_h_desc(),
+            init_h_data, rnn.init_c_desc(), init_c_data, rnn.weight_desc(),
+            w_data, rnn.y_seq_desc(), out_data, rnn.last_h_desc(), last_h_data,
+            rnn.last_c_desc(), last_c_data, nullptr, nullptr, nullptr, nullptr,
+            nullptr, nullptr, nullptr, nullptr, workspace_data_.data<uint8_t>(),
+            workspace_size, reserve_data, reserve_size));
 #else
         PADDLE_THROW(platform::errors::Unavailable(
             "The padded input is supported by "
@@ -345,7 +366,7 @@ class CudnnLSTMGPUGradKernel : public framework::OpKernel<T> {
     }
 
     Tensor weight_grad;
-    math::SetConstant<paddle::platform::CUDADeviceContext, T> zero;
+    phi::funcs::SetConstant<paddle::platform::CUDADeviceContext, T> zero;
     weight_grad.mutable_data<T>({weight_numel}, ctx.GetPlace());
     zero(dev_ctx, &weight_grad, static_cast<T>(0.0));
     T *weight_grad_data = weight_grad.data<T>();
@@ -403,8 +424,9 @@ class CudnnLSTMGPUGradKernel : public framework::OpKernel<T> {
     const uint8_t *reserve_data = reserve->data<uint8_t>();
 
     if (!has_seq_length) {
-      // This interface is used when the input/output is unpadded.
-      PADDLE_ENFORCE_CUDA_SUCCESS(platform::dynload::cudnnRNNBackwardData(
+// This interface is used when the input/output is unpadded.
+#ifdef PADDLE_WITH_HIP
+      PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::miopenRNNBackwardData(
           handle, rnn.rnn_desc(), seq_length, rnn.y_descs(), out_data,
           rnn.y_descs(), out_grad_data, rnn.last_h_desc(), last_h_grad_data,
           rnn.last_c_desc(), last_c_grad_data, rnn.weight_desc(), weight_data,
@@ -413,16 +435,32 @@ class CudnnLSTMGPUGradKernel : public framework::OpKernel<T> {
           rnn.init_c_desc(), init_c_grad_data, workspace_data_.data<uint8_t>(),
           workspace_size, const_cast<uint8_t *>(reserve_data), reserve_size));
 
-      PADDLE_ENFORCE_CUDA_SUCCESS(platform::dynload::cudnnRNNBackwardWeights(
+      PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::miopenRNNBackwardWeights(
+          handle, rnn.rnn_desc(), seq_length, rnn.x_descs(), input->data<T>(),
+          rnn.init_h_desc(), init_h->data<T>(), rnn.y_descs(), out->data<T>(),
+          rnn.weight_desc(), weight_grad_data, workspace_data_.data<uint8_t>(),
+          workspace_size, const_cast<uint8_t *>(reserve_data), reserve_size));
+#else
+      PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::cudnnRNNBackwardData(
+          handle, rnn.rnn_desc(), seq_length, rnn.y_descs(), out_data,
+          rnn.y_descs(), out_grad_data, rnn.last_h_desc(), last_h_grad_data,
+          rnn.last_c_desc(), last_c_grad_data, rnn.weight_desc(), weight_data,
+          rnn.init_h_desc(), init_h_data, rnn.init_c_desc(), init_c_data,
+          rnn.x_descs(), in_grad_data, rnn.init_h_desc(), init_h_grad_data,
+          rnn.init_c_desc(), init_c_grad_data, workspace_data_.data<uint8_t>(),
+          workspace_size, const_cast<uint8_t *>(reserve_data), reserve_size));
+
+      PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::cudnnRNNBackwardWeights(
           handle, rnn.rnn_desc(), seq_length, rnn.x_descs(), input->data<T>(),
           rnn.init_h_desc(), init_h->data<T>(), rnn.y_descs(), out->data<T>(),
           workspace_data_.data<uint8_t>(), workspace_size, rnn.weight_desc(),
           weight_grad_data, const_cast<uint8_t *>(reserve_data), reserve_size));
+#endif
     } else {
-#if CUDNN_VERSION >= 7201
+#if !defined(PADDLE_WITH_HIP) && CUDNN_VERSION >= 7201
       // for train
       // This interface is used when the input/output is padded.
-      PADDLE_ENFORCE_CUDA_SUCCESS(platform::dynload::cudnnRNNBackwardDataEx(
+      PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::cudnnRNNBackwardDataEx(
           handle, rnn.rnn_desc(), rnn.y_seq_desc(), out_data, rnn.y_seq_desc(),
           out_grad_data, nullptr, nullptr, rnn.last_h_desc(), last_h_grad_data,
           rnn.last_c_desc(), last_c_grad_data, rnn.weight_desc(), weight_data,
@@ -432,7 +470,7 @@ class CudnnLSTMGPUGradKernel : public framework::OpKernel<T> {
           workspace_data_.data<uint8_t>(), workspace_size,
           const_cast<uint8_t *>(reserve_data), reserve_size));
 
-      PADDLE_ENFORCE_CUDA_SUCCESS(platform::dynload::cudnnRNNBackwardWeightsEx(
+      PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::cudnnRNNBackwardWeightsEx(
           handle, rnn.rnn_desc(), rnn.x_seq_desc(), input->data<T>(),
           rnn.init_h_desc(), init_h->data<T>(), rnn.y_seq_desc(),
           out->data<T>(), workspace_data_.data<uint8_t>(), workspace_size,
@@ -452,7 +490,13 @@ class CudnnLSTMGPUGradKernel : public framework::OpKernel<T> {
 }  // namespace paddle
 
 namespace ops = paddle::operators;
+#ifdef PADDLE_WITH_HIP
+// MIOPEN do not support double
+REGISTER_OP_CUDA_KERNEL(cudnn_lstm, ops::CudnnLSTMGPUKernel<float>);
+REGISTER_OP_CUDA_KERNEL(cudnn_lstm_grad, ops::CudnnLSTMGPUGradKernel<float>);
+#else
 REGISTER_OP_CUDA_KERNEL(cudnn_lstm, ops::CudnnLSTMGPUKernel<float>,
                         ops::CudnnLSTMGPUKernel<double>);
 REGISTER_OP_CUDA_KERNEL(cudnn_lstm_grad, ops::CudnnLSTMGPUGradKernel<float>,
                         ops::CudnnLSTMGPUGradKernel<double>);
+#endif

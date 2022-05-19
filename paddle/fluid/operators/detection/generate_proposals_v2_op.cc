@@ -20,8 +20,8 @@ limitations under the License. */
 #include "paddle/fluid/framework/op_version_registry.h"
 #include "paddle/fluid/operators/detection/bbox_util.h"
 #include "paddle/fluid/operators/detection/nms_util.h"
-#include "paddle/fluid/operators/gather.h"
-#include "paddle/fluid/operators/math/math_function.h"
+#include "paddle/phi/kernels/funcs/gather.h"
+#include "paddle/phi/kernels/funcs/math_function.h"
 
 namespace paddle {
 namespace operators {
@@ -87,6 +87,7 @@ class GenerateProposalsV2Kernel : public framework::OpKernel<T> {
     float nms_thresh = context.Attr<float>("nms_thresh");
     float min_size = context.Attr<float>("min_size");
     float eta = context.Attr<float>("eta");
+    bool pixel_offset = context.Attr<bool>("pixel_offset");
 
     auto &dev_ctx =
         context.template device_context<platform::CPUDeviceContext>();
@@ -112,7 +113,7 @@ class GenerateProposalsV2Kernel : public framework::OpKernel<T> {
     scores_swap.mutable_data<T>({num, h_score, w_score, c_score},
                                 dev_ctx.GetPlace());
 
-    math::Transpose<platform::CPUDeviceContext, T, 4> trans;
+    phi::funcs::Transpose<platform::CPUDeviceContext, T, 4> trans;
     std::vector<int> axis = {0, 2, 3, 1};
     trans(dev_ctx, *bbox_deltas, &bbox_deltas_swap, axis);
     trans(dev_ctx, *scores, &scores_swap, axis);
@@ -134,10 +135,10 @@ class GenerateProposalsV2Kernel : public framework::OpKernel<T> {
       bbox_deltas_slice.Resize({h_bbox * w_bbox * c_bbox / 4, 4});
       scores_slice.Resize({h_score * w_score * c_score, 1});
 
-      std::pair<Tensor, Tensor> tensor_pair =
-          ProposalForOneImage(dev_ctx, im_shape_slice, anchors, variances,
-                              bbox_deltas_slice, scores_slice, pre_nms_top_n,
-                              post_nms_top_n, nms_thresh, min_size, eta);
+      std::pair<Tensor, Tensor> tensor_pair = ProposalForOneImage(
+          dev_ctx, im_shape_slice, anchors, variances, bbox_deltas_slice,
+          scores_slice, pre_nms_top_n, post_nms_top_n, nms_thresh, min_size,
+          eta, pixel_offset);
       Tensor &proposals = tensor_pair.first;
       Tensor &scores = tensor_pair.second;
 
@@ -168,7 +169,7 @@ class GenerateProposalsV2Kernel : public framework::OpKernel<T> {
       const Tensor &bbox_deltas_slice,  // [M, 4]
       const Tensor &scores_slice,       // [N, 1]
       int pre_nms_top_n, int post_nms_top_n, float nms_thresh, float min_size,
-      float eta) const {
+      float eta, bool pixel_offset = true) const {
     auto *scores_data = scores_slice.data<T>();
 
     // Sort index
@@ -196,22 +197,25 @@ class GenerateProposalsV2Kernel : public framework::OpKernel<T> {
     anchor_sel.mutable_data<T>({index_t.numel(), 4}, ctx.GetPlace());
     var_sel.mutable_data<T>({index_t.numel(), 4}, ctx.GetPlace());
 
-    CPUGather<T>(ctx, scores_slice, index_t, &scores_sel);
-    CPUGather<T>(ctx, bbox_deltas_slice, index_t, &bbox_sel);
-    CPUGather<T>(ctx, anchors, index_t, &anchor_sel);
-    CPUGather<T>(ctx, variances, index_t, &var_sel);
+    phi::funcs::CPUGather<T>(ctx, scores_slice, index_t, &scores_sel);
+    phi::funcs::CPUGather<T>(ctx, bbox_deltas_slice, index_t, &bbox_sel);
+    phi::funcs::CPUGather<T>(ctx, anchors, index_t, &anchor_sel);
+    phi::funcs::CPUGather<T>(ctx, variances, index_t, &var_sel);
 
     Tensor proposals;
     proposals.mutable_data<T>({index_t.numel(), 4}, ctx.GetPlace());
-    BoxCoder<T>(ctx, &anchor_sel, &bbox_sel, &var_sel, &proposals);
+    BoxCoder<T>(ctx, &anchor_sel, &bbox_sel, &var_sel, &proposals,
+                pixel_offset);
 
-    ClipTiledBoxes<T>(ctx, im_shape_slice, proposals, &proposals, false);
+    ClipTiledBoxes<T>(ctx, im_shape_slice, proposals, &proposals, false,
+                      pixel_offset);
 
     Tensor keep;
-    FilterBoxes<T>(ctx, &proposals, min_size, im_shape_slice, false, &keep);
+    FilterBoxes<T>(ctx, &proposals, min_size, im_shape_slice, false, &keep,
+                   pixel_offset);
     // Handle the case when there is no keep index left
     if (keep.numel() == 0) {
-      math::SetConstant<platform::CPUDeviceContext, T> set_zero;
+      phi::funcs::SetConstant<platform::CPUDeviceContext, T> set_zero;
       bbox_sel.mutable_data<T>({1, 4}, ctx.GetPlace());
       set_zero(ctx, &bbox_sel, static_cast<T>(0));
       Tensor scores_filter;
@@ -223,13 +227,14 @@ class GenerateProposalsV2Kernel : public framework::OpKernel<T> {
     Tensor scores_filter;
     bbox_sel.mutable_data<T>({keep.numel(), 4}, ctx.GetPlace());
     scores_filter.mutable_data<T>({keep.numel(), 1}, ctx.GetPlace());
-    CPUGather<T>(ctx, proposals, keep, &bbox_sel);
-    CPUGather<T>(ctx, scores_sel, keep, &scores_filter);
+    phi::funcs::CPUGather<T>(ctx, proposals, keep, &bbox_sel);
+    phi::funcs::CPUGather<T>(ctx, scores_sel, keep, &scores_filter);
     if (nms_thresh <= 0) {
       return std::make_pair(bbox_sel, scores_filter);
     }
 
-    Tensor keep_nms = NMS<T>(ctx, &bbox_sel, &scores_filter, nms_thresh, eta);
+    Tensor keep_nms =
+        NMS<T>(ctx, &bbox_sel, &scores_filter, nms_thresh, eta, pixel_offset);
 
     if (post_nms_top_n > 0 && post_nms_top_n < keep_nms.numel()) {
       keep_nms.Resize({post_nms_top_n});
@@ -237,8 +242,8 @@ class GenerateProposalsV2Kernel : public framework::OpKernel<T> {
 
     proposals.mutable_data<T>({keep_nms.numel(), 4}, ctx.GetPlace());
     scores_sel.mutable_data<T>({keep_nms.numel(), 1}, ctx.GetPlace());
-    CPUGather<T>(ctx, bbox_sel, keep_nms, &proposals);
-    CPUGather<T>(ctx, scores_filter, keep_nms, &scores_sel);
+    phi::funcs::CPUGather<T>(ctx, bbox_sel, keep_nms, &proposals);
+    phi::funcs::CPUGather<T>(ctx, scores_filter, keep_nms, &scores_sel);
 
     return std::make_pair(proposals, scores_sel);
   }
@@ -280,6 +285,9 @@ class GenerateProposalsV2OpMaker : public framework::OpProtoAndCheckerMaker {
                    "Proposal height and width both need to be greater "
                    "than this min_size.");
     AddAttr<float>("eta", "The parameter for adaptive NMS.");
+    AddAttr<bool>("pixel_offset", "(bool, default True),",
+                  "If true, im_shape pixel offset is 1.")
+        .SetDefault(true);
     AddComment(R"DOC(
 This operator is the second version of generate_proposals op to generate 
 bounding box proposals for Faster RCNN.
@@ -312,3 +320,8 @@ REGISTER_OPERATOR(
 REGISTER_OP_CPU_KERNEL(generate_proposals_v2,
                        ops::GenerateProposalsV2Kernel<float>,
                        ops::GenerateProposalsV2Kernel<double>);
+REGISTER_OP_VERSION(generate_proposals_v2)
+    .AddCheckpoint(
+        R"ROC(Registe generate_proposals_v2 for adding the attribute of pixel_offset)ROC",
+        paddle::framework::compatible::OpVersionDesc().NewAttr(
+            "pixel_offset", "If true, im_shape pixel offset is 1.", true));

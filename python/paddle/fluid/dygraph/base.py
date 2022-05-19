@@ -25,11 +25,24 @@ from .tracer import Tracer
 import logging
 from ..data_feeder import convert_dtype
 import warnings
+from ..framework import _get_paddle_place, _in_legacy_dygraph, _in_eager_without_dygraph_check
+import paddle
 
 __all__ = [
     'no_grad', 'no_grad_', 'grad', 'guard', 'enable_dygraph', 'disable_dygraph',
     'enabled', 'to_variable'
 ]
+
+# Flag that indicates whether running code under `@declarative`
+_in_declarative_mode_ = False
+
+
+def in_declarative_mode():
+    """
+    Return a bool value that indicates whether running code under `@declarative`
+
+    """
+    return _in_declarative_mode_
 
 
 def _switch_to_static_graph_(func):
@@ -41,6 +54,16 @@ def _switch_to_static_graph_(func):
 
 
 switch_to_static_graph = wrap_decorator(_switch_to_static_graph_)
+
+
+@signature_safe_contextmanager
+def _switch_declarative_mode_guard_(is_declarative=True):
+
+    global _in_declarative_mode_
+    original_val = _in_declarative_mode_
+    _in_declarative_mode_ = is_declarative
+    yield
+    _in_declarative_mode_ = original_val
 
 
 @signature_safe_contextmanager
@@ -62,34 +85,50 @@ _functional_dygraph_context_manager = None
 @signature_safe_contextmanager
 def param_guard(parameters):
     # Note: parameters is a reference of self._parameters or self._buffers
-    if not framework.in_dygraph_mode() and parameters:
+    if in_declarative_mode() and not framework._non_static_mode(
+    ) and parameters:
         origin_parameters = parameters.copy()
         for name, var_base in parameters.items():
-            if isinstance(var_base, core.VarBase):
-                # Convert ParamBase into Parameter with same attributes in dy2stat.
-                if isinstance(var_base, framework.ParamBase):
-                    new_var = var_base._to_static_var(to_parameter=True)
-                else:
-                    # Check whether has been created before.
-                    if var_base.name in var_base.block.vars:
-                        new_var = var_base.block.vars[var_base.name]
-                    # Note(Aurelius84): Convert VarBase in self._buffers into Variabe with
-                    # same attributes and set persistable=True to allow saving this var.
-                    # Because users can create a VarBase in `__init__`  like a
-                    # `mask` Tensor or `hidden_0` in RNN layers, which is equivalent to a Parameter
-                    # and necessary for inferring. It will be pruned if it's not necessary for inferring.
-                    else:
-                        # But if its shape is empty while created from `create_variable()`, we consider this buffer
-                        # non-persistable. See case of `drop_state` in lstm api.
-                        is_persistable = len(var_base.shape) > 0
-
-                        new_var = var_base._to_static_var(
-                            to_parameter=False, persistable=is_persistable)
-                parameters[name] = new_var
+            if isinstance(var_base, list):
+                new_var = [_convert_into_variable(var) for var in var_base]
+            else:
+                new_var = _convert_into_variable(var_base)
+            parameters[name] = new_var
         yield
         parameters.update(origin_parameters)
     else:
         yield
+
+
+def _convert_into_variable(tensor):
+    """
+    Convert Varbase into Variable.
+    """
+    if isinstance(tensor, (core.eager.Tensor, core.VarBase)):
+        # Check whether has been created before.
+        new_var = tensor.block._find_var_recursive(tensor.name)
+        if new_var is not None:
+            assert isinstance(new_var, framework.Variable)
+        # Convert ParamBase into Parameter with same attributes in dy2stat.
+        elif isinstance(tensor,
+                        (framework.EagerParamBase, framework.ParamBase)):
+            new_var = tensor._to_static_var(to_parameter=True)
+        else:
+            # Note(Aurelius84): Convert VarBase in self._buffers into Variable with
+            # same attributes and set persistable=True to allow saving this var.
+            # Because users can create a VarBase in `__init__`  like a
+            # `mask` Tensor or `hidden_0` in RNN layers, which is equivalent to a Parameter
+            # and necessary for inferring. It will be pruned if it's not necessary for inferring.
+
+            # But if its shape is empty while created from `create_variable()`, we consider this buffer
+            # non-persistable. See case of `drop_state` in lstm api.
+            is_persistable = len(tensor.shape) > 0
+
+            new_var = tensor._to_static_var(
+                to_parameter=False, persistable=is_persistable)
+        return new_var
+    else:
+        return tensor
 
 
 def enabled():
@@ -101,7 +140,7 @@ def enabled():
 
     **Note**:
         ``fluid.dygraph.enabled`` is the alias of ``fluid.in_dygraph_mode``, and
-        ``fluid.in_dygraph_mode`` is recommended to use.
+        ``fluid.in_dygraph_mode`` is recommended to use for now.
 
     Returns:
         bool: Whether the program is running in dynamic graph mode.
@@ -116,7 +155,8 @@ def enabled():
             fluid.disable_dygraph()
             print(fluid.dygraph.enabled())  # False
     """
-    return framework.in_dygraph_mode()
+    # TODO(jiabin): Make this check as in_dygraph_mode when we support default eager mode.
+    return framework._non_static_mode()
 
 
 def enable_dygraph(place=None):
@@ -128,8 +168,9 @@ def enable_dygraph(place=None):
     This API turn OFF static graph mode. You can turn ON static graph mode by `enable_static <./disable_dygraph_en.html>`_ .
 
     Parameters:
-        place(paddle.CPUPlace|paddle.CUDAPlace, optional): Place to run dynamic graph. Default: None. Which means that the running place will be 
-            determined according to the way of paddle compilation. 
+        place(paddle.CPUPlace|paddle.CUDAPlace|str, optional): Place to run dynamic graph. Default: None. Which means that the running place will be 
+            determined according to the way of paddle compilation. If ``place`` is string, It can be ``cpu``, and ``gpu:x``, where ``x`` is the
+            index of the GPUs.
 
     return:
         None
@@ -149,7 +190,8 @@ def enable_dygraph(place=None):
     """
     global _functional_dygraph_context_manager
     if _functional_dygraph_context_manager is None:
-        _functional_dygraph_context_manager = guard(place=place)
+        _functional_dygraph_context_manager = guard(
+            place=_get_paddle_place(place))
         _functional_dygraph_context_manager.__enter__()
 
         # call disable_dygraph when Python exit
@@ -343,8 +385,10 @@ def guard(place=None):
     This context will create a dygraph context for dygraph to run, using python ``with`` statement.
 
     Parameters:
-        place(fluid.CPUPlace or fluid.CUDAPlace, optional): Place to execute dygraph. 
-            If None, the running place will be determined according to the way of paddle compilation. Default: None
+        place(fluid.CPUPlace| fluid.CUDAPlace|str, optional): Place to execute dygraph. 
+            If None, the running place will be determined according to the way of paddle compilation.
+            If ``place`` is string, It can be ``cpu``, ``gpu:x`` and ``xpu:x``, where ``x`` is the
+            index of the GPUs or XPUs. Default: None
 
     return:
         None
@@ -371,10 +415,9 @@ def guard(place=None):
     VarBase = core.VarBase
 
     if place is not None:
-        expected_place = place
+        expected_place = _get_paddle_place(place)
     else:
         expected_place = framework._current_expected_place()
-    tracer._expected_place = expected_place
 
     with framework.program_guard(train, startup):
         with framework.unique_name.guard():
@@ -394,7 +437,7 @@ def grad(outputs,
          no_grad_vars=None):
     ''' 
     .. note::
-        **This API is ONLY available in Dygraph mode.**
+        **This API is ONLY available in imperative mode.**
 
     This API computes the sum of gradients of `outputs` with respect to each `inputs` .
 
@@ -436,7 +479,7 @@ def grad(outputs,
             the Tensors whose gradients are not needed to compute. Default None.
 
     Returns:
-        tuple: a tuple of Tensors, whose length is the same as the Tensor number 
+        list: a list of Tensors, whose length is the same as the Tensor number 
         inside `inputs`, and the i-th returned Tensor is the sum of gradients of 
         `outputs` with respect to the i-th `inputs`.
 
@@ -524,16 +567,25 @@ def grad(outputs,
         if isinstance(in_out_list, (list, tuple)):
             assert len(in_out_list) > 0, "{} cannot be empty".format(name)
             for each_var in in_out_list:
-                assert isinstance(
-                    each_var,
-                    core.VarBase), "Elements of {} must be Variable".format(
-                        name)
+                if _in_eager_without_dygraph_check():
+                    assert isinstance(
+                        each_var, core.eager.
+                        Tensor), "Elements of {} must be Tensor".format(name)
+                else:
+                    assert isinstance(
+                        each_var,
+                        core.VarBase), "Elements of {} must be Variable".format(
+                            name)
             return in_out_list
         else:
-            assert isinstance(
-                in_out_list,
-                core.VarBase), "{} must be Variable or list of Variable".format(
-                    name)
+            if _in_eager_without_dygraph_check():
+                assert isinstance(
+                    in_out_list, core.eager.
+                    Tensor), "{} must be Tensor or list of Tensor".format(name)
+            else:
+                assert isinstance(
+                    in_out_list, core.VarBase
+                ), "{} must be Variable or list of Variable".format(name)
             return [in_out_list]
 
     outputs = check_in_out(outputs, 'outputs')
@@ -545,9 +597,14 @@ def grad(outputs,
 
         for each_var in grad_outputs:
             if each_var is not None:
-                assert isinstance(
-                    each_var, core.VarBase
-                ), "grad_outputs must be None, a Variable or a list containing None or Variables"
+                if _in_eager_without_dygraph_check():
+                    assert isinstance(
+                        each_var, core.eager.Tensor
+                    ), "grad_outputs must be None, a Variable or a list containing None or Variables"
+                else:
+                    assert isinstance(
+                        each_var, core.VarBase
+                    ), "grad_outputs must be None, a Variable or a list containing None or Variables"
     else:
         grad_outputs = []
 
@@ -557,16 +614,29 @@ def grad(outputs,
 
     if no_grad_vars is None:
         no_grad_vars = []
-    elif isinstance(no_grad_vars, core.VarBase):
+    elif isinstance(no_grad_vars, (core.VarBase, core.eager.Tensor)):
+        no_grad_vars = [no_grad_vars]
+    elif isinstance(no_grad_vars, core.eager.Tensor):
         no_grad_vars = [no_grad_vars]
     elif isinstance(no_grad_vars, (list, tuple, set)):
         no_grad_vars = list(no_grad_vars)
         for var in no_grad_vars:
-            assert isinstance(
-                var, core.VarBase), "no_grad_vars can only contains Variable"
+            if _in_eager_without_dygraph_check():
+                assert isinstance(
+                    var,
+                    core.eager.Tensor), "no_grad_vars can only contains Tensor"
+            else:
+                assert isinstance(
+                    var,
+                    core.VarBase), "no_grad_vars can only contains Variable"
     else:
-        raise AssertionError(
-            "no_grad_vars must be None, Variable or list/tuple/set of Variables")
+        if _in_eager_without_dygraph_check():
+            raise AssertionError(
+                "no_grad_vars must be None, Tensor or list/tuple/set of Tensors")
+        else:
+            raise AssertionError(
+                "no_grad_vars must be None, Variable or list/tuple/set of Variables"
+            )
 
     assert isinstance(create_graph, bool), "create_graph must be True or False"
 
@@ -581,11 +651,16 @@ def grad(outputs,
     assert isinstance(only_inputs, bool), "only_inputs must be True or False"
     assert only_inputs, "only_inputs=False is not supported yet"
 
-    place = core.Place()
-    place.set_place(framework._current_expected_place())
-    return core.dygraph_partial_grad(inputs, outputs, grad_outputs,
-                                     no_grad_vars, place, create_graph,
-                                     retain_graph, allow_unused, only_inputs)
+    if _in_eager_without_dygraph_check():
+        return core.eager.run_partial_grad(
+            outputs, inputs, grad_outputs, retain_graph, create_graph,
+            only_inputs, allow_unused, no_grad_vars)
+    else:
+        place = core.Place()
+        place.set_place(framework._current_expected_place())
+        return core.dygraph_partial_grad(
+            inputs, outputs, grad_outputs, no_grad_vars, place, create_graph,
+            retain_graph, allow_unused, only_inputs)
 
 
 @framework.dygraph_only
@@ -645,13 +720,13 @@ def to_variable(value, name=None, zero_copy=None, dtype=None):
             y.shape     # [3L, 2L]
 
     """
-    support_type = (list, tuple, np.ndarray, core.VarBase, framework.Variable,
-                    core.Tensor, core.LoDTensor)
+    support_type = (list, tuple, np.ndarray, core.eager.Tensor, core.VarBase,
+                    framework.Variable, core.Tensor, core.LoDTensor)
     if not isinstance(value, support_type):
         raise TypeError(
             "The type of 'value' in fluid.dygraph.to_variable must be %s, but received %s."
             % (support_type, type(value)))
-    if isinstance(value, (core.VarBase, framework.Variable)):
+    if isinstance(value, (core.eager.Tensor, core.VarBase, framework.Variable)):
         return value
     elif isinstance(value, (core.Tensor, core.LoDTensor)):
         return core.VarBase(value)
@@ -659,7 +734,7 @@ def to_variable(value, name=None, zero_copy=None, dtype=None):
         if isinstance(framework._current_expected_place(),
                       framework.core.CPUPlace):
             #TODO(zhiqiu): we found two problems when enable zero_copy on CPUPlace.
-            # (1): eigen requires 16-bytes alignments, but the data of numpy array may not statisfy. 
+            # (1): eigen requires 16-bytes alignments, but the data of numpy array may not statisfy.
             # Details: https://eigen.tuxfamily.org/dox/group__TopicUnalignedArrayAssert.html
             # (2): when used in flask framework, it may result in hang.
             # Details: https://github.com/PaddlePaddle/Paddle/issues/26635
@@ -680,10 +755,15 @@ def to_variable(value, name=None, zero_copy=None, dtype=None):
             if value.dtype != dtype:
                 value = value.astype(dtype)
 
-        py_var = core.VarBase(
-            value=value,
-            place=framework._current_expected_place(),
-            persistable=False,
-            zero_copy=zero_copy,
-            name=name if name else '')
-        return py_var
+        if _in_eager_without_dygraph_check():
+            return core.eager.Tensor(value,
+                                     framework._current_expected_place(), False,
+                                     zero_copy, name if name else None, True)
+        else:
+            py_var = core.VarBase(
+                value=value,
+                place=framework._current_expected_place(),
+                persistable=False,
+                zero_copy=zero_copy,
+                name=name if name else '')
+            return py_var

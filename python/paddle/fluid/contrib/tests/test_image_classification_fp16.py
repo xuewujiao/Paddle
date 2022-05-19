@@ -24,6 +24,7 @@ import unittest
 import os
 import copy
 import numpy as np
+from paddle.static.amp import decorate
 
 paddle.enable_static()
 
@@ -138,7 +139,7 @@ def train(net_type, use_cuda, save_dirname, is_local):
 
         amp_lists = fluid.contrib.mixed_precision.AutoMixedPrecisionLists(
             custom_black_varnames={"loss", "conv2d_0.w_0"})
-        mp_optimizer = fluid.contrib.mixed_precision.decorate(
+        mp_optimizer = decorate(
             optimizer=optimizer,
             amp_lists=amp_lists,
             init_loss_scaling=8.0,
@@ -200,7 +201,8 @@ def train(net_type, use_cuda, save_dirname, is_local):
                         fluid.io.save_inference_model(
                             save_dirname, ["pixel"], [predict],
                             exe,
-                            main_program=train_program)
+                            main_program=train_program,
+                            clip_extra=True)
                         return
 
     if is_local:
@@ -257,8 +259,13 @@ def infer(use_cuda, save_dirname=None):
 
         print("infer results: ", results[0])
 
-        fluid.io.save_inference_model(save_dirname, feed_target_names,
-                                      fetch_targets, exe, inference_program)
+        fluid.io.save_inference_model(
+            save_dirname,
+            feed_target_names,
+            fetch_targets,
+            exe,
+            inference_program,
+            clip_extra=True)
 
 
 def main(net_type, use_cuda, is_local=True):
@@ -442,7 +449,7 @@ class TestAmpWithNonIterableDataLoader(unittest.TestCase):
                 optimizer = fluid.optimizer.Lamb(learning_rate=0.001)
                 amp_lists = fluid.contrib.mixed_precision.AutoMixedPrecisionLists(
                     custom_black_varnames={"loss", "conv2d_0.w_0"})
-                mp_optimizer = fluid.contrib.mixed_precision.decorate(
+                mp_optimizer = decorate(
                     optimizer=optimizer,
                     amp_lists=amp_lists,
                     init_loss_scaling=8.0,

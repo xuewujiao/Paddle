@@ -14,9 +14,6 @@ limitations under the License. */
 
 #include "paddle/fluid/operators/common_infer_shape_functions.h"
 
-#include <algorithm>
-#include <vector>
-
 namespace paddle {
 namespace framework {
 class InferShapeContext;
@@ -89,7 +86,7 @@ framework::DDim BroadcastTwoDims(const framework::DDim &x_dims,
   GetBroadcastDimsArrays(x_dims, y_dims, x_dims_array.data(),
                          y_dims_array.data(), out_dims_array.data(), max_dim,
                          axis);
-  return framework::make_ddim(out_dims_array);
+  return phi::make_ddim(out_dims_array);
 }
 
 }  // namespace details

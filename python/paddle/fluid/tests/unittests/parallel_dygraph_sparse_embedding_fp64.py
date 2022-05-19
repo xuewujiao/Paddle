@@ -40,7 +40,6 @@ class SimpleNet(Layer):
             self.hidden_size,
             sparse=True,
             weight_attr=paddle.ParamAttr(
-                name='embedding_param',
                 initializer=paddle.nn.initializer.Uniform(
                     low=-init_scale, high=init_scale)))
         self.softmax_weight = self.create_parameter(
@@ -52,6 +51,12 @@ class SimpleNet(Layer):
         self.softmax_bias = self.create_parameter(
             attr=paddle.ParamAttr(),
             shape=[self.vocab_size],
+            dtype=dtype,
+            default_initializer=paddle.nn.initializer.Uniform(
+                low=-self.init_scale, high=self.init_scale))
+        self.tmp = self.create_parameter(
+            attr=paddle.ParamAttr(),
+            shape=[self.hidden_size, self.vocab_size],
             dtype=dtype,
             default_initializer=paddle.nn.initializer.Uniform(
                 low=-self.init_scale, high=self.init_scale))

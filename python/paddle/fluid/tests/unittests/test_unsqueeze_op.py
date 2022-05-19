@@ -19,7 +19,8 @@ import numpy as np
 
 import paddle
 import paddle.fluid as fluid
-from op_test import OpTest
+from op_test import OpTest, convert_float_to_uint16
+import paddle.fluid.core as core
 
 paddle.enable_static()
 
@@ -32,6 +33,32 @@ class TestUnsqueezeOp(OpTest):
         self.inputs = {"X": np.random.random(self.ori_shape).astype("float64")}
         self.init_attrs()
         self.outputs = {"Out": self.inputs["X"].reshape(self.new_shape)}
+
+    def test_check_output(self):
+        self.check_output()
+
+    def test_check_grad(self):
+        self.check_grad(["X"], "Out")
+
+    def init_test_case(self):
+        self.ori_shape = (3, 40)
+        self.axes = (1, 2)
+        self.new_shape = (3, 1, 1, 40)
+
+    def init_attrs(self):
+        self.attrs = {"axes": self.axes}
+
+
+class TestUnsqueezeBF16Op(OpTest):
+    def setUp(self):
+        self.init_test_case()
+        self.op_type = "unsqueeze"
+        self.dtype = np.uint16
+        x = np.random.random(self.ori_shape).astype("float32")
+        out = x.reshape(self.new_shape)
+        self.inputs = {"X": convert_float_to_uint16(x)}
+        self.init_attrs()
+        self.outputs = {"Out": convert_float_to_uint16(out)}
 
     def test_check_output(self):
         self.check_output()
@@ -203,11 +230,17 @@ class API_TestDyUnsqueezeAxisTensorList(unittest.TestCase):
 
 
 class API_TestDygraphUnSqueeze(unittest.TestCase):
+    def setUp(self):
+        self.executed_api()
+
+    def executed_api(self):
+        self.unsqueeze = paddle.unsqueeze
+
     def test_out(self):
         paddle.disable_static()
         input_1 = np.random.random([5, 1, 10]).astype("int32")
         input = paddle.to_tensor(input_1)
-        output = paddle.unsqueeze(input, axis=[1])
+        output = self.unsqueeze(input, axis=[1])
         out_np = output.numpy()
         expected_out = np.expand_dims(input_1, axis=1)
         self.assertTrue(np.allclose(expected_out, out_np))
@@ -216,7 +249,7 @@ class API_TestDygraphUnSqueeze(unittest.TestCase):
         paddle.disable_static()
         input_1 = np.random.random([5, 1, 10]).astype("int8")
         input = paddle.to_tensor(input_1)
-        output = paddle.unsqueeze(input, axis=[1])
+        output = self.unsqueeze(input, axis=[1])
         out_np = output.numpy()
         expected_out = np.expand_dims(input_1, axis=1)
         self.assertTrue(np.allclose(expected_out, out_np))
@@ -225,7 +258,7 @@ class API_TestDygraphUnSqueeze(unittest.TestCase):
         paddle.disable_static()
         input_1 = np.random.random([5, 1, 10]).astype("uint8")
         input = paddle.to_tensor(input_1)
-        output = paddle.unsqueeze(input, axis=1)
+        output = self.unsqueeze(input, axis=1)
         out_np = output.numpy()
         expected_out = np.expand_dims(input_1, axis=1)
         self.assertTrue(np.allclose(expected_out, out_np))
@@ -234,7 +267,7 @@ class API_TestDygraphUnSqueeze(unittest.TestCase):
         paddle.disable_static()
         input_1 = np.random.random([5, 1, 10]).astype("int32")
         input = paddle.to_tensor(input_1)
-        output = paddle.unsqueeze(input, axis=1)
+        output = self.unsqueeze(input, axis=1)
         out_np = output.numpy()
         expected_out = np.expand_dims(input_1, axis=1)
         self.assertTrue(np.allclose(expected_out, out_np))
@@ -243,10 +276,15 @@ class API_TestDygraphUnSqueeze(unittest.TestCase):
         paddle.disable_static()
         input_1 = np.random.random([5, 1, 10]).astype("int32")
         input = paddle.to_tensor(input_1)
-        output = paddle.unsqueeze(input, axis=(1, 2))
+        output = self.unsqueeze(input, axis=(1, 2))
         out_np = output.numpy()
         expected_out = np.expand_dims(input_1, axis=1)
         self.assertTrue(np.allclose(expected_out, out_np))
+
+
+class API_TestDygraphUnSqueezeInplace(API_TestDygraphUnSqueeze):
+    def executed_api(self):
+        self.unsqueeze = paddle.unsqueeze_
 
 
 if __name__ == "__main__":

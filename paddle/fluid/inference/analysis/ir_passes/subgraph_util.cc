@@ -13,11 +13,12 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 /*
- * This file defines the the class to partition a graph.
+ * This file defines the class to partition a graph.
  */
 
 #include "paddle/fluid/inference/analysis/ir_passes/subgraph_util.h"
-#include <algorithm>
+
+#include "paddle/fluid/platform/enforce.h"
 
 namespace paddle {
 namespace framework {

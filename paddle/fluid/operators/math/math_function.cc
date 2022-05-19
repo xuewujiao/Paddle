@@ -27,7 +27,10 @@ limitations under the License. */
 #include <vector>
 #include "paddle/fluid/framework/data_type.h"
 #include "paddle/fluid/operators/math/math_function_impl.h"
+#include "paddle/fluid/platform/bfloat16.h"
 #include "paddle/fluid/platform/float16.h"
+#include "paddle/phi/backends/cpu/cpu_context.h"
+#include "paddle/phi/kernels/funcs/eigen/common.h"
 #include "unsupported/Eigen/CXX11/Tensor"
 
 namespace paddle {
@@ -40,39 +43,61 @@ template struct SetConstant<platform::CPUDeviceContext, platform::float16>;
 template struct SetConstant<platform::CPUDeviceContext, platform::bfloat16>;
 template struct SetConstant<platform::CPUDeviceContext, float>;
 template struct SetConstant<platform::CPUDeviceContext, double>;
+template struct SetConstant<platform::CPUDeviceContext, int16_t>;
 template struct SetConstant<platform::CPUDeviceContext, int>;
 template struct SetConstant<platform::CPUDeviceContext, int64_t>;
 template struct SetConstant<platform::CPUDeviceContext, bool>;
 template struct SetConstant<platform::CPUDeviceContext, uint8_t>;
-template struct SetConstant<platform::CPUDeviceContext, platform::complex64>;
-template struct SetConstant<platform::CPUDeviceContext, platform::complex128>;
+template struct SetConstant<platform::CPUDeviceContext,
+                            platform::complex<float>>;
+template struct SetConstant<platform::CPUDeviceContext,
+                            platform::complex<double>>;
+
+template struct SetConstant<phi::CPUContext, platform::float16>;
+template struct SetConstant<phi::CPUContext, platform::bfloat16>;
+template struct SetConstant<phi::CPUContext, float>;
+template struct SetConstant<phi::CPUContext, double>;
+template struct SetConstant<phi::CPUContext, int16_t>;
+template struct SetConstant<phi::CPUContext, int>;
+template struct SetConstant<phi::CPUContext, int64_t>;
+template struct SetConstant<phi::CPUContext, bool>;
+template struct SetConstant<phi::CPUContext, uint8_t>;
+template struct SetConstant<phi::CPUContext, platform::complex<float>>;
+template struct SetConstant<phi::CPUContext, platform::complex<double>>;
 
 #ifdef PADDLE_WITH_XPU
 template struct SetConstant<platform::XPUDeviceContext, platform::float16>;
+template struct SetConstant<platform::XPUDeviceContext, platform::bfloat16>;
 template struct SetConstant<platform::XPUDeviceContext, float>;
 template struct SetConstant<platform::XPUDeviceContext, double>;
+template struct SetConstant<platform::XPUDeviceContext, uint8_t>;
+template struct SetConstant<platform::XPUDeviceContext, int16_t>;
 template struct SetConstant<platform::XPUDeviceContext, int>;
 template struct SetConstant<platform::XPUDeviceContext, int64_t>;
 template struct SetConstant<platform::XPUDeviceContext, bool>;
+template struct SetConstant<platform::XPUDeviceContext,
+                            platform::complex<float>>;
+template struct SetConstant<platform::XPUDeviceContext,
+                            platform::complex<double>>;
 #endif
 
-#define DEFINE_CPU_TRANS(RANK)                                                \
-  template struct Transpose<platform::CPUDeviceContext, platform::float16,    \
-                            RANK>;                                            \
-  template struct Transpose<platform::CPUDeviceContext, platform::bfloat16,   \
-                            RANK>;                                            \
-  template struct Transpose<platform::CPUDeviceContext, float, RANK>;         \
-  template struct Transpose<platform::CPUDeviceContext, double, RANK>;        \
-  template struct Transpose<platform::CPUDeviceContext, int, RANK>;           \
-  template struct Transpose<platform::CPUDeviceContext, int64_t, RANK>;       \
-  template struct Transpose<platform::CPUDeviceContext, bool, RANK>;          \
-  template struct Transpose<platform::CPUDeviceContext, int16_t, RANK>;       \
-  template struct Transpose<platform::CPUDeviceContext, uint8_t, RANK>;       \
-  template struct Transpose<platform::CPUDeviceContext, int8_t, RANK>;        \
-  template struct Transpose<platform::CPUDeviceContext, platform::complex64,  \
-                            RANK>;                                            \
-  template struct Transpose<platform::CPUDeviceContext, platform::complex128, \
-                            RANK>;
+#define DEFINE_CPU_TRANS(RANK)                                              \
+  template struct Transpose<platform::CPUDeviceContext, platform::float16,  \
+                            RANK>;                                          \
+  template struct Transpose<platform::CPUDeviceContext, platform::bfloat16, \
+                            RANK>;                                          \
+  template struct Transpose<platform::CPUDeviceContext, float, RANK>;       \
+  template struct Transpose<platform::CPUDeviceContext, double, RANK>;      \
+  template struct Transpose<platform::CPUDeviceContext, int, RANK>;         \
+  template struct Transpose<platform::CPUDeviceContext, int64_t, RANK>;     \
+  template struct Transpose<platform::CPUDeviceContext, bool, RANK>;        \
+  template struct Transpose<platform::CPUDeviceContext, int16_t, RANK>;     \
+  template struct Transpose<platform::CPUDeviceContext, uint8_t, RANK>;     \
+  template struct Transpose<platform::CPUDeviceContext, int8_t, RANK>;      \
+  template struct Transpose<platform::CPUDeviceContext,                     \
+                            platform::complex<float>, RANK>;                \
+  template struct Transpose<platform::CPUDeviceContext,                     \
+                            platform::complex<double>, RANK>;
 
 DEFINE_CPU_TRANS(1);
 DEFINE_CPU_TRANS(2);
@@ -87,8 +112,8 @@ struct TransposeNormal<platform::CPUDeviceContext, T> {
                   const framework::Tensor& in, framework::Tensor* out,
                   const std::vector<int>& axis) {
     const int rank = axis.size();
-    auto in_stride = framework::stride(in.dims());
-    auto out_stride = framework::stride(out->dims());
+    auto in_stride = phi::stride(in.dims());
+    auto out_stride = phi::stride(out->dims());
     const T* in_ptr = in.data<T>();
     T* out_ptr = out->data<T>();
 
@@ -123,8 +148,8 @@ DEFINE_CPU_TRANS_NORMAL(bool);
 DEFINE_CPU_TRANS_NORMAL(int16_t);
 DEFINE_CPU_TRANS_NORMAL(uint8_t);
 DEFINE_CPU_TRANS_NORMAL(int8_t);
-DEFINE_CPU_TRANS_NORMAL(platform::complex64);
-DEFINE_CPU_TRANS_NORMAL(platform::complex128);
+DEFINE_CPU_TRANS_NORMAL(platform::complex<float>);
+DEFINE_CPU_TRANS_NORMAL(platform::complex<double>);
 
 struct TensorSetConstantCPU {
   TensorSetConstantCPU(framework::Tensor* tensor, float value)
@@ -147,10 +172,46 @@ void set_constant_with_place<platform::XPUPlace>(
 }
 
 template <>
+void set_constant_with_place<platform::NPUPlace>(
+    const platform::DeviceContext& context, framework::Tensor* tensor,
+    float value) {
+  PADDLE_THROW(platform::errors::Unimplemented("NPUPlace is not supported"));
+}
+
+template <>
+void set_constant_with_place<platform::NPUPinnedPlace>(
+    const platform::DeviceContext& context, framework::Tensor* tensor,
+    float value) {
+  PADDLE_THROW(
+      platform::errors::Unimplemented("NPUPinnedPlace is not supported"));
+}
+
+template <>
+void set_constant_with_place<platform::IPUPlace>(
+    const platform::DeviceContext& context, framework::Tensor* tensor,
+    float value) {
+  PADDLE_THROW(platform::errors::Unimplemented("IPUPlace is not supported"));
+}
+
+template <>
 void set_constant_with_place<platform::CPUPlace>(
     const platform::DeviceContext& context, framework::Tensor* tensor,
     float value) {
   framework::VisitDataType(tensor->type(), TensorSetConstantCPU(tensor, value));
+}
+
+template <>
+void set_constant_with_place<platform::MLUPlace>(
+    const platform::DeviceContext& context, framework::Tensor* tensor,
+    float value) {
+  PADDLE_THROW(platform::errors::Unimplemented("MLUPlace is not supported"));
+}
+
+template <>
+void set_constant_with_place<platform::CustomPlace>(
+    const platform::DeviceContext& context, framework::Tensor* tensor,
+    float value) {
+  PADDLE_THROW(platform::errors::Unimplemented("CustomPlace is not supported"));
 }
 
 template <>
@@ -178,8 +239,9 @@ struct TensorSetConstantWithPlace : public boost::static_visitor<void> {
 void set_constant(const platform::DeviceContext& context,
                   framework::Tensor* tensor, float value) {
   TensorSetConstantWithPlace func(context, tensor, value);
-#ifdef PADDLE_WITH_CUDA
-  tensor->place().apply_visitor(func);
+#if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
+  // tensor->place().apply_visitor(func);
+  paddle::platform::VisitPlace(tensor->place(), func);
 #else
   func(platform::CPUPlace());
 #endif

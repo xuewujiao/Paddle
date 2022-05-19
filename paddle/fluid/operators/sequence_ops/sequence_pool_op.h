@@ -16,8 +16,8 @@ limitations under the License. */
 #include <string>
 #include "paddle/fluid/framework/eigen.h"
 #include "paddle/fluid/framework/op_registry.h"
-#include "paddle/fluid/operators/math/math_function.h"
 #include "paddle/fluid/operators/math/sequence_pooling.h"
+#include "paddle/phi/kernels/funcs/math_function.h"
 
 namespace paddle {
 namespace operators {
@@ -67,7 +67,8 @@ class SequencePoolKernel : public framework::OpKernel<T> {
     out->mutable_data<T>(context.GetPlace());
     Tensor* index = nullptr;
 
-    const bool is_test = context.Attr<bool>("is_test");
+    bool is_test =
+        context.HasAttr("is_test") ? context.Attr<bool>("is_test") : false;
 
     // Do not create index buffer for inference (is_test) mode
     // TODO(jczaja): Skip index buffer creation for other devices eg. GPU

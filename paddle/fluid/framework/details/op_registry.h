@@ -14,6 +14,7 @@ limitations under the License. */
 
 #pragma once
 
+#include <map>
 #include <memory>
 #include <string>
 #include <tuple>
@@ -247,8 +248,11 @@ struct OpInfoFiller<T, kGradOpBaseMaker> {
         const std::string& type,
         const imperative::NameVarBaseMap& var_base_map_in,
         const imperative::NameVarBaseMap& var_base_map_out,
-        const framework::AttributeMap& attrs) {
-      T maker(type, var_base_map_in, var_base_map_out, attrs);
+        const framework::AttributeMap& attrs,
+        const framework::AttributeMap& default_attrs,
+        const std::map<std::string, std::string>& inplace_map) {
+      T maker(type, var_base_map_in, var_base_map_out, attrs, inplace_map);
+      maker.SetDygraphDefaultAttrsMap(default_attrs);
       return maker();
     };
   }
@@ -271,10 +275,8 @@ struct OpInfoFiller<T, kVarTypeInference> {
 template <typename T>
 struct OpInfoFiller<T, kShapeInference> {
   void operator()(const char* op_type, OpInfo* info) const {
-    PADDLE_ENFORCE_EQ(
-        info->infer_shape_, nullptr,
-        platform::errors::AlreadyExists(
-            "Duplicate InferShapeFN of %s has been registered", op_type));
+    // Note: if fill InferShapeFN by this Filler, the infershape here
+    // will overwrite the op->InferShape func registered in kOperator Filler
     info->infer_shape_ = [](InferShapeContext* ctx) {
       T inference;
       inference(ctx);

@@ -12,16 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import numpy as np
+import paddle
 import unittest
+import paddle.fluid as fluid
+import paddle.fluid.core as core
+import paddle.nn.functional as F
 import numpy as np
 from op_test import OpTest
-import paddle.fluid.core as core
-import paddle.fluid as fluid
 from paddle.fluid import compiler, Program, program_guard
-import paddle
-import paddle.nn.functional as F
-import paddle.fluid as fluid
+from paddle.fluid.framework import _test_eager_guard
 
 
 def adaptive_start_index(index, input_size, output_size):
@@ -244,6 +243,10 @@ class TestPool1D_API(unittest.TestCase):
             self.check_avg_dygraph_padding_same(place)
             self.check_max_dygraph_return_index_results(place)
 
+    def test_dygraph_final_state_api(self):
+        with _test_eager_guard():
+            self.test_pool1d()
+
 
 class TestPool2DError_API(unittest.TestCase):
     def test_error_api(self):
@@ -339,6 +342,40 @@ class TestPool2DError_API(unittest.TestCase):
                     ceil_mode=True)
 
         self.assertRaises(ValueError, run7)
+
+        def run_kernel_out_of_range():
+            with fluid.dygraph.guard():
+                input_np = np.random.uniform(-1, 1,
+                                             [2, 3, 32]).astype(np.float32)
+                input_pd = fluid.dygraph.to_variable(input_np)
+                padding = 0
+                res_pd = F.avg_pool1d(
+                    input_pd,
+                    kernel_size=-1,
+                    stride=2,
+                    padding=padding,
+                    ceil_mode=True)
+
+        self.assertRaises(ValueError, run_kernel_out_of_range)
+
+        def run_stride_out_of_range():
+            with fluid.dygraph.guard():
+                input_np = np.random.uniform(-1, 1,
+                                             [2, 3, 32]).astype(np.float32)
+                input_pd = fluid.dygraph.to_variable(input_np)
+                padding = 0
+                res_pd = F.avg_pool1d(
+                    input_pd,
+                    kernel_size=2,
+                    stride=0,
+                    padding=padding,
+                    ceil_mode=True)
+
+        self.assertRaises(ValueError, run_stride_out_of_range)
+
+    def test_dygraph_final_state_api(self):
+        with _test_eager_guard():
+            self.test_error_api()
 
 
 if __name__ == '__main__':
