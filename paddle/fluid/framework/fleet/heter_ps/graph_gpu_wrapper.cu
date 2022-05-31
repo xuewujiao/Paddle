@@ -16,6 +16,7 @@
 #include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_ps_table.h"
 #include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_wrapper.h"
 #include "paddle/fluid/framework/fleet/heter_ps/heter_resource.h"
+#include "paddle/fluid/framework/fleet/heter_ps/gpu_graph_utils.h"
 namespace paddle {
 namespace framework {
 #ifdef PADDLE_WITH_HETERPS
@@ -166,6 +167,7 @@ void GraphGpuWrapper::init_service() {
 
 void GraphGpuWrapper::upload_batch(int idx,
                                    std::vector<std::vector<int64_t>> &ids) {
+  debug_gpu_memory_info();
   GpuPsGraphTable *g = (GpuPsGraphTable *)graph_table;
   for (int i = 0; i < ids.size(); i++) {
     GpuPsCommGraph sub_graph =
@@ -175,12 +177,14 @@ void GraphGpuWrapper::upload_batch(int idx,
     sub_graph.release_on_cpu();
     VLOG(0) << "sub graph on gpu " << i << " is built";
   }
+  debug_gpu_memory_info();
 }
 
 // feature table
 void GraphGpuWrapper::upload_batch(int ntype_id,
                                    std::vector<std::vector<int64_t>> &node_ids,
                                    int slot_num) {
+  debug_gpu_memory_info();
   GpuPsGraphTable *g = (GpuPsGraphTable *)graph_table;
   for (int i = 0; i < node_ids.size(); i++) {
     VLOG(0) << "begin make_gpu_ps_graph_fea, node_ids[" << i << "]_size["
@@ -198,6 +202,7 @@ void GraphGpuWrapper::upload_batch(int ntype_id,
     VLOG(0) << "sub graph fea on gpu " << i << " is built";
   }
   // g->build_graph_from_cpu(vec);
+  debug_gpu_memory_info();
 }
 
 // void GraphGpuWrapper::test() {
@@ -241,7 +246,6 @@ NeighborSampleResult GraphGpuWrapper::graph_neighbor_sample(
   auto neighbor_sample_res =
       ((GpuPsGraphTable *)graph_table)
           ->graph_neighbor_sample(gpu_id, device_keys, walk_degree, len);
-
   return neighbor_sample_res;
 }
 

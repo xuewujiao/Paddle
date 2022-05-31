@@ -121,29 +121,33 @@ paddle::framework::GpuPsCommGraphFea GraphTable::make_gpu_ps_graph_fea(
 paddle::framework::GpuPsCommGraph GraphTable::make_gpu_ps_graph(
     int idx, std::vector<int64_t> ids) {
   std::vector<std::vector<int64_t>> bags(task_pool_size_);
+  for (int i = 0; i < task_pool_size_; i++) {
+    auto predsize = ids.size() / task_pool_size_;
+    bags[i].reserve(predsize * 1.2);
+  }
   for (auto x : ids) {
     int location = x % shard_num % task_pool_size_;
     bags[location].push_back(x);
   }
+
   std::vector<std::future<int>> tasks;
-  std::vector<int64_t> edge_array[task_pool_size_];
-  std::vector<paddle::framework::GpuPsGraphNode> node_array[task_pool_size_];
+  std::vector<int64_t> node_array[task_pool_size_]; // node id list
+  std::vector<int64_t> edge_array[task_pool_size_]; // edge id list
+  std::vector<paddle::framework::GpuPsNodeInfo> info_array[task_pool_size_];
   for (size_t i = 0; i < bags.size(); i++) {
     if (bags[i].size() > 0) {
       tasks.push_back(_shards_task_pool[i]->enqueue([&, i, this]() -> int {
-        paddle::framework::GpuPsGraphNode x;
+        node_array[i].resize(bags[i].size());
+        info_array[i].resize(bags[i].size());
+        edge_array[i].reserve(bags[i].size());
         for (size_t j = 0; j < bags[i].size(); j++) {
-          Node *v = find_node(0, idx, bags[i][j]);
-          x.node_id = bags[i][j];
-          if (v == NULL) {
-            x.neighbor_size = 0;
-            x.neighbor_offset = 0;
-            node_array[i].push_back(x);
-          } else {
-            x.neighbor_size = v->get_neighbor_size();
-            x.neighbor_offset = edge_array[i].size();
-            node_array[i].push_back(x);
-            for (size_t k = 0; k < x.neighbor_size; k++) {
+          auto node_id = bags[i][j];
+          node_array[i][j] = node_id;
+          Node *v = find_node(0, idx, node_id);
+          if (v != nullptr) {
+            info_array[i][j].neighbor_offset = edge_array[i].size();
+            info_array[i][j].neighbor_size = v->get_neighbor_size();
+            for (size_t k = 0; k < v->get_neighbor_size(); k++) {
               edge_array[i].push_back(v->get_neighbor_id(k));
             }
           }
@@ -153,21 +157,19 @@ paddle::framework::GpuPsCommGraph GraphTable::make_gpu_ps_graph(
     }
   }
   for (int i = 0; i < (int)tasks.size(); i++) tasks[i].get();
-  paddle::framework::GpuPsCommGraph res;
   int64_t tot_len = 0;
   for (int i = 0; i < task_pool_size_; i++) {
     tot_len += edge_array[i].size();
   }
-  // res.neighbor_size = tot_len;
-  // res.node_size = ids.size();
-  // res.neighbor_list = new int64_t[tot_len];
-  // res.node_list = new paddle::framework::GpuPsGraphNode[ids.size()];
+
+  paddle::framework::GpuPsCommGraph res;
   res.init_on_cpu(tot_len, ids.size());
   int64_t offset = 0, ind = 0;
   for (int i = 0; i < task_pool_size_; i++) {
     for (int j = 0; j < (int)node_array[i].size(); j++) {
       res.node_list[ind] = node_array[i][j];
-      res.node_list[ind++].neighbor_offset += offset;
+      res.node_info_list[ind] = info_array[i][j];
+      res.node_info_list[ind++].neighbor_offset += offset;
     }
     for (size_t j = 0; j < edge_array[i].size(); j++) {
       res.neighbor_list[offset + j] = edge_array[i][j];
@@ -296,7 +298,7 @@ int64_t GraphTable::load_graph_to_memory_from_ssd(int idx,
           std::string str;
           if (_db->get(i, ch, sizeof(int) * 2 + sizeof(int64_t), str) == 0) {
             count[i] += (int64_t)str.size();
-            for (int j = 0; j < str.size(); j += sizeof(int64_t)) {
+            for (size_t j = 0; j < str.size(); j += sizeof(int64_t)) {
               int64_t id = *(int64_t *)(str.c_str() + j);
               add_comm_edge(idx, v, id);
             }
@@ -342,7 +344,7 @@ void GraphTable::make_partitions(int idx, int64_t byte_size, int device_len) {
   }
   int next = 0;
   while (iters.size()) {
-    if (next >= iters.size()) {
+    if (next >= (int)iters.size()) {
       next = 0;
     }
     if (!iters[next]->Valid()) {
@@ -366,7 +368,7 @@ void GraphTable::make_partitions(int idx, int64_t byte_size, int device_len) {
         score[i] = 0;
       }
     }
-    for (int j = 0; j < value.size(); j += sizeof(int64_t)) {
+    for (size_t j = 0; j < value.size(); j += sizeof(int64_t)) {
       int64_t v = *((int64_t *)(value.c_str() + j));
       int index = -1;
       if (id_map.find(v) != id_map.end()) {
@@ -459,7 +461,7 @@ void GraphTable::clear_graph(int idx) {
   }
 }
 int32_t GraphTable::load_next_partition(int idx) {
-  if (next_partition >= partitions[idx].size()) {
+  if (next_partition >= (int)partitions[idx].size()) {
     VLOG(0) << "partition iteration is done";
     return -1;
   }
@@ -487,8 +489,6 @@ int32_t GraphTable::load_edges_to_ssd(const std::string &path,
   auto paths = paddle::string::split_string<std::string>(path, ";");
   int64_t count = 0;
   std::string sample_type = "random";
-  bool is_weighted = false;
-  int valid_count = 0;
   for (auto path : paths) {
     std::ifstream file(path);
     std::string line;
@@ -514,8 +514,6 @@ int32_t GraphTable::load_edges_to_ssd(const std::string &path,
 
 int32_t GraphTable::dump_edges_to_ssd(int idx) {
   VLOG(2) << "calling dump edges to ssd";
-  const int64_t fixed_size = 10000;
-  // std::vector<int64_t> edge_array[task_pool_size_];
   std::vector<std::unordered_map<int64_t, int>> count(task_pool_size_);
   std::vector<std::future<int64_t>> tasks;
   auto &shards = edge_shards[idx];
@@ -524,10 +522,9 @@ int32_t GraphTable::dump_edges_to_ssd(int idx) {
         [&, i, this]() -> int64_t {
           int64_t cost = 0;
           std::vector<Node *> &v = shards[i]->get_bucket();
-          size_t ind = i % this->task_pool_size_;
           for (size_t j = 0; j < v.size(); j++) {
             std::vector<int64_t> s;
-            for (int k = 0; k < v[j]->get_neighbor_size(); k++) {
+            for (size_t k = 0; k < v[j]->get_neighbor_size(); k++) {
               s.push_back(v[j]->get_neighbor_id(k));
             }
             cost += v[j]->get_neighbor_size() * sizeof(int64_t);
@@ -553,8 +550,7 @@ int32_t GraphTable::make_complementary_graph(int idx, int64_t byte_size) {
           std::vector<Node *> &v = shards[i]->get_bucket();
           size_t ind = i % this->task_pool_size_;
           for (size_t j = 0; j < v.size(); j++) {
-            // size_t location = v[j]->get_id();
-            for (int k = 0; k < v[j]->get_neighbor_size(); k++) {
+            for (size_t k = 0; k < v[j]->get_neighbor_size(); k++) {
               count[ind][v[j]->get_neighbor_id(k)]++;
             }
           }
@@ -581,7 +577,7 @@ int32_t GraphTable::make_complementary_graph(int idx, int64_t byte_size) {
   while (iter != count_to_id.rend() && byte_size > 0) {
     for (auto x : iter->second) {
       buffer.push_back(x);
-      if (buffer.size() >= fixed_size) {
+      if (buffer.size() >= (size_t)fixed_size) {
         int64_t res = load_graph_to_memory_from_ssd(idx, buffer);
         buffer.clear();
         byte_size -= res;
@@ -1263,13 +1259,12 @@ int32_t GraphTable::load_edges(const std::string &path, bool reverse_edge,
 }
 
 Node *GraphTable::find_node(int type_id, int idx, int64_t id) {
-  size_t shard_id = ((uint64_t)id) % shard_num;
+  size_t shard_id = id % shard_num;
   if (shard_id >= shard_end || shard_id < shard_start) {
     return nullptr;
   }
   size_t index = shard_id - shard_start;
   auto &search_shards = type_id == 0 ? edge_shards[idx] : feature_shards[idx];
-  PADDLE_ENFORCE_NOT_NULL(search_shards[index]);
   Node *node = search_shards[index]->find_node(id);
   return node;
 }
@@ -1283,7 +1278,7 @@ uint32_t GraphTable::get_thread_pool_index_by_shard_index(int64_t shard_index) {
 
 int32_t GraphTable::clear_nodes(int type_id, int idx) {
   auto &search_shards = type_id == 0 ? edge_shards[idx] : feature_shards[idx];
-  for (int i = 0; i < search_shards.size(); i++) {
+  for (size_t i = 0; i < search_shards.size(); i++) {
     search_shards[i]->clear();
   }
   return 0;
@@ -1560,7 +1555,7 @@ std::vector<std::vector<int64_t>> GraphTable::get_all_id(int type_id, int idx,
   auto &search_shards = type_id == 0 ? edge_shards[idx] : feature_shards[idx];
   std::vector<std::future<std::vector<int64_t>>> tasks;
   VLOG(0) << "begin task, task_pool_size_[" << task_pool_size_ << "]";
-  for (int i = 0; i < search_shards.size(); i++) {
+  for (size_t i = 0; i < search_shards.size(); i++) {
     tasks.push_back(_shards_task_pool[i % task_pool_size_]->enqueue(
         [&search_shards, i]() -> std::vector<int64_t> {
           return search_shards[i]->get_all_id();
