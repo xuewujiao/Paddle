@@ -24,7 +24,7 @@
 namespace paddle {
 namespace framework {
 enum GraphTableType { EDGE_TABLE, FEATURE_TABLE };
-class GpuPsGraphTable : public HeterComm<uint64_t, int64_t, int> {
+class GpuPsGraphTable : public HeterComm<uint64_t, uint64_t, int> {
  public:
   int get_table_offset(int gpu_id, GraphTableType type, int idx) {
     int type_id = type;
@@ -33,8 +33,8 @@ class GpuPsGraphTable : public HeterComm<uint64_t, int64_t, int> {
   }
   GpuPsGraphTable(std::shared_ptr<HeterPsResource> resource, int topo_aware,
                   int graph_table_num, int feature_table_num)
-      : HeterComm<uint64_t, int64_t, int>(1, resource) {
-    load_factor_ = 0.25;
+      : HeterComm<uint64_t, uint64_t, int>(1, resource) {
+    load_factor_ = 1.0;
     rw_lock.reset(new pthread_rwlock_t());
     this->graph_table_num_ = graph_table_num;
     this->feature_table_num_ = feature_table_num;
@@ -104,19 +104,15 @@ class GpuPsGraphTable : public HeterComm<uint64_t, int64_t, int> {
     }
   }
   ~GpuPsGraphTable() {
-    // if (cpu_table_status != -1) {
-    //   end_graph_sampling();
-    // }
   }
-  void build_graph_on_single_gpu(GpuPsCommGraph &g, int gpu_id, int idx);
-  void build_graph_fea_on_single_gpu(GpuPsCommGraphFea &g, int gpu_id, int idx);
+  void build_graph_on_single_gpu(const GpuPsCommGraph &g, int gpu_id, int idx);
+  void build_graph_fea_on_single_gpu(const GpuPsCommGraphFea &g, int gpu_id, int idx);
   void clear_graph_info(int gpu_id, int index);
   void clear_graph_info(int index);
   void clear_feature_info(int gpu_id, int index);
   void clear_feature_info(int index);
-  void build_graph_from_cpu(std::vector<GpuPsCommGraph> &cpu_node_list,
-                            int idx);
-  void build_graph_fea_from_cpu(std::vector<GpuPsCommGraphFea> &cpu_node_list, int idx);
+  void build_graph_from_cpu(const std::vector<GpuPsCommGraph> &g_list, int idx);
+  void build_graph_fea_from_cpu(const std::vector<GpuPsCommGraphFea> &g_list, int idx);
   NodeQueryResult graph_node_sample(int gpu_id, int sample_size);
   NeighborSampleResult graph_neighbor_sample_v3(NeighborSampleQuery q,
                                                 bool cpu_switch);

@@ -23,52 +23,64 @@
 #include "paddle/phi/core/enforce.h"
 namespace paddle {
 namespace framework {
-struct GpuPsGraphNode {
-  int64_t node_id;
-  int64_t neighbor_size, neighbor_offset;
+struct GpuPsNodeInfo {
+  uint32_t neighbor_size;
+  uint32_t neighbor_offset;
+  GpuPsNodeInfo() : neighbor_size(0), neighbor_offset(0) {}
   // this node's neighbor is stored on [neighbor_offset,neighbor_offset +
   // neighbor_size) of int64_t *neighbor_list;
 };
 
 struct GpuPsCommGraph {
-  int64_t *neighbor_list;
-  GpuPsGraphNode *node_list;
-  int64_t neighbor_size, node_size;
-  // the size of neighbor array and graph_node_list array
+  uint64_t *node_list;  // only locate on host side, the list of node id
+  int64_t node_size;    // only locate on host side, the size of node_list
+  GpuPsNodeInfo *node_info_list; // only locate on host side
+  int64_t *neighbor_list;   // can take effect on both host and device sides
+  int64_t neighbor_size;    // only locate on host side, the size of neighbor_list
+
   GpuPsCommGraph()
-      : neighbor_list(NULL), node_list(NULL), neighbor_size(0), node_size(0) {}
-  GpuPsCommGraph(int64_t *neighbor_list_, GpuPsGraphNode *node_list_,
-                 int64_t neighbor_size_, int64_t node_size_)
-      : neighbor_list(neighbor_list_),
-        node_list(node_list_),
-        neighbor_size(neighbor_size_),
-        node_size(node_size_) {}
-  void init_on_cpu(int64_t neighbor_size, int64_t node_size) {
-    this->neighbor_size = neighbor_size;
-    this->node_size = node_size;
-    this->neighbor_list = new int64_t[neighbor_size];
-    this->node_list = new paddle::framework::GpuPsGraphNode[node_size];
+    : node_list(nullptr), node_size(0), node_info_list(nullptr),
+      neighbor_list(NULL), neighbor_size(0) {}
+  GpuPsCommGraph(uint64_t *node_list_, int64_t node_size_,
+      GpuPsNodeInfo *neighbor_info_list_,
+      int64_t *neighbor_list_, int64_t neighbor_size_)
+    : node_list(node_list_), node_size(node_size_),
+      node_info_list(neighbor_info_list_),
+      neighbor_list(neighbor_list_),
+      neighbor_size(neighbor_size_) {}
+  void init_on_cpu(int64_t neighbor_size_, int64_t node_size_) {
+    if (node_size_ > 0) {
+        this->node_size = node_size_;
+        this->node_list = new uint64_t[node_size_];
+        this->node_info_list = new paddle::framework::GpuPsNodeInfo[node_size_];
+    }
+    if (neighbor_size_) {
+        this->neighbor_size = neighbor_size_;
+        this->neighbor_list = new int64_t[neighbor_size_];
+    }
   }
   void release_on_cpu() {
-    delete[] neighbor_list;
-    delete[] node_list;
+#define DEL_PTR_ARRAY(p) \
+        if (p != nullptr) { \
+            delete [] p; \
+            p = nullptr; \
+        }
+    DEL_PTR_ARRAY(node_list);
+    DEL_PTR_ARRAY(neighbor_list);
+    DEL_PTR_ARRAY(node_info_list);
+    node_size = 0;
+    neighbor_size = 0;
   }
   void display_on_cpu() {
-    VLOG(0) << "neighbor_size = " << neighbor_size;
     VLOG(0) << "node_size = " << node_size;
+    for (int64_t i = 0; i < node_size; i++) {
+      auto id = node_list[i];
+      auto val = node_info_list[i];
+      VLOG(0) << "node id " << id << "," << val.neighbor_offset << ":" << val.neighbor_size;
+    }
+    VLOG(0) << "neighbor_size = " << neighbor_size;
     for (int64_t i = 0; i < neighbor_size; i++) {
       VLOG(0) << "neighbor " << i << " " << neighbor_list[i];
-    }
-    for (int64_t i = 0; i < node_size; i++) {
-      VLOG(0) << "node i " << node_list[i].node_id
-              << " neighbor_size = " << node_list[i].neighbor_size;
-      std::string str;
-      int offset = node_list[i].neighbor_offset;
-      for (int64_t j = 0; j < node_list[i].neighbor_size; j++) {
-        if (j > 0) str += ",";
-        str += std::to_string(neighbor_list[j + offset]);
-      }
-      VLOG(0) << str;
     }
   }
 };
@@ -108,19 +120,11 @@ node 9:[14,14]
 node 17:[15,15]
 ...
 by the above information,
-we generate a node_list:GpuPsGraphNode *graph_node_list in GpuPsCommGraph
-of size 9,
-where node_list[i].id = u_id[i]
-then we have:
-node_list[0]-> node_id:0, neighbor_size:2, neighbor_offset:0
-node_list[1]-> node_id:5, neighbor_size:2, neighbor_offset:2
-node_list[2]-> node_id:1, neighbor_size:1, neighbor_offset:4
-node_list[3]-> node_id:2, neighbor_size:1, neighbor_offset:5
-node_list[4]-> node_id:7, neighbor_size:3, neighbor_offset:6
-node_list[5]-> node_id:3, neighbor_size:4, neighbor_offset:9
-node_list[6]-> node_id:8, neighbor_size:1, neighbor_offset:13
-node_list[7]-> node_id:9, neighbor_size:1, neighbor_offset:14
-node_list[8]-> node_id:17, neighbor_size:1, neighbor_offset:15
+we generate a node_list and node_info_list in GpuPsCommGraph,
+node_list: [0,5,1,2,7,3,8,9,17]
+node_info_list: [(2,0),(2,2),(1,4),(1,5),(3,6),(4,9),(1,13),(1,14),(1,15)]
+Here, we design the data in this format to better
+adapt to gpu and avoid to convert again.
 */
 struct NeighborSampleQuery {
   int gpu_id;
@@ -263,8 +267,6 @@ struct NodeQueryResult {
     platform::CUDAPlace place = platform::CUDAPlace(dev_id);
     val_mem = memory::AllocShared(place, query_size * sizeof(int64_t));
     val = (int64_t *)val_mem->ptr();
-
-    // cudaMalloc((void **)&val, query_size * sizeof(int64_t));
     actual_sample_size = 0;
   }
   void display() {
