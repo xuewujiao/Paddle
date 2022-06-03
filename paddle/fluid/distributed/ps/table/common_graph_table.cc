@@ -572,6 +572,7 @@ int32_t GraphTable::make_complementary_graph(int idx, int64_t byte_size) {
       bucket[i]->build_sampler(sample_type);
     }
   }
+
   return 0;
 }
 #endif
@@ -1225,12 +1226,21 @@ int32_t GraphTable::load_edges(const std::string &path, bool reverse_edge,
     return 0;
   }
 #endif
+
+#ifdef PADDLE_WITH_GPU_GRAPH
+  // To reduce memory overhead, CPU samplers won't be created in gpugraph.
+  // In order not to affect the sampler function of other scenario,
+  // this optimization is only performed in load_edges function.
+  VLOG(0) << "run in gpugraph mode!";
+#else
+  VLOG(0) << "build sampler ... ";
   for (auto &shard : edge_shards[idx]) {
     auto bucket = shard->get_bucket();
     for (size_t i = 0; i < bucket.size(); i++) {
       bucket[i]->build_sampler(sample_type);
     }
   }
+#endif
 
   return 0;
 }
