@@ -410,10 +410,12 @@ int GraphDataGenerator::GenerateBatch() {
       int feature_buf_offset = (ins_buf_pair_len_ * 2 - total_instance) * slot_num_ + i * 2;
       // TODO huwei02 opt
       for (int j = 0; j < total_instance; j += 2) {
-        VLOG(2) << "slot_tensor[" << i << "][" << j << "] <- feature_buf[" << feature_buf_offset + j * 8 << "]";
-        VLOG(2) << "slot_tensor[" << i << "][" << j + 1 << "] <- feature_buf[" << feature_buf_offset + j * 8 + 1 << "]";
-        cudaMemcpyAsync(slot_tensor_ptr_[i] + j, &feature_buf[feature_buf_offset + j * 8], sizeof(int64_t) * 2,
-                cudaMemcpyDeviceToDevice, stream_);
+        VLOG(2) << "slot_tensor[" << i << "][" << j << "] <- feature_buf["
+            << feature_buf_offset + j * slot_num_ << "]";
+        VLOG(2) << "slot_tensor[" << i << "][" << j + 1 << "] <- feature_buf["
+            << feature_buf_offset + j * slot_num_ + 1 << "]";
+        cudaMemcpyAsync(slot_tensor_ptr_[i] + j, &feature_buf[feature_buf_offset + j * slot_num_],
+                sizeof(int64_t) * 2, cudaMemcpyDeviceToDevice, stream_);
       }
       GraphFillSlotLodKernel<<<GET_BLOCKS(total_instance), CUDA_NUM_THREADS, 0, stream_>>>(
               slot_lod_tensor_ptr_[i], total_instance + 1);
