@@ -201,8 +201,7 @@ void GraphGpuWrapper::upload_batch(int idx,
 }
 
 // feature table
-void GraphGpuWrapper::upload_batch(int ntype_id,
-                                   std::vector<std::vector<uint64_t>> &node_ids,
+void GraphGpuWrapper::upload_batch(std::vector<std::vector<uint64_t>> &node_ids,
                                    int slot_num) {
   debug_gpu_memory_info("upload_batch feature start");
   GpuPsGraphTable *g = (GpuPsGraphTable *)graph_table;
