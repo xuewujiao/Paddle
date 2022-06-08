@@ -477,7 +477,7 @@ int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
     node_type_start_[node_type] = tmp_len + start;
     if (tmp_len == 0) {
       finish_node_type_.insert(node_type);
-      if (finish_node_type_.size() == type_to_index_.size()) {
+      if (finish_node_type_.size() == node_type_start_.size()) {
         break;
       }
       cursor_ += 1;
