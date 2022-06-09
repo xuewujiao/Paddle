@@ -421,6 +421,7 @@ void GraphTable::export_partition_files(int idx, std::string file_path) {
   for (int i = 0; i < (int)tasks.size(); i++) tasks[i].get();
 }
 void GraphTable::clear_graph(int idx) {
+  VLOG(0) << "will clear edge shards";
   for (auto p : edge_shards[idx]) {
     delete p;
   }
@@ -928,6 +929,7 @@ int32_t GraphTable::remove_graph_node(int idx, std::vector<uint64_t> &id_list) {
 }
 
 void GraphShard::clear() {
+  VLOG(0) << "will clear graph shard";
   for (size_t i = 0; i < bucket.size(); i++) {
     delete bucket[i];
   }
@@ -1156,67 +1158,105 @@ int32_t GraphTable::load_edges(const std::string &path, bool reverse_edge,
   uint64_t count = 0;
   std::string sample_type = "random";
   bool is_weighted = false;
-  uint64_t valid_count = 0;
-  for (auto path : paths) {
-    std::ifstream file(path);
-    std::string line;
-    while (std::getline(file, line)) {
-      auto values = paddle::string::split_string<std::string>(line, "\t");
-      count++;
-      if (values.size() < 2) continue;
-      auto src_id = std::stoull(values[0]);
-      auto dst_id = std::stoull(values[1]);
-      if (reverse_edge) {
-        std::swap(src_id, dst_id);
-      }
-      float weight = 1;
-      if (values.size() == 3) {
-        weight = std::stof(values[2]);
-        sample_type = "weighted";
-        is_weighted = true;
-      }
+  //uint64_t valid_count = 0;
+  
+  int read_thread_num = 50;
+  std::vector<std::shared_ptr<::ThreadPool>> load_edge_task_pool;
+  load_edge_task_pool.resize(read_thread_num);
+  for (size_t i = 0; i< load_edge_task_pool.size(); i++) {
+    load_edge_task_pool[i].reset(new ::ThreadPool(1));
+  }
+  
+  std::vector<std::future<int>> tasks;
+  for (int i = 0; i < paths.size(); i++) {
+    tasks.push_back(load_edge_task_pool[i % read_thread_num]->enqueue(
+        [&, i, idx, this]() -> int {
+      uint64_t local_count = 0;
+      uint64_t src_dis_count = 0;
+      uint64_t shard_dis_count = 0;
+      uint64_t valid_count = 0;
+      std::ifstream file(paths[i]);
+      std::string line;
+      auto path_split = paddle::string::split_string<std::string>(paths[i], "/");
+      auto part_name_split = paddle::string::split_string<std::string>(path_split[path_split.size() - 1], "-");
+      auto part_num = std::stoull(part_name_split[part_name_split.size() - 1]);
+      VLOG(0) << "path:" << paths[i] << ", part_num" << part_num;
 
-      size_t src_shard_id = src_id % shard_num;
+      while (std::getline(file, line)) {
+        auto values = paddle::string::split_string<std::string>(line, "\t");
+        local_count++;
+        if (values.size() < 2) continue;
+        auto src_id = std::stoull(values[0]);
+        auto dst_id = std::stoull(values[1]);
+        if (reverse_edge) {
+          std::swap(src_id, dst_id);
+        }
+        size_t src_shard_id = src_id % shard_num;
+        if (src_shard_id != (part_num % shard_num)) {
+          //VLOG(0) << "src_id:" << src_id << ", src_shard_id:" << src_shard_id << "part:" << part_num % shard_num;
+          src_dis_count++;
+          continue;
+        }
+     
+        float weight = 1;
+        if (values.size() == 3) {
+          weight = std::stof(values[2]);
+          sample_type = "weighted";
+          is_weighted = true;
+        }
 
-      if (src_shard_id >= shard_end || src_shard_id < shard_start) {
-        VLOG(4) << "will not load " << src_id << " from " << path
+        if (src_shard_id >= shard_end || src_shard_id < shard_start) {
+          shard_dis_count++;
+          VLOG(4) << "will not load " << src_id << " from " << path
                 << ", please check id distribution";
-        continue;
+          continue;
+        }
+      
+        size_t index = src_shard_id - shard_start;
+        edge_shards[idx][index]->add_graph_node(src_id)->build_edges(is_weighted);
+        edge_shards[idx][index]->add_neighbor(src_id, dst_id, weight);
+        valid_count++;
+//#ifdef PADDLE_WITH_HETERPS
+//        if (count > fixed_load_edges && search_level == 2) {
+//          dump_edges_to_ssd(idx);
+//          VLOG(0) << "dumping edges to ssd, edge count is reset to 0";
+//          clear_graph(idx);
+//          count = 0;
+//        }
+//#endif
       }
-
-      if (count % 1000000 == 0) {
-        VLOG(0) << count << " edges are loaded from filepath";
-        VLOG(0) << line;
-      }
-
-      size_t index = src_shard_id - shard_start;
-      edge_shards[idx][index]->add_graph_node(src_id)->build_edges(is_weighted);
-      edge_shards[idx][index]->add_neighbor(src_id, dst_id, weight);
-      valid_count++;
 #ifdef PADDLE_WITH_HETERPS
-      if (count > fixed_load_edges && search_level == 2) {
+      if (search_level == 2) {
         dump_edges_to_ssd(idx);
         VLOG(0) << "dumping edges to ssd, edge count is reset to 0";
-        clear_graph(idx);
-        count = 0;
+        //clear_graph(idx);
       }
 #endif
-    }
+      VLOG(0) << local_count << " edges are loaded from filepath->" << paths[i] << ", src dis count: " << src_dis_count << ", shard dis count:" << shard_dis_count << ", valid_count: " << valid_count;
+      VLOG(0) << part_num % shard_num << " shard size is" << edge_shards[idx][part_num % shard_num]->get_size();
+      //for (size_t k = 0; k < 3; i++) {
+      //    k_size = edge_shards[idx][k].get_size();
+      //    VLOG(0) << k <<" shard size is " << k_size;
+      //}
+      return 0;
+    }));
   }
-  VLOG(0) << valid_count << "/" << count << " edges are loaded successfully in "
-          << path;
+  for (int j = 0; j < (int)tasks.size(); j++) tasks[j].get();
+  //VLOG(0) << count << " edges are loaded successfully in " << path; 
+  //VLOG(0) << valid_count << "/" << count << " edges are loaded successfully in "
+  //        << path;
 
-#ifdef PADDLE_WITH_HETERPS
-  if (search_level == 2) {
-    if (count > 0) {
-      dump_edges_to_ssd(idx);
-      VLOG(0) << "dumping edges to ssd, edge count is reset to 0";
-      clear_graph(idx);
-      count = 0;
-    }
-    return 0;
-  }
-#endif
+//#ifdef PADDLE_WITH_HETERPS
+//  if (search_level == 2) {
+//    if (count > 0) {
+//      dump_edges_to_ssd(idx);
+//      VLOG(0) << "dumping edges to ssd, edge count is reset to 0";
+//      clear_graph(idx);
+//      count = 0;
+//    }
+//    return 0;
+//  }
+//#endif
 
 #ifdef PADDLE_WITH_GPU_GRAPH
   // To reduce memory overhead, CPU samplers won't be created in gpugraph.
@@ -1232,7 +1272,6 @@ int32_t GraphTable::load_edges(const std::string &path, bool reverse_edge,
     }
   }
 #endif
-
   return 0;
 }
  
