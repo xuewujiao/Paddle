@@ -1073,18 +1073,15 @@ int32_t GraphTable::load_nodes(const std::string &path, std::string node_type) {
     idx = feature_to_id[node_type];
   }
   
-  VLOG(0) << "all paths size:" << paths.size();
   std::vector<std::future<int>> tasks;
   for (size_t i = 0; i < paths.size(); i++) {
     tasks.push_back(load_node_edge_task_pool[i % load_thread_num]->enqueue(
         [&, i, idx, this]() -> int {
       VLOG(2) << "Begin GraphTable::load_nodes(), path[" << paths[i] << "]";
-      VLOG(0) << "load path:" << paths[i];
       std::ifstream file(paths[i]);
       std::string line;
       uint64_t local_count = 0;
       while (std::getline(file, line)) {
-        //local_count++;
         auto values = paddle::string::split_string<std::string>(line, "\t");
         if (values.size() < 2) continue;
         std::string nt = values[0];
@@ -1103,18 +1100,8 @@ int32_t GraphTable::load_nodes(const std::string &path, std::string node_type) {
         size_t index = shard_id - shard_start;
         auto node = feature_shards[idx][index]->add_feature_node(id);
         node->set_feature_size(feat_name[idx].size());
-
-        if (values.size() > 2) {
-          for (size_t slice = 2; slice < values.size(); slice++) {
-            auto feat = this->parse_feature(idx, values[slice]);
-            if (feat.first >= 0) {
-              node->set_feature(feat.first, feat.second);
-            } else {
-              VLOG(4) << "Node feature:  " << values[slice] 
-                  << " not in feature_map.";
-            }
-          }
-        }
+        
+        //open it when slot fea ready
         //for (size_t slice = 2; slice < values.size(); slice++) {
         //  auto feat = this->parse_feature(idx, values[slice]);
         //  if (feat.first >= 0) {
@@ -1166,29 +1153,17 @@ int32_t GraphTable::load_edges(const std::string &path, bool reverse_edge,
   uint64_t count = 0;
   std::string sample_type = "random";
   bool is_weighted = false;
-  //uint64_t valid_count = 0;
-  
-  //int read_thread_num = 50;
-  //std::vector<std::shared_ptr<::ThreadPool>> load_edge_task_pool;
-  //load_edge_task_pool.resize(read_thread_num);
-  //for (size_t i = 0; i< load_edge_task_pool.size(); i++) {
-  //  load_edge_task_pool[i].reset(new ::ThreadPool(1));
-  //}
   
   std::vector<std::future<int>> tasks;
   for (int i = 0; i < paths.size(); i++) {
     tasks.push_back(load_node_edge_task_pool[i % load_thread_num]->enqueue(
         [&, i, idx, this]() -> int {
       uint64_t local_count = 0;
-      uint64_t src_dis_count = 0;
-      uint64_t shard_dis_count = 0;
-      uint64_t valid_count = 0;
       std::ifstream file(paths[i]);
       std::string line;
       auto path_split = paddle::string::split_string<std::string>(paths[i], "/");
       auto part_name_split = paddle::string::split_string<std::string>(path_split[path_split.size() - 1], "-");
       auto part_num = std::stoull(part_name_split[part_name_split.size() - 1]);
-      //VLOG(0) << "path:" << paths[i] << ", part_num" << part_num;
 
       while (std::getline(file, line)) {
         auto values = paddle::string::split_string<std::string>(line, "\t");
@@ -1201,8 +1176,6 @@ int32_t GraphTable::load_edges(const std::string &path, bool reverse_edge,
         }
         size_t src_shard_id = src_id % shard_num;
         if (src_shard_id != (part_num % shard_num)) {
-          //VLOG(0) << "src_id:" << src_id << ", src_shard_id:" << src_shard_id << "part:" << part_num % shard_num;
-          src_dis_count++;
           continue;
         }
      
@@ -1214,7 +1187,6 @@ int32_t GraphTable::load_edges(const std::string &path, bool reverse_edge,
         }
 
         if (src_shard_id >= shard_end || src_shard_id < shard_start) {
-          shard_dis_count++;
           VLOG(4) << "will not load " << src_id << " from " << path
                 << ", please check id distribution";
           continue;
@@ -1223,15 +1195,6 @@ int32_t GraphTable::load_edges(const std::string &path, bool reverse_edge,
         size_t index = src_shard_id - shard_start;
         edge_shards[idx][index]->add_graph_node(src_id)->build_edges(is_weighted);
         edge_shards[idx][index]->add_neighbor(src_id, dst_id, weight);
-        valid_count++;
-//#ifdef PADDLE_WITH_HETERPS
-//        if (count > fixed_load_edges && search_level == 2) {
-//          dump_edges_to_ssd(idx);
-//          VLOG(0) << "dumping edges to ssd, edge count is reset to 0";
-//          clear_graph(idx);
-//          count = 0;
-//        }
-//#endif
       }
 #ifdef PADDLE_WITH_HETERPS
       if (search_level == 2) {
@@ -1241,27 +1204,10 @@ int32_t GraphTable::load_edges(const std::string &path, bool reverse_edge,
       }
 #endif
       VLOG(0) << local_count << " edges are loaded from filepath->" << paths[i];
-      //VLOG(0) << local_count << " edges are loaded from filepath->" << paths[i] << ", src dis count: " << src_dis_count << ", shard dis count:" << shard_dis_count << ", valid_count: " << valid_count;
-      //VLOG(0) << "idx:" << idx << ", shard:" << part_num % shard_num << ", size is" << edge_shards[idx][part_num % shard_num]->get_size();
       return 0;
     }));
   }
   for (int j = 0; j < (int)tasks.size(); j++) tasks[j].get();
-  //VLOG(0) << count << " edges are loaded successfully in " << path; 
-  //VLOG(0) << valid_count << "/" << count << " edges are loaded successfully in "
-  //        << path;
-
-//#ifdef PADDLE_WITH_HETERPS
-//  if (search_level == 2) {
-//    if (count > 0) {
-//      dump_edges_to_ssd(idx);
-//      VLOG(0) << "dumping edges to ssd, edge count is reset to 0";
-//      clear_graph(idx);
-//      count = 0;
-//    }
-//    return 0;
-//  }
-//#endif
 
 #ifdef PADDLE_WITH_GPU_GRAPH
   // To reduce memory overhead, CPU samplers won't be created in gpugraph.
