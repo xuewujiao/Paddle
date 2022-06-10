@@ -421,7 +421,6 @@ void GraphTable::export_partition_files(int idx, std::string file_path) {
   for (int i = 0; i < (int)tasks.size(); i++) tasks[i].get();
 }
 void GraphTable::clear_graph(int idx) {
-  VLOG(0) << "will clear edge shards";
   for (auto p : edge_shards[idx]) {
     delete p;
   }
@@ -929,7 +928,6 @@ int32_t GraphTable::remove_graph_node(int idx, std::vector<uint64_t> &id_list) {
 }
 
 void GraphShard::clear() {
-  VLOG(0) << "will clear graph shard";
   for (size_t i = 0; i < bucket.size(); i++) {
     delete bucket[i];
   }
