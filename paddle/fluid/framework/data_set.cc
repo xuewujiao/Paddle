@@ -475,6 +475,7 @@ void DatasetImpl<T>::LoadIntoMemory() {
       }
       cnt++;
     }
+    //TODO(huwei02): open it when slot fea ready
     //for (auto& iter : node_to_id) {
     //  int node_idx = iter.second;
     //  auto gpu_graph_device_keys =
@@ -487,6 +488,7 @@ void DatasetImpl<T>::LoadIntoMemory() {
     //    }
     //  }
     //}
+
     // FIX: trick for iterate edge table
     for (auto& iter : edge_to_id) {
       int edge_idx = iter.second;

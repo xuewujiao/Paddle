@@ -1054,7 +1054,6 @@ int32_t GraphTable::get_nodes_ids_by_ranges(
 
 // TODO opt load all node_types in once reading
 int32_t GraphTable::load_nodes(const std::string &path, std::string node_type) {
-  VLOG(2) << "Begin GraphTable::load_nodes() node_type[" << node_type << "]";
   auto paths = paddle::string::split_string<std::string>(path, ";");
   uint64_t count = 0;
   uint64_t valid_count = 0;
@@ -1071,6 +1070,7 @@ int32_t GraphTable::load_nodes(const std::string &path, std::string node_type) {
     idx = feature_to_id[node_type];
   }
   
+  VLOG(0) << "Begin GraphTable::load_nodes() node_type[" << node_type << "]";
   std::vector<std::future<int>> tasks;
   for (size_t i = 0; i < paths.size(); i++) {
     tasks.push_back(load_node_edge_task_pool[i % load_thread_num]->enqueue(
@@ -1099,7 +1099,7 @@ int32_t GraphTable::load_nodes(const std::string &path, std::string node_type) {
         auto node = feature_shards[idx][index]->add_feature_node(id);
         node->set_feature_size(feat_name[idx].size());
         
-        //open it when slot fea ready
+        // TODO(huwei02): open it when slot fea ready
         //for (size_t slice = 2; slice < values.size(); slice++) {
         //  auto feat = this->parse_feature(idx, values[slice]);
         //  if (feat.first >= 0) {
@@ -1111,11 +1111,12 @@ int32_t GraphTable::load_nodes(const std::string &path, std::string node_type) {
         //}
         local_count++;
       }
-      VLOG(0) << "node_type[" << node_type << "] loads " << local_count << "nodes from filepath->" << paths[i];
+      VLOG(0) << "node_type[" << node_type << "] loads " << local_count << " nodes from filepath->" << paths[i];
       return 0;
     }));
   }
   for (int i = 0; i < (int)tasks.size(); i++) tasks[i].get();
+  VLOG(0) << "successfully load all node_type[" << node_type << "] data";
   return 0;
 }
 
@@ -1152,6 +1153,7 @@ int32_t GraphTable::load_edges(const std::string &path, bool reverse_edge,
   std::string sample_type = "random";
   bool is_weighted = false;
   
+  VLOG(0) << "Begin GraphTable::load_edges() edge_type[" << edge_type << "]";
   std::vector<std::future<int>> tasks;
   for (int i = 0; i < paths.size(); i++) {
     tasks.push_back(load_node_edge_task_pool[i % load_thread_num]->enqueue(
@@ -1206,6 +1208,7 @@ int32_t GraphTable::load_edges(const std::string &path, bool reverse_edge,
     }));
   }
   for (int j = 0; j < (int)tasks.size(); j++) tasks[j].get();
+  VLOG(0) << "successfully load all edge_type[" << edge_type << "] data";
 
 #ifdef PADDLE_WITH_GPU_GRAPH
   // To reduce memory overhead, CPU samplers won't be created in gpugraph.
