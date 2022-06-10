@@ -174,7 +174,7 @@ int GraphDataGenerator::AcquireInstance(BufState *state) {
 __global__ void GraphFillFeatureKernel(int64_t *id_tensor, int *fill_ins_num,
                     int64_t *walk, int64_t *feature, int *row, int central_word,
                     int step, int len, int col_num, int slot_num) {
-  __shared__ int64_t local_key[CUDA_NUM_THREADS * 2];
+  __shared__ int32_t local_key[CUDA_NUM_THREADS * 8];
   __shared__ int local_num;
   __shared__ int global_num;
 
