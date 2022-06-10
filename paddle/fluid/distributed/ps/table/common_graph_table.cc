@@ -1072,20 +1072,27 @@ int32_t GraphTable::load_nodes(const std::string &path, std::string node_type) {
     }
     idx = feature_to_id[node_type];
   }
-
+  
+  VLOG(0) << "all paths size:" << paths.size();
   std::vector<std::future<int>> tasks;
-  for (int i = 0; i < paths.size(); i++) {
+  for (size_t i = 0; i < paths.size(); i++) {
     tasks.push_back(load_node_edge_task_pool[i % load_thread_num]->enqueue(
         [&, i, idx, this]() -> int {
-      VLOG(2) << "Begin GraphTable::load_nodes(), path[" << path << "]";
-      std::ifstream file(path);
+      VLOG(2) << "Begin GraphTable::load_nodes(), path[" << paths[i] << "]";
+      VLOG(0) << "load path:" << paths[i];
+      std::ifstream file(paths[i]);
       std::string line;
       uint64_t local_count = 0;
       while (std::getline(file, line)) {
+        //local_count++;
         auto values = paddle::string::split_string<std::string>(line, "\t");
         if (values.size() < 2) continue;
+        std::string nt = values[0];
+        if (nt != node_type) {
+          continue;
+        }
+        
         auto id = std::stoull(values[1]);
-
         size_t shard_id = id % shard_num;
         if (shard_id >= shard_end || shard_id < shard_start) {
           VLOG(4) << "will not load " << id << " from " << path
@@ -1093,31 +1100,37 @@ int32_t GraphTable::load_nodes(const std::string &path, std::string node_type) {
           continue;
         }
 
-        std::string nt = values[0];
-        if (nt != node_type) {
-          continue;
-        }
-        local_count++;
-
         size_t index = shard_id - shard_start;
         auto node = feature_shards[idx][index]->add_feature_node(id);
         node->set_feature_size(feat_name[idx].size());
 
-        for (size_t slice = 2; slice < values.size(); slice++) {
-          auto feat = this->parse_feature(idx, values[slice]);
-          if (feat.first >= 0) {
-            node->set_feature(feat.first, feat.second);
-          } else {
-            VLOG(4) << "Node feature:  " << values[slice]
+        if (values.size() > 2) {
+          for (size_t slice = 2; slice < values.size(); slice++) {
+            auto feat = this->parse_feature(idx, values[slice]);
+            if (feat.first >= 0) {
+              node->set_feature(feat.first, feat.second);
+            } else {
+              VLOG(4) << "Node feature:  " << values[slice] 
                   << " not in feature_map.";
+            }
           }
         }
+        //for (size_t slice = 2; slice < values.size(); slice++) {
+        //  auto feat = this->parse_feature(idx, values[slice]);
+        //  if (feat.first >= 0) {
+        //    node->set_feature(feat.first, feat.second);
+        //  } else {
+        //    VLOG(4) << "Node feature:  " << values[slice]
+        //          << " not in feature_map.";
+        // }
+        //}
+        local_count++;
       }
       VLOG(0) << "node_type[" << node_type << "] loads " << local_count << "nodes from filepath->" << paths[i];
       return 0;
     }));
   }
-  for (int j = 0; j < (int)tasks.size(); j++) tasks[j].get();
+  for (int i = 0; i < (int)tasks.size(); i++) tasks[i].get();
   return 0;
 }
 
@@ -1224,7 +1237,7 @@ int32_t GraphTable::load_edges(const std::string &path, bool reverse_edge,
       if (search_level == 2) {
         dump_edges_to_ssd(idx);
         VLOG(0) << "dumping edges to ssd, edge count is reset to 0";
-        //clear_graph(idx);
+        clear_graph(idx);
       }
 #endif
       VLOG(0) << local_count << " edges are loaded from filepath->" << paths[i];
