@@ -202,25 +202,9 @@ class FeatureNode : public Node {
     return out;
   }
 
-  std::string str() {
-    std::string output;
-    size_t i = 0;
-    for (auto item: feature) {
-      if (i > 0) {
-        output += ' ';
-      }
-
-      output += item;
-      ++i;
-    }
-    return output;
-  }
-  size_t feature_size() {
-    return feature.size();
-  }
-
- protected:
+protected:
   std::vector<std::string> feature;
 };
+
 }  // namespace distributed
 }  // namespace paddle
