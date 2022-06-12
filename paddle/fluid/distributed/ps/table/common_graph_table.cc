@@ -1101,16 +1101,14 @@ int32_t GraphTable::load_nodes(const std::string &path, std::string node_type) {
         }
 
         size_t index = shard_id - shard_start;
-        auto node = feature_shards[idx][index]->add_feature_node(id);
-        node->set_feature_size(feat_name[idx].size());
-        
+        auto node = feature_shards[idx][index]->add_feature_node(id, false);
         if (node != NULL) {
           node->set_feature_size(feat_name[idx].size());
           for (size_t slice = 2; slice < values.size(); slice++) {
             parse_feature(idx, values[slice], node);
           }
           local_count++;
-        } 
+        }
       }
       VLOG(0) << "node_type[" << node_type << "] loads " << local_count << " nodes from filepath->" << paths[i];
       return 0;
