@@ -492,7 +492,10 @@ class GraphTable : public Table {
   int get_all_feature_ids(int type, int idx,
                         int slice_num, std::vector<std::vector<uint64_t>>* output);
   int32_t load_nodes(const std::string &path, std::string node_type);
-
+  int32_t parse_edge_file(const std::string &path, int idx, bool reverse, 
+                        uint64_t &count, uint64_t &valid_count);
+  int32_t parse_node_file(const std::string &path, const std::string &node_type, 
+                        int idx, uint64_t &count, uint64_t &valid_count);
   int32_t add_graph_node(int idx, std::vector<uint64_t> &id_list,
                          std::vector<bool> &is_weight_list);
 
