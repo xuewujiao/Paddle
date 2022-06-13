@@ -1042,6 +1042,27 @@ class InMemoryDataset(DatasetBase):
         """
         self.dataset.set_heter_ps(enable_heter_ps)
 
+    def set_graph_device_keys(self, device_keys):
+        """
+        """
+        self.dataset.set_graph_device_keys(device_keys)
+
+    def set_graph_config(self, config):
+        """
+        """
+        self.proto_desc.graph_config.walk_degree = config.get("walk_degree", 1)
+        self.proto_desc.graph_config.walk_len = config.get("walk_len", 20)
+        self.proto_desc.graph_config.window = config.get("window", 5)
+        self.proto_desc.graph_config.once_sample_startid_len = config.get(
+            "once_sample_startid_len", 8000)
+        self.proto_desc.graph_config.sample_times_one_chunk = config.get(
+            "sample_times_one_chunk", 10)
+        self.proto_desc.graph_config.batch_size = config.get("batch_size", 1)
+        self.proto_desc.graph_config.debug_mode = config.get("debug_mode", 0)
+        self.proto_desc.graph_config.first_node_type = config.get(
+            "first_node_type", "")
+        self.proto_desc.graph_config.meta_path = config.get("meta_path", "")
+
 
 class QueueDataset(DatasetBase):
     """

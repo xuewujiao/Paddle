@@ -20,23 +20,24 @@
 #include "paddle/fluid/memory/allocation/allocator.h"
 #include "paddle/fluid/memory/memory.h"
 #include "paddle/fluid/platform/cuda_device_guard.h"
+#include "paddle/phi/core/enforce.h"
 namespace paddle {
 namespace framework {
 struct GpuPsGraphNode {
-  int64_t node_id;
+  uint64_t node_id;
   int64_t neighbor_size, neighbor_offset;
   // this node's neighbor is stored on [neighbor_offset,neighbor_offset +
   // neighbor_size) of int64_t *neighbor_list;
 };
 
 struct GpuPsCommGraph {
-  int64_t *neighbor_list;
+  uint64_t *neighbor_list;
   GpuPsGraphNode *node_list;
   int64_t neighbor_size, node_size;
   // the size of neighbor array and graph_node_list array
   GpuPsCommGraph()
       : neighbor_list(NULL), node_list(NULL), neighbor_size(0), node_size(0) {}
-  GpuPsCommGraph(int64_t *neighbor_list_, GpuPsGraphNode *node_list_,
+  GpuPsCommGraph(uint64_t *neighbor_list_, GpuPsGraphNode *node_list_,
                  int64_t neighbor_size_, int64_t node_size_)
       : neighbor_list(neighbor_list_),
         node_list(node_list_),
@@ -45,7 +46,7 @@ struct GpuPsCommGraph {
   void init_on_cpu(int64_t neighbor_size, int64_t node_size) {
     this->neighbor_size = neighbor_size;
     this->node_size = node_size;
-    this->neighbor_list = new int64_t[neighbor_size];
+    this->neighbor_list = new uint64_t[neighbor_size];
     this->node_list = new paddle::framework::GpuPsGraphNode[node_size];
   }
   void release_on_cpu() {
@@ -55,15 +56,15 @@ struct GpuPsCommGraph {
   void display_on_cpu() {
     VLOG(0) << "neighbor_size = " << neighbor_size;
     VLOG(0) << "node_size = " << node_size;
-    for (size_t i = 0; i < neighbor_size; i++) {
+    for (int64_t i = 0; i < neighbor_size; i++) {
       VLOG(0) << "neighbor " << i << " " << neighbor_list[i];
     }
-    for (size_t i = 0; i < node_size; i++) {
+    for (int64_t i = 0; i < node_size; i++) {
       VLOG(0) << "node i " << node_list[i].node_id
               << " neighbor_size = " << node_list[i].neighbor_size;
       std::string str;
       int offset = node_list[i].neighbor_offset;
-      for (size_t j = 0; j < node_list[i].neighbor_size; j++) {
+      for (int64_t j = 0; j < node_list[i].neighbor_size; j++) {
         if (j > 0) str += ",";
         str += std::to_string(neighbor_list[j + offset]);
       }
@@ -123,21 +124,25 @@ node_list[8]-> node_id:17, neighbor_size:1, neighbor_offset:15
 */
 struct NeighborSampleQuery {
   int gpu_id;
-  int64_t *key;
-  int sample_size;
+  int table_idx;
+  uint64_t *src_nodes;
   int len;
-  void initialize(int gpu_id, int64_t key, int sample_size, int len) {
+  int sample_size;
+  void initialize(int gpu_id, int table_idx, uint64_t src_nodes,
+                  int sample_size, int len) {
+    this->table_idx = table_idx;
     this->gpu_id = gpu_id;
-    this->key = (int64_t *)key;
+    this->src_nodes = (uint64_t *)src_nodes;
     this->sample_size = sample_size;
     this->len = len;
   }
   void display() {
-    int64_t *sample_keys = new int64_t[len];
+    uint64_t *sample_keys = new uint64_t[len];
     VLOG(0) << "device_id " << gpu_id << " sample_size = " << sample_size;
-    VLOG(0) << "there are " << len << " keys ";
+    VLOG(0) << "there are " << len << " keys to sample for graph " << table_idx;
     std::string key_str;
-    cudaMemcpy(sample_keys, key, len * sizeof(int64_t), cudaMemcpyDeviceToHost);
+    cudaMemcpy(sample_keys, src_nodes, len * sizeof(uint64_t),
+               cudaMemcpyDeviceToHost);
 
     for (int i = 0; i < len; i++) {
       if (key_str.size() > 0) key_str += ";";
@@ -148,14 +153,14 @@ struct NeighborSampleQuery {
   }
 };
 struct NeighborSampleResult {
-  int64_t *val;
-  int64_t *actual_val;
+  uint64_t *val;
+  uint64_t *actual_val;
   int *actual_sample_size, sample_size, key_size;
   int total_sample_size;
   std::shared_ptr<memory::Allocation> val_mem, actual_sample_size_mem;
   std::shared_ptr<memory::Allocation> actual_val_mem;
-  int64_t *get_val() { return val; }
-  int64_t get_actual_val() { return (int64_t)actual_val; }
+  uint64_t *get_val() { return val; }
+  uint64_t get_actual_val() { return (uint64_t)actual_val; }
   int *get_actual_sample_size() { return actual_sample_size; }
   int get_sample_size() { return sample_size; }
   int get_key_size() { return key_size; }
@@ -167,16 +172,16 @@ struct NeighborSampleResult {
     platform::CUDADeviceGuard guard(dev_id);
     platform::CUDAPlace place = platform::CUDAPlace(dev_id);
     val_mem =
-        memory::AllocShared(place, _sample_size * _key_size * sizeof(int64_t));
-    val = (int64_t *)val_mem->ptr();
+        memory::AllocShared(place, _sample_size * _key_size * sizeof(uint64_t));
+    val = (uint64_t *)val_mem->ptr();
     actual_sample_size_mem =
         memory::AllocShared(place, _key_size * sizeof(int));
     actual_sample_size = (int *)actual_sample_size_mem->ptr();
   }
   void display() {
     VLOG(0) << "in node sample result display ------------------";
-    int64_t *res = new int64_t[sample_size * key_size];
-    cudaMemcpy(res, val, sample_size * key_size * sizeof(int64_t),
+    uint64_t *res = new uint64_t[sample_size * key_size];
+    cudaMemcpy(res, val, sample_size * key_size * sizeof(uint64_t),
                cudaMemcpyDeviceToHost);
     int *ac_size = new int[key_size];
     cudaMemcpy(ac_size, actual_sample_size, key_size * sizeof(int),
@@ -185,8 +190,8 @@ struct NeighborSampleResult {
     for (int i = 0; i < key_size; i++) {
       total_sample_size += ac_size[i];
     }
-    int64_t *res2 = new int64_t[total_sample_size];  // r
-    cudaMemcpy(res2, actual_val, total_sample_size * sizeof(int64_t),
+    uint64_t *res2 = new uint64_t[total_sample_size];  // r
+    cudaMemcpy(res2, actual_val, total_sample_size * sizeof(uint64_t),
                cudaMemcpyDeviceToHost);  // r
 
     int start = 0;
@@ -208,13 +213,13 @@ struct NeighborSampleResult {
     delete[] ac_size;
     VLOG(0) << " ------------------";
   }
-  std::vector<int64_t> get_sampled_graph(NeighborSampleQuery q) {
-    std::vector<int64_t> graph;
+  std::vector<uint64_t> get_sampled_graph(NeighborSampleQuery q) {
+    std::vector<uint64_t> graph;
     int64_t *sample_keys = new int64_t[q.len];
     std::string key_str;
-    cudaMemcpy(sample_keys, q.key, q.len * sizeof(int64_t),
+    cudaMemcpy(sample_keys, q.src_nodes, q.len * sizeof(uint64_t),
                cudaMemcpyDeviceToHost);
-    int64_t *res = new int64_t[sample_size * key_size];
+    uint64_t *res = new uint64_t[sample_size * key_size];
     cudaMemcpy(res, val, sample_size * key_size * sizeof(int64_t),
                cudaMemcpyDeviceToHost);
     int *ac_size = new int[key_size];
@@ -224,8 +229,8 @@ struct NeighborSampleResult {
     for (int i = 0; i < key_size; i++) {
       total_sample_size += ac_size[i];
     }
-    int64_t *res2 = new int64_t[total_sample_size];  // r
-    cudaMemcpy(res2, actual_val, total_sample_size * sizeof(int64_t),
+    uint64_t *res2 = new uint64_t[total_sample_size];  // r
+    cudaMemcpy(res2, actual_val, total_sample_size * sizeof(uint64_t),
                cudaMemcpyDeviceToHost);  // r
 
     int start = 0;
@@ -248,24 +253,24 @@ struct NeighborSampleResult {
 };
 
 struct NodeQueryResult {
-  int64_t *val;
+  uint64_t *val;
   int actual_sample_size;
-  int64_t get_val() { return (int64_t)val; }
+  uint64_t get_val() { return (uint64_t)val; }
   int get_len() { return actual_sample_size; }
   std::shared_ptr<memory::Allocation> val_mem;
   void initialize(int query_size, int dev_id) {
     platform::CUDADeviceGuard guard(dev_id);
     platform::CUDAPlace place = platform::CUDAPlace(dev_id);
-    val_mem = memory::AllocShared(place, query_size * sizeof(int64_t));
-    val = (int64_t *)val_mem->ptr();
+    val_mem = memory::AllocShared(place, query_size * sizeof(uint64_t));
+    val = (uint64_t *)val_mem->ptr();
 
     // cudaMalloc((void **)&val, query_size * sizeof(int64_t));
     actual_sample_size = 0;
   }
   void display() {
     VLOG(0) << "in node query result display ------------------";
-    int64_t *res = new int64_t[actual_sample_size];
-    cudaMemcpy(res, val, actual_sample_size * sizeof(int64_t),
+    uint64_t *res = new uint64_t[actual_sample_size];
+    cudaMemcpy(res, val, actual_sample_size * sizeof(uint64_t),
                cudaMemcpyDeviceToHost);
 
     VLOG(0) << "actual_sample_size =" << actual_sample_size;
@@ -283,7 +288,71 @@ struct NodeQueryResult {
     actual_sample_size = 0;
   };
   ~NodeQueryResult() {}
+};  // end of struct NodeQueryResult
+
+struct GpuPsGraphFeaNode {
+  uint64_t node_id;
+  uint64_t feature_size, feature_offset;
+  // this node's feature is stored on [feature_offset,feature_offset +
+  // feature_size) of int64_t *feature_list;
 };
-}
-};
+
+struct GpuPsCommGraphFea {
+  uint64_t *feature_list;
+  uint8_t *slot_id_list;
+  GpuPsGraphFeaNode *node_list;
+  uint64_t feature_size, node_size;
+  // the size of feature array and graph_node_list array
+  GpuPsCommGraphFea()
+      : feature_list(NULL),
+        slot_id_list(NULL),
+        node_list(NULL),
+        feature_size(0),
+        node_size(0) {}
+  GpuPsCommGraphFea(uint64_t *feature_list_, uint8_t *slot_id_list_,
+                    GpuPsGraphFeaNode *node_list_, uint64_t feature_size_,
+                    uint64_t node_size_)
+      : feature_list(feature_list_),
+        slot_id_list(slot_id_list_),
+        node_list(node_list_),
+        feature_size(feature_size_),
+        node_size(node_size_) {}
+  void init_on_cpu(uint64_t feature_size, uint64_t node_size,
+                   uint32_t slot_num) {
+    PADDLE_ENFORCE_LE(slot_num, 255);
+    this->feature_size = feature_size;
+    this->node_size = node_size;
+    this->feature_list = new uint64_t[feature_size];
+    this->slot_id_list = new uint8_t[feature_size];
+    this->node_list = new GpuPsGraphFeaNode[node_size];
+  }
+  void release_on_cpu() {
+    delete[] feature_list;
+    delete[] slot_id_list;
+    delete[] node_list;
+  }
+  void display_on_cpu() {
+    VLOG(1) << "feature_size = " << feature_size;
+    VLOG(1) << "node_size = " << node_size;
+    for (uint64_t i = 0; i < feature_size; i++) {
+      VLOG(1) << "feature_list[" << i << "] = " << feature_list[i];
+    }
+    for (uint64_t i = 0; i < node_size; i++) {
+      VLOG(1) << "node_id[" << node_list[i].node_id
+              << "] feature_size = " << node_list[i].feature_size;
+      std::string str;
+      int offset = node_list[i].feature_offset;
+      for (uint64_t j = 0; j < node_list[i].feature_size; j++) {
+        if (j > 0) str += ",";
+        str += std::to_string(slot_id_list[j + offset]);
+        str += ":";
+        str += std::to_string(feature_list[j + offset]);
+      }
+      VLOG(1) << str;
+    }
+  }
+};  // end of struct GpuPsCommGraphFea
+
+}  // end of namespace framework
+}  // end of namespace paddle
 #endif

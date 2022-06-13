@@ -18,7 +18,12 @@
 #include <memory>
 #include <sstream>
 #include <vector>
+#include <set>
+#include "glog/logging.h"
 #include "paddle/fluid/distributed/ps/table/graph/graph_weighted_sampler.h"
+#include "paddle/fluid/string/string_helper.h"
+#include "paddle/phi/core/enforce.h"
+
 namespace paddle {
 namespace distributed {
 
@@ -29,6 +34,7 @@ class Node {
   virtual ~Node() {}
   static int id_size, int_size, weight_size;
   uint64_t get_id() { return id; }
+  int64_t get_py_id() { return (int64_t)id; }
   void set_id(uint64_t id) { this->id = id; }
 
   virtual void build_edges(bool is_weighted) {}
@@ -45,7 +51,13 @@ class Node {
   virtual void to_buffer(char *buffer, bool need_feature);
   virtual void recover_from_buffer(char *buffer);
   virtual std::string get_feature(int idx) { return std::string(""); }
-  virtual void set_feature(int idx, std::string str) {}
+  virtual int get_feature_ids(std::set<uint64_t> *res) const {
+    return 0;
+  }
+  virtual int get_feature_ids(int slot_idx, std::vector<uint64_t> *res) const {
+    return 0;
+  }
+  virtual void set_feature(int idx, const std::string& str) {}
   virtual void set_feature_size(int size) {}
   virtual int get_feature_size() { return 0; }
   virtual size_t get_neighbor_size() { return 0; }
@@ -94,7 +106,51 @@ class FeatureNode : public Node {
     }
   }
 
-  virtual void set_feature(int idx, std::string str) {
+  virtual int get_feature_ids(std::set<uint64_t> *res) const {
+    PADDLE_ENFORCE_NOT_NULL(res);
+    errno = 0;
+    for (auto& feature_item: feature) {
+      const char *feat_str = feature_item.c_str();
+      auto fields = paddle::string::split_string<std::string>(feat_str, " ");
+      char *head_ptr = NULL;
+      for (auto &field : fields) {
+        PADDLE_ENFORCE_EQ(field.empty(), false);
+        uint64_t feasign = strtoull(field.c_str(), &head_ptr, 10);
+        PADDLE_ENFORCE_EQ(field.c_str() + field.length(), head_ptr);
+        res->insert(feasign);
+      }
+    }
+    PADDLE_ENFORCE_EQ(errno, 0);
+    return 0;
+  }
+
+  virtual int get_feature_ids(int slot_idx, std::vector<uint64_t> *res) const {
+    PADDLE_ENFORCE_NOT_NULL(res);
+    res->clear();
+    errno = 0;
+    if (slot_idx < (int)this->feature.size()) {
+      const char *feat_str = this->feature[slot_idx].c_str();
+      auto fields = paddle::string::split_string<std::string>(feat_str, " ");
+      char *head_ptr = NULL;
+      for (auto &field : fields) {
+        PADDLE_ENFORCE_EQ(field.empty(), false);
+        uint64_t feasign = strtoull(field.c_str(), &head_ptr, 10);
+        PADDLE_ENFORCE_EQ(field.c_str() + field.length(), head_ptr);
+        res->push_back(feasign);
+      }
+    }
+    PADDLE_ENFORCE_EQ(errno, 0);
+    return 0;
+  }
+
+  virtual std::string* mutable_feature(int idx) {
+    if (idx >= (int)this->feature.size()) {
+      this->feature.resize(idx + 1);
+    }
+    return &(this->feature[idx]);
+  }
+
+  virtual void set_feature(int idx, const std::string& str) {
     if (idx >= (int)this->feature.size()) {
       this->feature.resize(idx + 1);
     }
@@ -117,6 +173,22 @@ class FeatureNode : public Node {
   }
 
   template <typename T>
+  static void parse_value_to_bytes(std::vector<std::string>::iterator feat_str_begin,
+                                std::vector<std::string>::iterator feat_str_end,
+                                std::string* output) {
+    T v;
+    size_t feat_str_size = feat_str_end - feat_str_begin;
+    size_t Tsize = sizeof(T) * feat_str_size;
+    char buffer[Tsize] = {'\0'};
+    for (size_t i = 0; i < feat_str_size; i++) {
+      std::stringstream ss(*(feat_str_begin + i));
+      ss >> v;
+      std::memcpy(buffer + sizeof(T) * i, (char *)&v, sizeof(T));
+    }
+    output->assign(buffer);
+  }
+
+  template <typename T>
   static std::vector<T> parse_bytes_to_array(std::string feat_str) {
     T v;
     std::vector<T> out;
@@ -130,8 +202,9 @@ class FeatureNode : public Node {
     return out;
   }
 
- protected:
+protected:
   std::vector<std::string> feature;
 };
+
 }  // namespace distributed
 }  // namespace paddle

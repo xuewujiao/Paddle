@@ -25,6 +25,7 @@
 
 #ifdef PADDLE_WITH_PSCORE
 #include "paddle/fluid/distributed/ps/wrapper/fleet.h"
+#include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_wrapper.h"
 #endif
 
 #if defined _WIN32 || defined __APPLE__
@@ -118,6 +119,24 @@ template <typename T>
 void DatasetImpl<T>::SetDataFeedDesc(const std::string& data_feed_desc_str) {
   google::protobuf::TextFormat::ParseFromString(data_feed_desc_str,
                                                 &data_feed_desc_);
+}
+
+template <typename T>
+std::vector<std::string> DatasetImpl<T>::GetSlots() {
+  auto multi_slot_desc = data_feed_desc_.multi_slot_desc();
+  use_slots_.clear();
+  for (int i = 0; i < multi_slot_desc.slots_size(); ++i) {
+    const auto& slot = multi_slot_desc.slots(i);
+    if (slot.type() == "uint64" || slot.type() == "uint32") {
+      use_slots_.push_back(slot.name());
+    }
+  }
+  std::cout << "dataset use slots: ";
+  for (auto s : use_slots_) {
+    std::cout << s << " | ";
+  }
+  std::cout << " end " << std::endl;
+  return use_slots_;
 }
 
 template <typename T>
@@ -302,12 +321,11 @@ static int compute_thread_batch_nccl(
   thread_avg_batch_num = static_cast<int>(offset.size() / thr_num);
 #ifdef PADDLE_WITH_GLOO
   auto gloo_wrapper = paddle::framework::GlooWrapper::GetInstance();
-  if (!gloo_wrapper->IsInitialized()) {
-    VLOG(0) << "GLOO is not inited";
-    gloo_wrapper->Init();
-  }
-
   if (gloo_wrapper->Size() > 1) {
+    if (!gloo_wrapper->IsInitialized()) {
+      VLOG(0) << "GLOO is not inited";
+      gloo_wrapper->Init();
+    }
     // adjust batch num per thread for NCCL
     std::vector<int> thread_avg_batch_num_vec(1, thread_avg_batch_num);
     std::vector<int64_t> total_instance_num_vec(1, total_instance_num);
@@ -409,6 +427,18 @@ void MultiSlotDataset::PrepareTrain() {
   return;
 }
 
+template <typename T>
+void DatasetImpl<T>::SetGraphDeviceKeys(
+    const std::vector<uint64_t>& h_device_keys) {
+  //  for (size_t i = 0; i < gpu_graph_device_keys_.size(); i++) {
+  //    gpu_graph_device_keys_[i].clear();
+  //  }
+  //  size_t device_num = gpu_graph_device_keys_.size();
+  //  for (size_t i = 0; i < h_device_keys.size(); i++) {
+  //    int shard = h_device_keys[i] % device_num;
+  //    gpu_graph_device_keys_[shard].push_back(h_device_keys[i]);
+  //  }
+}
 // load data into memory, Dataset hold this memory,
 // which will later be fed into readers' channel
 template <typename T>
@@ -417,12 +447,70 @@ void DatasetImpl<T>::LoadIntoMemory() {
   platform::Timer timeline;
   timeline.Start();
   std::vector<std::thread> load_threads;
-  for (int64_t i = 0; i < thread_num_; ++i) {
-    load_threads.push_back(std::thread(
-        &paddle::framework::DataFeed::LoadIntoMemory, readers_[i].get()));
-  }
-  for (std::thread& t : load_threads) {
-    t.join();
+  if (gpu_graph_mode_) {
+    VLOG(0) << "in gpu_graph_mode";
+    graph_all_type_total_keys_.clear();
+    auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
+    auto node_to_id = gpu_graph_ptr->feature_to_id;
+    auto edge_to_id = gpu_graph_ptr->edge_to_id;
+    graph_all_type_total_keys_.resize(node_to_id.size());
+    int cnt = 0;
+    for (auto& iter : node_to_id) {
+      int node_idx = iter.second;
+      auto gpu_graph_device_keys =
+          gpu_graph_ptr->get_all_id(1, node_idx, thread_num_);
+      auto& type_total_key = graph_all_type_total_keys_[cnt];
+      type_total_key.resize(thread_num_);
+      for (size_t i = 0; i < gpu_graph_device_keys.size(); i++) {
+        VLOG(2) << "node type: " << node_idx << ", gpu_graph_device_keys[" << i
+                << "] = " << gpu_graph_device_keys[i].size();
+        for (size_t j = 0; j < gpu_graph_device_keys[i].size(); j++) {
+          gpu_graph_total_keys_.push_back(gpu_graph_device_keys[i][j]);
+          type_total_key[i].push_back(gpu_graph_device_keys[i][j]);
+        }
+      }
+      for (size_t i = 0; i < readers_.size(); i++) {
+        readers_[i]->SetDeviceKeys(&type_total_key[i], node_idx);
+        readers_[i]->SetGpuGraphMode(gpu_graph_mode_);
+      }
+      cnt++;
+    }
+    //TODO(huwei02): open it when slot fea ready
+    //for (auto& iter : node_to_id) {
+    //  int node_idx = iter.second;
+    //  auto gpu_graph_device_keys =
+    //      gpu_graph_ptr->get_all_feature_ids(1, node_idx, thread_num_);
+    //  for (size_t i = 0; i < gpu_graph_device_keys.size(); i++) {
+    //    VLOG(2) << "node type: " << node_idx << ", gpu_graph_device_keys[" << i
+    //            << "] = " << gpu_graph_device_keys[i].size();
+    //    for (size_t j = 0; j < gpu_graph_device_keys[i].size(); j++) {
+    //      gpu_graph_total_keys_.push_back(gpu_graph_device_keys[i][j]);
+    //    }
+    //  }
+    //}
+
+    // FIX: trick for iterate edge table
+    for (auto& iter : edge_to_id) {
+      int edge_idx = iter.second;
+      auto gpu_graph_device_keys =
+          gpu_graph_ptr->get_all_id(0, edge_idx, thread_num_);
+      for (size_t i = 0; i < gpu_graph_device_keys.size(); i++) {
+        VLOG(1) << "edge type: " << edge_idx << ", gpu_graph_device_keys[" << i
+                << "] = " << gpu_graph_device_keys[i].size();
+        for (size_t j = 0; j < gpu_graph_device_keys[i].size(); j++) {
+          gpu_graph_total_keys_.push_back(gpu_graph_device_keys[i][j]);
+        }
+      }
+    }
+
+  } else {
+    for (int64_t i = 0; i < thread_num_; ++i) {
+      load_threads.push_back(std::thread(
+          &paddle::framework::DataFeed::LoadIntoMemory, readers_[i].get()));
+    }
+    for (std::thread& t : load_threads) {
+      t.join();
+    }
   }
   input_channel_->Close();
   int64_t in_chan_size = input_channel_->Size();
