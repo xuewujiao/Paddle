@@ -279,7 +279,7 @@ PADDLE_DEFINE_EXPORTED_bool(
     "gradient sent to the server is the sum of the gradients "
     "calculated by each thread if optimizer is sgd");
 /**
- * Distributed related FLAG
+ * D
  * Name: FLAGS_communicator_send_queue_size
  * Since Version: 1.5.0
  * Value Range: int32, default=20
@@ -712,6 +712,19 @@ PADDLE_DEFINE_EXPORTED_int32(get_host_by_name_time, 120,
 PADDLE_DEFINE_EXPORTED_bool(
     apply_pass_to_program, false,
     "It controls whether to apply IR pass to program when using Fleet APIs");
+
+/**
+ * Distributed related FLAG
+ * Name: FLAGS_graph_load_in_parallel
+ * Since Version: 2.2.0
+ * Value Range: bool, default=false
+ * Example:
+ * Note: Control whether load graph node and edge with multi threads parallely
+ *       If it is not set, load graph data with one thread
+ */
+PADDLE_DEFINE_EXPORTED_bool(
+    graph_load_in_parallel, false,
+    "It controls whether load graph node and edge with mutli threads parallely.");
 
 /**
  * KP kernel related FLAG
