@@ -1083,7 +1083,6 @@ int32_t GraphTable::load_nodes(const std::string &path, std::string node_type) {
   if (FLAGS_graph_load_in_parallel) {
     std::vector<std::future<int>> tasks;
     for (size_t i = 0; i < paths.size(); i++) {
-      //tasks.push_back(load_node_edge_task_pool[i % load_thread_num]->enqueue(
       tasks.push_back(load_node_edge_task_pool->enqueue(
           [&, i, idx, this]() -> int {
         std::ifstream file(paths[i]);
@@ -1163,19 +1162,6 @@ int32_t GraphTable::load_nodes(const std::string &path, std::string node_type) {
           }
         }
         valid_count++;
-        // auto node = shards[index]->add_feature_node(id);
-        //auto node = feature_shards[idx][index]->add_feature_node(id);
-        //node->set_feature_size(feat_name[idx].size());
-        //for (size_t slice = 2; slice < values.size(); slice++) {
-        //  auto feat = this->parse_feature(idx, values[slice]);
-        //  if (feat.first >= 0) {
-        //    node->set_feature(feat.first, feat.second);
-        //  } else {
-        //    VLOG(4) << "Node feature:  " << values[slice]
-        //          << " not in feature_map.";
-        //  }
-        //}
-        //valid_count++;
       }
       VLOG(2) << "End GraphTable::load_nodes(), node_type[" << node_type
               << "] node_num[" << valid_count << "]";
@@ -1225,7 +1211,6 @@ int32_t GraphTable::load_edges(const std::string &path, bool reverse_edge,
   if (FLAGS_graph_load_in_parallel) {
     std::vector<std::future<int>> tasks;
     for (int i = 0; i < paths.size(); i++) {
-      //tasks.push_back(load_node_edge_task_pool[i % load_thread_num]->enqueue(
       tasks.push_back(load_node_edge_task_pool->enqueue(
           [&, i, idx, this]() -> int {
         uint64_t local_count = 0;
@@ -1888,13 +1873,8 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
     _shards_task_pool[i].reset(new ::ThreadPool(1));
     _shards_task_rng_pool.push_back(paddle::framework::GetCPURandomEngine(0));
   }
-  
   load_node_edge_task_pool.reset(new ::ThreadPool(load_thread_num));
   
-  //load_node_edge_task_pool.resize(load_thread_num);
-  //for (size_t i = 0; i< load_node_edge_task_pool.size(); i++) {
-  //  load_node_edge_task_pool[i].reset(new ::ThreadPool(1));
-  //}
   auto graph_feature = graph.graph_feature();
   auto node_types = graph.node_types();
   auto edge_types = graph.edge_types();

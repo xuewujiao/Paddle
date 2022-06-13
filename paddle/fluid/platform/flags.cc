@@ -279,7 +279,7 @@ PADDLE_DEFINE_EXPORTED_bool(
     "gradient sent to the server is the sum of the gradients "
     "calculated by each thread if optimizer is sgd");
 /**
- * D
+ * Distributed related FLAG
  * Name: FLAGS_communicator_send_queue_size
  * Since Version: 1.5.0
  * Value Range: int32, default=20
