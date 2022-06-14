@@ -185,6 +185,10 @@ void GraphGpuWrapper::init_service() {
   graph_table = (char *)g;
 }
 
+void GraphGpuWrapper::finalize() {
+  ((GpuPsGraphTable *)graph_table)->show_table_collisions();
+}
+
 void GraphGpuWrapper::upload_batch(int idx,
                                    std::vector<std::vector<uint64_t>> &ids) {
   debug_gpu_memory_info("upload_batch node start");
@@ -230,9 +234,8 @@ NeighborSampleResult GraphGpuWrapper::graph_neighbor_sample_v3(
       ->graph_neighbor_sample_v3(q, cpu_switch);
 }
 
-int GraphGpuWrapper::get_feature_of_nodes(int gpu_id,
-        std::shared_ptr<phi::Allocation> d_walk,
-        std::shared_ptr<phi::Allocation> d_offset, uint32_t size, int slot_num) const {
+int GraphGpuWrapper::get_feature_of_nodes(int gpu_id, int64_t* d_walk,
+                            int64_t* d_offset, uint32_t size, int slot_num) {
   platform::CUDADeviceGuard guard(gpu_id);
   PADDLE_ENFORCE_NOT_NULL(graph_table);
   return ((GpuPsGraphTable *)graph_table)

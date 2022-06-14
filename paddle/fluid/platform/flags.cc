@@ -65,6 +65,19 @@ PADDLE_DEFINE_EXPORTED_bool(
     "Checking whether operator produce NAN/INF or not. It will be "
     "extremely slow so please use this flag wisely.");
 
+/**
+ * Operator related FLAG
+ * Name: FLAGS_check_nan_inf
+ * Since Version: 0.13.0
+ * Value Range: bool, default=false
+ * Example:
+ * Note: Used to debug. Checking whether operator produce NAN/INF or not.
+ */
+PADDLE_DEFINE_EXPORTED_bool(
+    enable_opt_get_features, false,
+    "Checking whether operator produce NAN/INF or not. It will be "
+    "extremely slow so please use this flag wisely.");
+
 // NOTE(zhiqiu): better to share the flags, otherwise we will have too many
 // flags.
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP) || \
@@ -824,7 +837,13 @@ DEFINE_bool(enable_slotpool_wait_release, false,
 DEFINE_bool(enable_slotrecord_reset_shrink, false,
             "enable slotrecord obejct reset shrink memory, default false");
 DEFINE_bool(enable_ins_parser_file, false,
-            "enable parser ins file , default false");
+            "enable parser ins file, default false");
+PADDLE_DEFINE_EXPORTED_bool(
+    gpugraph_enable_hbm_table_collision_stat, false,
+    "enable hash collisions stat for hbm table, default false");
+PADDLE_DEFINE_EXPORTED_double(
+    gpugraph_hbm_table_load_factor, 0.75,
+    "the load factor of hbm table, default 0.75");
 
 /**
  * ProcessGroupNCCL related FLAG
