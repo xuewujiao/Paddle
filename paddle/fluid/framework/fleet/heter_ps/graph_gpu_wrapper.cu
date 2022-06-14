@@ -34,11 +34,25 @@ std::vector<std::vector<uint64_t>> GraphGpuWrapper::get_all_id(int type,
       ->cpu_graph_table_->get_all_id(type, slice_num);
 }
 
+std::vector<std::vector<uint64_t>> GraphGpuWrapper::get_all_neighbor_id(int type,
+                                                                        int slice_num) {
+  return ((GpuPsGraphTable *)graph_table)
+      ->cpu_graph_table_->get_all_neighbor_id(type, slice_num);
+}
+
 std::vector<std::vector<uint64_t>> GraphGpuWrapper::get_all_id(int type,
                                                                int idx,
                                                                int slice_num) {
   return ((GpuPsGraphTable *)graph_table)
       ->cpu_graph_table_->get_all_id(type, idx, slice_num);
+}
+
+
+std::vector<std::vector<uint64_t>> GraphGpuWrapper::get_all_neighbor_id(int type,
+                                                                        int idx,
+                                                                        int slice_num) {
+  return ((GpuPsGraphTable *)graph_table)
+      ->cpu_graph_table_->get_all_neighbor_id(type, idx, slice_num);
 }
 
 int GraphGpuWrapper::get_all_feature_ids(int type, int idx, int slice_num,
@@ -194,6 +208,7 @@ void GraphGpuWrapper::upload_batch(int idx,
   debug_gpu_memory_info("upload_batch node start");
   GpuPsGraphTable *g = (GpuPsGraphTable *)graph_table;
   for (int i = 0; i < ids.size(); i++) {
+    VLOG(0) << "ith ids size is: " << ids[i].size();
     GpuPsCommGraph sub_graph =
         g->cpu_graph_table_->make_gpu_ps_graph(idx, ids[i]);
     // sub_graph.display_on_cpu();
