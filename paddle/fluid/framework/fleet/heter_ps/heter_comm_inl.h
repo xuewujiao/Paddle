@@ -972,37 +972,35 @@ void HeterComm<KeyType, ValType, GradType>::push_sparse(int dev_num,
         ptr_tables_[i]->update(reinterpret_cast<KeyType*>(node.key_storage),
                                node.val_storage, h_right[i] - h_left[i] + 1,
                                sgd, resource_->remote_stream(i, dev_num));
+      } else {
+        ptr_tables_[i]->update(d_shard_keys_ptr + h_left[i],
+                                 reinterpret_cast<char*>(d_shard_grads_ptr) +
+                                     grad_value_size * h_left[i],
+                                 h_right[i] - h_left[i] + 1, sgd,
+                                 resource_->remote_stream(i, dev_num));
+        }
+    }
+  }
+
+  for (int i = 0; i < total_device; ++i) {
+    sync_stream(resource_->remote_stream(i, dev_num));
+    if (h_left[i] != -1) {
+      if (!multi_mf_dim_) {
+        tables_[i]->rwlock_->UNLock();
+      } else {
+        ptr_tables_[i]->rwlock_->UNLock();
       }
     }
-    else {
-      ptr_tables_[i]->update(d_shard_keys_ptr + h_left[i],
-                             reinterpret_cast<char*>(d_shard_grads_ptr) +
-                                 grad_value_size * h_left[i],
-                             h_right[i] - h_left[i] + 1, sgd,
-                             resource_->remote_stream(i, dev_num));
+  }
+  
+  if (!direct_access_) {
+    for (int i = 0; i < total_device; ++i) {
+      if (h_left[i] == -1 || h_right[i] == -1) {
+        continue;
+      }
+      destroy_storage(dev_num, i);
     }
   }
-}
-
-for (int i = 0; i < total_device; ++i) {
-  sync_stream(resource_->remote_stream(i, dev_num));
-  if (h_left[i] != -1) {
-    if (!multi_mf_dim_) {
-      tables_[i]->rwlock_->UNLock();
-    } else {
-      ptr_tables_[i]->rwlock_->UNLock();
-    }
-  }
-}
-
-if (!direct_access_) {
-  for (int i = 0; i < total_device; ++i) {
-    if (h_left[i] == -1 || h_right[i] == -1) {
-      continue;
-    }
-    destroy_storage(dev_num, i);
-  }
-}
 }
 
 #elif defined(PADDLE_WITH_XPU_KP)
