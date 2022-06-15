@@ -472,14 +472,6 @@ void DatasetImpl<T>::LoadIntoMemory() {
           type_total_key[i].push_back(gpu_graph_device_keys[i][j]);
         }
       }
-      //if (FLAGS_graph_get_neighbor_id) {
-      //  auto gpu_graph_neighbor_keys = gpu_graph_ptr->get_all_neighbor_id(1, node_idx, thread_num_);
-      //  for (size_t i = 0; i < gpu_graph_neighbor_keys.size(); i++) {
-      //    for (size_t k = 0; k < gpu_graph_neighbor_keys[i].size(); k++) {
-      //      gpu_graph_total_keys_.push_back(gpu_graph_neighbor_keys[i][k]);
-      //    }
-      //  }
-      //}
 
       for (size_t i = 0; i < readers_.size(); i++) {
         readers_[i]->SetDeviceKeys(&type_total_key[i], node_idx);
