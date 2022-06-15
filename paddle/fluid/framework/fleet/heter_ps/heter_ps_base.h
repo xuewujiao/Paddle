@@ -33,8 +33,6 @@ class HeterPsBase {
 
   virtual void pull_sparse(int num, FeatureKey* d_keys, float* d_vals,
                            size_t len) = 0;
-  // virtual void build_ps(int num, FeatureKey* h_keys, float* h_vals,
-  //                       size_t len, size_t chunk_size, int stream_num) = 0;
   virtual void build_ps(int num, FeatureKey* h_keys, char* pool, size_t len,
                         size_t feature_value_size, size_t chunk_size,
                         int stream_num) = 0;

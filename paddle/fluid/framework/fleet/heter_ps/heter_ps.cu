@@ -45,11 +45,6 @@ void HeterPs::pull_sparse(int num, FeatureKey* d_keys, float* d_vals,
   comm_->pull_sparse(num, d_keys, d_vals, len);
 }
 
-// void HeterPs::build_ps(int num, FeatureKey* h_keys, float* h_vals,
-//                        size_t len, size_t chunk_size, int stream_num) {
-//   comm_->build_ps(num, h_keys, h_vals, len, chunk_size, stream_num);
-// }
-
 void HeterPs::build_ps(int num, FeatureKey* h_keys, char* pool, size_t len,
                        size_t feature_value_size, size_t chunk_size,
                        int stream_num) {
@@ -79,7 +74,7 @@ void HeterPs::push_sparse(int num, FeatureKey* d_keys,
     auto optimizer = SparseAdamOptimizer(feature_value_accessor_);
     VLOG(0) << "INTO push_sparse SparseAdamOptimizer EmbedDim():" << optimizer.EmbedDim();
     comm_->push_sparse(num, d_keys, d_grads, len, optimizer);
-  } else if (optimizer_type_ == 4) { //sharedadam
+  } else if (optimizer_type_ == 4) { //shared_adam
     auto optimizer = SparseAdamSharedOptimizer(feature_value_accessor_);
     comm_->push_sparse(num, d_keys, d_grads, len, optimizer);
   } else {

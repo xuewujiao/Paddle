@@ -114,11 +114,6 @@ __global__ void dy_mf_search_kernel(Table* table,
         input[feature_value_accessor.common_feature_value.DeltaScoreIndex()];
       cur[feature_value_accessor.common_feature_value.EmbedWIndex()] =
         input[feature_value_accessor.common_feature_value.EmbedWIndex()];
-      printf("dy_mf_search_kernel table slot: %f; show: %f; click: %f; lr: %f", 
-        cur[feature_value_accessor.common_feature_value.SlotIndex()],
-        cur[feature_value_accessor.common_feature_value.ShowIndex()],
-        cur[feature_value_accessor.common_feature_value.ClickIndex()],
-        cur[feature_value_accessor.common_feature_value.EmbedWIndex()]);
       for (int i = 0; i < feature_value_accessor.common_feature_value.EmbedDim(); i++) {
         cur[feature_value_accessor.common_feature_value.EmbedG2SumIndex() + i] = 
           input[feature_value_accessor.common_feature_value.EmbedG2SumIndex() + i];
@@ -304,27 +299,6 @@ void HashTable<KeyType, ValType>::dump_to_cpu(int devid, StreamType stream) {
         }
       }
 #endif
-// #ifdef PADDLE_WITH_PSCORE
-//       auto* downpour_value =
-//           (paddle::distributed::FixedFeatureValue*)(gpu_val.cpu_ptr);
-//       int downpour_value_size = downpour_value->size();
-//       if (gpu_val.mf_size > 0 && downpour_value_size == 7) {
-//         downpour_value->resize(gpu_val.mf_size + downpour_value_size);
-//       }
-//       float* cpu_val = downpour_value->data();
-//       // cpu_val[0] = 0;
-//       cpu_val[2] = gpu_val.delta_score;
-//       cpu_val[3] = gpu_val.show;
-//       cpu_val[4] = gpu_val.clk;
-//       cpu_val[5] = gpu_val.lr;
-//       cpu_val[6] = gpu_val.lr_g2sum;
-//       cpu_val[0] = gpu_val.slot;
-//       if (gpu_val.mf_size > 0) {
-//         for (int x = 0; x < gpu_val.mf_size; x++) {
-//           cpu_val[x + 7] = gpu_val.mf[x];
-//         }
-//       }
-// #endif
     }
   };
 
@@ -445,26 +419,6 @@ template void HashTable<long, unsigned int>::insert<cudaStream_t>(
 template void HashTable<unsigned long, float*>::
     dump_to_cpu<cudaStream_t>(int devid, cudaStream_t stream);
 
-// template void HashTable<unsigned long, paddle::framework::FeatureValue>::update<
-//     paddle::framework::FeaturePushValue,
-//     Optimizer,
-//     cudaStream_t>(const unsigned long* d_keys,
-//                   const paddle::framework::FeaturePushValue* d_grads,
-//                   size_t len, Optimizer sgd,
-//                   cudaStream_t stream);
-
-// template void
-// HashTable<unsigned long, float>::update<SparseAdagradOptimizer, cudaStream_t>(const unsigned long* d_keys, const char* d_grads, size_t len,
-//                   SparseAdagradOptimizer sgd,
-//                   cudaStream_t stream);
-// template void
-// HashTable<unsigned long, float>::update<SparseAdamOptimizer, cudaStream_t>(const unsigned long* d_keys, const char* d_grads, size_t len,
-//                   SparseAdamOptimizer sgd,
-//                   cudaStream_t stream);
-// template void
-// HashTable<unsigned long, float>::update<SparseAdamSharedOptimizer, cudaStream_t>(const unsigned long* d_keys, const char* d_grads, size_t len,
-//                   SparseAdamSharedOptimizer sgd,
-//                   cudaStream_t stream);
 template void
 HashTable<unsigned long, float*>::update<SparseAdagradOptimizer, cudaStream_t>(const unsigned long* d_keys, const char* d_grads, size_t len,
                   SparseAdagradOptimizer sgd,

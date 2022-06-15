@@ -820,26 +820,10 @@ void HeterComm<KeyType, ValType, GradType>::pull_sparse(int num,
     sync_stream(node.out_stream);
   }
 
-  // char* tmp_mem = (char*)malloc(len * val_type_size);
-  // cudaMemcpy(tmp_mem, reinterpret_cast<char*>(d_shard_vals_ptr), len * val_type_size,
-  //             cudaMemcpyDeviceToHost);
-  // for (int i =0 ; i < 20; i++){
-  //     float* val = (float*)(void*)&tmp_mem[(i)*val_type_size];
-  //     VLOG(0) << "pullsparse walk_to_src cpu: "<< i << " : "<< feature_value_accessor_.ParseToString(val, feature_value_accessor_.GetAccessorInfo().dim);
-  // }
-  
   heter_comm_kernel_->dy_mf_fill_dvals(d_shard_vals_ptr, d_vals, d_idx_ptr, len,
                                        val_type_size, stream);
 
   sync_stream(stream);
-
-  // char* tmp_mem2 = (char*)malloc(len * val_type_size);
-  // cudaMemcpy(tmp_mem2, reinterpret_cast<char*>(d_shard_vals_ptr), len * val_type_size,
-  //             cudaMemcpyDeviceToHost);
-  // for (int i =0 ; i < 20; i++){
-  //     float* val = (float*)(void*)&tmp_mem2[(i)*val_type_size];
-  //     VLOG(0) << "pullsparse walk_to_src fill_dvals cpu: "<< i << " : "<< feature_value_accessor_.ParseToString(val, feature_value_accessor_.GetAccessorInfo().dim);
-  // }
 
   for (int i = 0; i < total_device; ++i) {
     if (h_left[i] == -1 || h_right[i] == -1) {

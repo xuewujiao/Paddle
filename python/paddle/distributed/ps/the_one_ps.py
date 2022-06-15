@@ -192,7 +192,7 @@ class Accessor:
                     sgd_param.naive.initial_range = 0.0001
                 if len(sgd_param.naive.weight_bounds) == 0:
                     sgd_param.naive.weight_bounds.extend([-10.0, 10.0])
-            if sgd_param.name == "SparseAdamSGDRule":
+            if sgd_param.name == "SparseAdamSGDRule" or sgd_param.name == "SparseSharedAdamSGDRule":
                 if not sgd_param.adam.HasField("learning_rate"):
                     sgd_param.adam.learning_rate = 0.001
                 if not sgd_param.adam.HasField("initial_range"):
@@ -582,7 +582,6 @@ class SparseTable(Table):
         print('new table_name: {}'.format(self.common.table_name))
         all_table_proto = self.context[
             "user_defined_strategy"].sparse_table_configs
-        print("all_table_proto:", all_table_proto)
         usr_table_proto = all_table_proto.add()
         for proto in all_table_proto:
             if proto.table_name == self.common.table_name:
@@ -605,8 +604,6 @@ class SparseTable(Table):
         # table_proto.accessor = usr_table_proto.accessor
         table_proto.accessor.ParseFromString(
             usr_table_proto.accessor.SerializeToString())
-        # table_proto.accessor.CopyFrom(usr_table_proto.accessor)
-        print("usr_table_proto.accessor.SerializeToString():", usr_table_proto.accessor.SerializeToString())
         print("====table_proto:", table_proto)
         self.accessor._set(table_proto.accessor, self.common.table_name,
                            ctx.program_id(), self.context)
@@ -937,7 +934,7 @@ class TheOnePSRuntime(RuntimeBase):
 
         proto_txt = worker_desc
         debug = bool(int(os.getenv("PSERVER_DEBUG", "0")))
-        if True:
+        if debug:
             print("worker: \n{}".format(proto_txt))
             print("communicator send_ctx:")
             for key in send_ctx:
@@ -1061,8 +1058,8 @@ class TheOnePSRuntime(RuntimeBase):
             trainers += len(self.role_maker._get_heter_worker_endpoints())
 
         # debug = bool(int(os.getenv("PSERVER_DEBUG", "0")))
-        if True:
-            print("server: \n{}".format(server_desc))
+        # if debug:
+        #     print("server: \n{}".format(server_desc))
 
         self._server = fluid.core.DistFleetWrapper()
         self._server.init_server(server_desc, self.string_hosts, role_id,

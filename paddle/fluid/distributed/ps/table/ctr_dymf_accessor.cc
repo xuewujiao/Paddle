@@ -50,16 +50,6 @@ int CtrDymfAccessor::Initialize() {
   return 0;
 }
 
-// int CtrDymfAccessor::InitializeDim(int embed_sgd_dim, int embedx_dim, int embedx_sgd_dim) {
-//   common_feature_value.embed_sgd_dim = embed_sgd_dim;
-//   common_feature_value.embedx_dim = embedx_dim;
-//   common_feature_value.embedx_sgd_dim = embedx_sgd_dim;
-//   VLOG(0) << " INTO CtrDymfAccessor::InitializeDim(); embed_sgd_dim:" << embed_sgd_dim
-//           << " embedx_dim:" << embedx_dim<< "  embedx_sgd_dim:" << embedx_sgd_dim;
-//   InitAccessorInfo();
-//   return 0;
-// }
-
 void CtrDymfAccessor::InitAccessorInfo() {
   _accessor_info.dim = common_feature_value.Dim();
   _accessor_info.size = common_feature_value.Size();
@@ -301,7 +291,7 @@ std::string CtrDymfAccessor::ParseToString(const float* v, int param) {
   os << v[0] << " " << v[1] << " " << v[2] << " " << v[3] << " " << v[4];
   //    << v[5] << " " << v[6];
   for (int i = common_feature_value.EmbedG2SumIndex();
-       i < common_feature_value.EmbedxWIndex(); i++) {
+       i < common_feature_value.SlotIndex(); i++) {
     os << " " << v[i];
   }
   os << " " << common_feature_value.Slot(const_cast<float*>(v)) << " "
@@ -311,8 +301,6 @@ std::string CtrDymfAccessor::ParseToString(const float* v, int param) {
   auto score = ShowClickScore(show, click);
   if (score >= _config.embedx_threshold() &&
       param > common_feature_value.EmbedxG2SumIndex()) {
-    VLOG(0) << "common_feature_value.EmbedxG2SumIndex():"
-            << common_feature_value.EmbedxG2SumIndex();
     for (auto i = common_feature_value.EmbedxG2SumIndex();
          i < common_feature_value.Dim(); ++i) {
       os << " " << v[i];

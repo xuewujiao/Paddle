@@ -44,11 +44,6 @@ void HeterPs::pull_sparse(int num, FeatureKey* d_keys, float* d_vals,
   comm_->pull_sparse(num, d_keys, d_vals, len);
 }
 
-// void HeterPs::build_ps(int num, FeatureKey* h_keys, FeatureValue* h_vals,
-//                        size_t len, size_t chunk_size, int stream_num) {
-//   comm_->build_ps(num, h_keys, h_vals, len, chunk_size, stream_num);
-// }
-
 int HeterPs::get_index_by_devid(int devid) {
   return comm_->get_index_by_devid(devid);
 }
@@ -70,7 +65,6 @@ void HeterPs::push_sparse(int num, FeatureKey* d_keys,
   comm_->push_sparse(num, d_keys, d_grads, len);
   // comm_->push_sparse_multi_node(num, d_keys, d_grads, len, opt_);
 }
-
 
 }  // end namespace framework
 }  // end namespace paddle
