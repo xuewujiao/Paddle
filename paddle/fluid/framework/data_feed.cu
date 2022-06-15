@@ -20,10 +20,13 @@ limitations under the License. */
 #include <thrust/device_ptr.h>
 #include <thrust/random.h>
 #include <thrust/shuffle.h>
+#include <sstream>
 #include "cub/cub.cuh"
 #include "paddle/fluid/framework/data_feed.h"
 #include "paddle/fluid/framework/fleet/heter_ps/gpu_graph_node.h"
 #include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_wrapper.h"
+
+DECLARE_bool(enable_opt_get_features);
 
 namespace paddle {
 namespace framework {
@@ -154,17 +157,6 @@ __global__ void GraphFillCVMKernel(int64_t *tensor, int len) {
   CUDA_KERNEL_LOOP(idx, len) { tensor[idx] = 1; }
 }
 
-__global__ void GraphFillIdKernel(int64_t *id_tensor, int64_t *walk, int *row,
-                                  int central_word, int step, int len,
-                                  int col_num) {
-  CUDA_KERNEL_LOOP(idx, len) {
-    int dst = idx * 2;
-    int src = row[idx] * col_num + central_word;
-    id_tensor[dst] = walk[src];
-    id_tensor[dst + 1] = walk[src + step];
-  }
-}
-
 int GraphDataGenerator::AcquireInstance(BufState *state) {
   //
   if (state->GetNextStep()) {
@@ -180,9 +172,108 @@ int GraphDataGenerator::AcquireInstance(BufState *state) {
   return 0;
 }
 
-int GraphDataGenerator::GenerateBatch() {
-  platform::CUDADeviceGuard guard(gpuid_);
+// TODO opt
+__global__ void GraphFillFeatureKernel(int64_t *id_tensor, int *fill_ins_num,
+                    int64_t *walk, int64_t *feature, int *row, int central_word,
+                    int step, int len, int col_num, int slot_num) {
+  __shared__ int32_t local_key[CUDA_NUM_THREADS * 16];
+  __shared__ int local_num;
+  __shared__ int global_num;
 
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (threadIdx.x == 0) {
+    local_num = 0;
+  }
+  __syncthreads();
+  if (idx < len) {
+    int src = row[idx] * col_num + central_word;
+    if (walk[src] != 0 && walk[src + step] != 0) {
+      size_t dst = atomicAdd(&local_num, 1);
+      for (int i = 0; i < slot_num; ++i) {
+        local_key[dst * 2 * slot_num + i * 2] = feature[src * slot_num + i];
+        local_key[dst * 2 * slot_num + i * 2 + 1] = feature[(src + step) * slot_num + i];
+      }
+    }
+  }
+
+  if (threadIdx.x == 0) {
+    global_num = atomicAdd(fill_ins_num, local_num);
+  }
+  __syncthreads();
+
+  if (threadIdx.x < local_num) {
+    for (int i = 0; i < slot_num; ++i) {
+      id_tensor[(global_num * 2 + 2 * threadIdx.x) * slot_num + i]
+          = local_key[(2 * threadIdx.x) * slot_num + i];
+      id_tensor[(global_num * 2 + 2 * threadIdx.x + 1) * slot_num + i] =
+          local_key[(2 * threadIdx.x + 1) * slot_num + i];
+    }
+  }
+}
+
+__global__ void GraphFillIdKernel(int64_t *id_tensor, int *fill_ins_num,
+                                  int64_t *walk, int *row, int central_word,
+                                  int step, int len, int col_num) {
+  __shared__ int64_t local_key[CUDA_NUM_THREADS * 2];
+  __shared__ int local_num;
+  __shared__ int global_num;
+
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (threadIdx.x == 0) {
+    local_num = 0;
+  }
+  __syncthreads();
+  // int dst = idx * 2;
+  // id_tensor[dst] = walk[src];
+  // id_tensor[dst + 1] = walk[src + step];
+  if (idx < len) {
+    int src = row[idx] * col_num + central_word;
+    if (walk[src] != 0 && walk[src + step] != 0) {
+      size_t dst = atomicAdd(&local_num, 1);
+      local_key[dst * 2] = walk[src];
+      local_key[dst * 2 + 1] = walk[src + step];
+    }
+  }
+
+  if (threadIdx.x == 0) {
+    global_num = atomicAdd(fill_ins_num, local_num);
+  }
+  __syncthreads();
+
+  if (threadIdx.x < local_num) {
+    id_tensor[global_num * 2 + 2 * threadIdx.x] = local_key[2 * threadIdx.x];
+    id_tensor[global_num * 2 + 2 * threadIdx.x + 1] =
+        local_key[2 * threadIdx.x + 1];
+  }
+}
+
+__global__ void GraphFillSlotKernel(int64_t *id_tensor, int64_t* feature_buf, int len,
+        int total_ins, int slot_num) {
+  CUDA_KERNEL_LOOP(idx, len) {
+    int slot_idx = idx / total_ins;
+    int ins_idx = idx % total_ins;
+    ((int64_t*)(id_tensor[slot_idx]))[ins_idx] = feature_buf[ins_idx * slot_num + slot_idx];
+  }
+}
+
+__global__ void GraphFillSlotLodKernelOpt(int64_t *id_tensor, int len, int total_ins) {
+  CUDA_KERNEL_LOOP(idx, len) {
+    int slot_idx = idx / total_ins;
+    int ins_idx = idx % total_ins;
+    ((int64_t*)(id_tensor[slot_idx]))[ins_idx] = ins_idx;
+  }
+}
+
+__global__ void GraphFillSlotLodKernel(int64_t *id_tensor, int len) {
+  CUDA_KERNEL_LOOP(idx, len) {
+    id_tensor[idx] = idx;
+  }
+}
+
+int GraphDataGenerator::FillInsBuf() {
+  if (ins_buf_pair_len_ >= batch_size_) {
+    return batch_size_;
+  }
   int total_instance = AcquireInstance(&buf_state_);
 
   VLOG(2) << "total_ins: " << total_instance;
@@ -191,16 +282,108 @@ int GraphDataGenerator::GenerateBatch() {
   if (total_instance == 0) {
     int res = FillWalkBuf(d_walk_);
     if (!res) {
-      return 0;
+      // graph iterate complete
+      return -1;
     } else {
       total_instance = buf_state_.len;
       VLOG(2) << "total_ins: " << total_instance;
       buf_state_.Debug();
-      if (total_instance == 0) {
-        return 0;
+      // if (total_instance == 0) {
+      //  return -1;
+      //}
+    }
+
+    if (!FLAGS_enable_opt_get_features && slot_num_ > 0) {
+      FillFeatureBuf(d_walk_, d_feature_);
+      if (debug_mode_) {
+        int len = buf_size_ > 5000? 5000: buf_size_;
+        uint64_t h_walk[len];
+        cudaMemcpy(h_walk, d_walk_->ptr(), len * sizeof(uint64_t),
+                cudaMemcpyDeviceToHost);
+        uint64_t h_feature[len * slot_num_];
+        cudaMemcpy(h_feature, d_feature_->ptr(), len * slot_num_ * sizeof(uint64_t),
+                cudaMemcpyDeviceToHost);
+        for(int i = 0; i < len; ++i) {
+          std::stringstream ss;
+          for (int j = 0; j < slot_num_; ++j) {
+            ss << h_feature[i * slot_num_ + j] << " ";
+          }
+          VLOG(2) << "aft FillFeatureBuf, gpu[" << gpuid_ << "] walk[" << i << "] = " << (uint64_t)h_walk[i]
+              << " feature[" << i * slot_num_ << ".." << (i + 1) * slot_num_ << "] = " << ss.str();
+        }
       }
     }
   }
+
+  int64_t *walk = reinterpret_cast<int64_t *>(d_walk_->ptr());
+  int64_t *ins_buf = reinterpret_cast<int64_t *>(d_ins_buf_->ptr());
+  int *random_row = reinterpret_cast<int *>(d_random_row_->ptr());
+  int *d_pair_num = reinterpret_cast<int *>(d_pair_num_->ptr());
+  cudaMemsetAsync(d_pair_num, 0, sizeof(int), stream_);
+  int len = buf_state_.len;
+  GraphFillIdKernel<<<GET_BLOCKS(len), CUDA_NUM_THREADS, 0, stream_>>>(
+      ins_buf + ins_buf_pair_len_ * 2, d_pair_num, walk,
+      random_row + buf_state_.cursor, buf_state_.central_word,
+      window_step_[buf_state_.step], len, walk_len_);
+  int h_pair_num;
+  cudaMemcpyAsync(&h_pair_num, d_pair_num, sizeof(int), cudaMemcpyDeviceToHost,
+                  stream_);
+
+  if (!FLAGS_enable_opt_get_features && slot_num_ > 0) {
+    int64_t *feature_buf = reinterpret_cast<int64_t *>(d_feature_buf_->ptr());
+    int64_t *feature = reinterpret_cast<int64_t *>(d_feature_->ptr());
+    cudaMemsetAsync(d_pair_num, 0, sizeof(int), stream_);
+    int len = buf_state_.len;
+    VLOG(2) << "feature_buf start[" << ins_buf_pair_len_ * 2 * slot_num_ << "] len[" << len << "]";
+    GraphFillFeatureKernel<<<GET_BLOCKS(len), CUDA_NUM_THREADS, 0, stream_>>>(
+        feature_buf + ins_buf_pair_len_ * 2 * slot_num_, d_pair_num, walk, feature,
+        random_row + buf_state_.cursor, buf_state_.central_word,
+        window_step_[buf_state_.step], len, walk_len_, slot_num_);
+  }
+
+  cudaStreamSynchronize(stream_);
+  ins_buf_pair_len_ += h_pair_num;
+
+  if (debug_mode_) {
+    int64_t *h_ins_buf = new int64_t[ins_buf_pair_len_ * 2];
+    cudaMemcpy(h_ins_buf, ins_buf, 2 * ins_buf_pair_len_ * sizeof(int64_t),
+               cudaMemcpyDeviceToHost);
+    VLOG(2) << "h_pair_num = " << h_pair_num
+            << ", ins_buf_pair_len = " << ins_buf_pair_len_;
+    for (int xx = 0; xx < 2 * ins_buf_pair_len_; xx++) {
+      VLOG(2) << "h_ins_buf[" << xx << "]: " << h_ins_buf[xx];
+    }
+    delete[] h_ins_buf;
+
+    if (!FLAGS_enable_opt_get_features && slot_num_ > 0) {
+      int64_t *feature_buf = reinterpret_cast<int64_t *>(d_feature_buf_->ptr());
+      int64_t h_feature_buf[(batch_size_ * 2 * 2) * slot_num_];
+      cudaMemcpy(h_feature_buf, feature_buf, (batch_size_ * 2 * 2) * slot_num_ * sizeof(int64_t),
+              cudaMemcpyDeviceToHost);
+      for (int xx = 0; xx < (batch_size_ * 2 * 2) * slot_num_; xx++) {
+        VLOG(2) << "h_feature_buf[" << xx << "]: " << h_feature_buf[xx];
+      }
+    }
+  }
+  return ins_buf_pair_len_;
+}
+
+
+int GraphDataGenerator::GenerateBatch() {
+  platform::CUDADeviceGuard guard(gpuid_);
+  int res = 0;
+  while (ins_buf_pair_len_ < batch_size_) {
+    res = FillInsBuf();
+    if (res == -1) {
+      if (ins_buf_pair_len_ == 0) {
+        return 0;
+      } else {
+        break;
+      }
+    }
+  }
+  int total_instance =
+      ins_buf_pair_len_ < batch_size_ ? ins_buf_pair_len_ : batch_size_;
 
   total_instance *= 2;
   id_tensor_ptr_ =
@@ -210,23 +393,116 @@ int GraphDataGenerator::GenerateBatch() {
   clk_tensor_ptr_ =
       feed_vec_[2]->mutable_data<int64_t>({total_instance}, this->place_);
 
-  int64_t *walk = reinterpret_cast<int64_t *>(d_walk_->ptr());
-  int *random_row = reinterpret_cast<int *>(d_random_row_->ptr());
-  int len = buf_state_.len;
-  GraphFillIdKernel<<<GET_BLOCKS(len), CUDA_NUM_THREADS, 0, stream_>>>(
-      id_tensor_ptr_, walk, random_row + buf_state_.cursor,
-      buf_state_.central_word, window_step_[buf_state_.step], len, walk_len_);
-  GraphFillCVMKernel<<<GET_BLOCKS(len), CUDA_NUM_THREADS, 0, stream_>>>(
-      show_tensor_ptr_, total_instance);
-  GraphFillCVMKernel<<<GET_BLOCKS(len), CUDA_NUM_THREADS, 0, stream_>>>(
-      clk_tensor_ptr_, total_instance);
+  int64_t* slot_tensor_ptr_[slot_num_];
+  int64_t* slot_lod_tensor_ptr_[slot_num_];
+  if (slot_num_ > 0) {
+    for (int i = 0; i < slot_num_; ++i) {
+      slot_tensor_ptr_[i] =
+          feed_vec_[3 + 2 * i]->mutable_data<int64_t>({total_instance, 1}, this->place_);
+      slot_lod_tensor_ptr_[i] =
+          feed_vec_[3 + 2 * i + 1]->mutable_data<int64_t>({total_instance + 1}, this->place_);
+    }
+    if (FLAGS_enable_opt_get_features) {
+      cudaMemcpyAsync(d_slot_tensor_ptr_->ptr(), slot_tensor_ptr_, sizeof(int64_t*) * slot_num_,
+                  cudaMemcpyHostToDevice, stream_);
+      cudaMemcpyAsync(d_slot_lod_tensor_ptr_->ptr(), slot_lod_tensor_ptr_, sizeof(int64_t*) * slot_num_,
+                  cudaMemcpyHostToDevice, stream_);
+    }
+  }
+
+  VLOG(2) << "total_instance: " << total_instance
+          << ", ins_buf_pair_len = " << ins_buf_pair_len_;
+  int64_t *ins_buf = reinterpret_cast<int64_t *>(d_ins_buf_->ptr());
+  int64_t *ins_cursor = ins_buf + ins_buf_pair_len_ * 2 - total_instance;
+  cudaMemcpyAsync(id_tensor_ptr_, ins_cursor, sizeof(int64_t) * total_instance,
+                  cudaMemcpyDeviceToDevice, stream_);
+
+  GraphFillCVMKernel<<<GET_BLOCKS(total_instance), CUDA_NUM_THREADS, 0,
+                       stream_>>>(show_tensor_ptr_, total_instance);
+  GraphFillCVMKernel<<<GET_BLOCKS(total_instance), CUDA_NUM_THREADS, 0,
+                       stream_>>>(clk_tensor_ptr_, total_instance);
+
+  if (slot_num_ > 0) {
+    int64_t *feature_buf = reinterpret_cast<int64_t *>(d_feature_buf_->ptr());
+    if (FLAGS_enable_opt_get_features) {
+      FillFeatureBuf(ins_cursor, feature_buf, total_instance);
+      if (debug_mode_) {
+        uint64_t h_walk[total_instance];
+        cudaMemcpy(h_walk, ins_cursor, total_instance * sizeof(uint64_t),
+                cudaMemcpyDeviceToHost);
+        uint64_t h_feature[total_instance * slot_num_];
+        cudaMemcpy(h_feature, feature_buf, total_instance * slot_num_ * sizeof(uint64_t),
+                cudaMemcpyDeviceToHost);
+        for(int i = 0; i < total_instance; ++i) {
+          std::stringstream ss;
+          for (int j = 0; j < slot_num_; ++j) {
+            ss << h_feature[i * slot_num_ + j] << " ";
+          }
+          VLOG(2) << "aft FillFeatureBuf, gpu[" << gpuid_ << "] walk[" << i << "] = " << (uint64_t)h_walk[i]
+              << " feature[" << i * slot_num_ << ".." << (i + 1) * slot_num_ << "] = " << ss.str();
+        }
+      }
+
+      GraphFillSlotKernel<<<GET_BLOCKS(total_instance * slot_num_),
+          CUDA_NUM_THREADS, 0, stream_>>>(
+              (int64_t*)d_slot_tensor_ptr_->ptr(), feature_buf,
+              total_instance * slot_num_, total_instance, slot_num_);
+      GraphFillSlotLodKernelOpt<<<GET_BLOCKS((total_instance + 1) * slot_num_),
+          CUDA_NUM_THREADS, 0, stream_>>>(
+              (int64_t*)d_slot_lod_tensor_ptr_->ptr(), (total_instance + 1) * slot_num_,
+              total_instance + 1);
+    } else { 
+      for (int i = 0; i < slot_num_; ++i) {
+        int feature_buf_offset = (ins_buf_pair_len_ * 2 - total_instance) * slot_num_ + i * 2;
+        for (int j = 0; j < total_instance; j += 2) {
+          VLOG(2) << "slot_tensor[" << i << "][" << j << "] <- feature_buf["
+              << feature_buf_offset + j * slot_num_ << "]";
+          VLOG(2) << "slot_tensor[" << i << "][" << j + 1 << "] <- feature_buf["
+              << feature_buf_offset + j * slot_num_ + 1 << "]";
+          cudaMemcpyAsync(slot_tensor_ptr_[i] + j, &feature_buf[feature_buf_offset + j * slot_num_],
+                  sizeof(int64_t) * 2, cudaMemcpyDeviceToDevice, stream_);
+        }
+        GraphFillSlotLodKernel<<<GET_BLOCKS(total_instance), CUDA_NUM_THREADS, 0, stream_>>>(
+              slot_lod_tensor_ptr_[i], total_instance + 1);
+      }
+    }
+  }
 
   offset_.clear();
   offset_.push_back(0);
   offset_.push_back(total_instance);
   LoD lod{offset_};
   feed_vec_[0]->set_lod(lod);
+  if (slot_num_ > 0) {
+    for (int i = 0; i < slot_num_; ++i) {
+      feed_vec_[3 + 2 * i]->set_lod(lod);
+    }
+  }
+
+  ins_buf_pair_len_ -= total_instance / 2;
+
   cudaStreamSynchronize(stream_);
+
+  if (debug_mode_) {
+    int64_t h_slot_tensor[slot_num_][total_instance];
+    int64_t h_slot_lod_tensor[slot_num_][total_instance + 1];
+    for (int i = 0; i < slot_num_; ++i) {
+      cudaMemcpy(h_slot_tensor[i], slot_tensor_ptr_[i], total_instance * sizeof(int64_t),
+              cudaMemcpyDeviceToHost);
+      int len = total_instance > 5000? 5000: total_instance;
+      for(int j = 0; j < len; ++j) {
+        VLOG(2) << "gpu[" << gpuid_ << "] slot_tensor[" << i <<"][" << j << "] = " << h_slot_tensor[i][j];
+      }
+
+      cudaMemcpy(h_slot_lod_tensor[i], slot_lod_tensor_ptr_[i], (total_instance + 1) * sizeof(int64_t),
+              cudaMemcpyDeviceToHost);
+      len = total_instance + 1 > 5000? 5000: total_instance + 1;
+      for(int j = 0; j < len; ++j) {
+        VLOG(2) << "gpu[" << gpuid_ << "] slot_lod_tensor[" << i <<"][" << j << "] = " << h_slot_lod_tensor[i][j];
+      }
+    }
+  }
+
   return 1;
 }
 
@@ -283,8 +559,8 @@ __global__ void GraphFillFirstStepKernel(int *prefix_sum, int *sampleidx2row,
 }
 
 // Fill sample_res to the stepth column of walk
-void GraphDataGenerator::FillOneStep(uint64_t *walk, int len,
-                                     NeighborSampleResult &sample_res,
+void GraphDataGenerator::FillOneStep(uint64_t *d_start_ids, uint64_t *walk,
+                                     int len, NeighborSampleResult &sample_res,
                                      int cur_degree, int step,
                                      int *len_per_row) {
   size_t temp_storage_bytes = 0;
@@ -310,9 +586,8 @@ void GraphDataGenerator::FillOneStep(uint64_t *walk, int len,
 
   if (step == 1) {
     GraphFillFirstStepKernel<<<GET_BLOCKS(len), CUDA_NUM_THREADS, 0, stream_>>>(
-        d_prefix_sum, d_tmp_sampleidx2row, walk, device_keys_ + cursor_, len,
-        walk_degree_, walk_len_, d_actual_sample_size, d_neighbors,
-        d_sample_keys);
+        d_prefix_sum, d_tmp_sampleidx2row, walk, d_start_ids, len, walk_degree_,
+        walk_len_, d_actual_sample_size, d_neighbors, d_sample_keys);
 
   } else {
     GraphFillSampleKeysKernel<<<GET_BLOCKS(len), CUDA_NUM_THREADS, 0,
@@ -350,6 +625,24 @@ void GraphDataGenerator::FillOneStep(uint64_t *walk, int len,
   cur_sampleidx2row_ = 1 - cur_sampleidx2row_;
 }
 
+int GraphDataGenerator::FillFeatureBuf(int64_t* d_walk, int64_t* d_feature, size_t key_num) {
+  platform::CUDADeviceGuard guard(gpuid_);
+
+  auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
+  int ret = gpu_graph_ptr->get_feature_of_nodes(gpuid_, d_walk, d_feature, key_num, slot_num_);
+  return ret;
+}
+
+int GraphDataGenerator::FillFeatureBuf(std::shared_ptr<phi::Allocation> d_walk,
+                                    std::shared_ptr<phi::Allocation> d_feature) {
+  platform::CUDADeviceGuard guard(gpuid_);
+
+  auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
+  int ret = gpu_graph_ptr->get_feature_of_nodes(gpuid_, (int64_t*)d_walk->ptr(),
+                                        (int64_t*)d_feature->ptr(), buf_size_, slot_num_);
+  return ret;
+}
+
 int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
   platform::CUDADeviceGuard guard(gpuid_);
   size_t once_max_sample_keynum = walk_degree_ * once_sample_startid_len_;
@@ -376,28 +669,56 @@ int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
                   stream_);
   int i = 0;
   int total_row = 0;
+  size_t node_type_len = first_node_type_.size();
   int remain_size =
       buf_size_ - walk_degree_ * once_sample_startid_len_ * walk_len_;
+
   while (i <= remain_size) {
-    int tmp_len = cursor_ + once_sample_startid_len_ > device_key_size_
-                      ? device_key_size_ - cursor_
+    int cur_node_idx = cursor_ % node_type_len;
+    int node_type = first_node_type_[cur_node_idx];
+    auto &path = meta_path_[cur_node_idx];
+    size_t start = node_type_start_[node_type];
+    // auto node_query_result = gpu_graph_ptr->query_node_list(
+    //    gpuid_, node_type, start, once_sample_startid_len_);
+
+    // int tmp_len = node_query_result.actual_sample_size;
+    VLOG(2) << "choose start type: " << node_type;
+    int type_index = type_to_index_[node_type];
+    size_t device_key_size = h_device_keys_[type_index]->size();
+    VLOG(2) << "type: " << node_type << " size: " << device_key_size
+            << " start: " << start;
+    uint64_t *d_type_keys =
+        reinterpret_cast<uint64_t *>(d_device_keys_[type_index]->ptr());
+    int tmp_len = start + once_sample_startid_len_ > device_key_size
+                      ? device_key_size - start
                       : once_sample_startid_len_;
+    node_type_start_[node_type] = tmp_len + start;
     if (tmp_len == 0) {
-      break;
+      finish_node_type_.insert(node_type);
+      if (finish_node_type_.size() == node_type_start_.size()) {
+        break;
+      }
+      cursor_ += 1;
+      continue;
     }
+    // if (tmp_len == 0) {
+    //  break;
+    //}
     VLOG(2) << "i = " << i << " buf_size_ = " << buf_size_
             << " tmp_len = " << tmp_len << " cursor = " << cursor_
             << " once_max_sample_keynum = " << once_max_sample_keynum;
     uint64_t *cur_walk = walk + i;
 
     NeighborSampleQuery q;
-    q.initialize(gpuid_, 0, (uint64_t)(device_keys_ + cursor_), walk_degree_,
+    q.initialize(gpuid_, path[0], (uint64_t)(d_type_keys + start), walk_degree_,
                  tmp_len);
     auto sample_res = gpu_graph_ptr->graph_neighbor_sample_v3(q, false);
 
     int step = 1;
+    VLOG(2) << "sample edge type: " << path[0] << " step: " << 1;
     jump_rows_ = sample_res.total_sample_size;
-    FillOneStep(cur_walk, tmp_len, sample_res, walk_degree_, step, len_per_row);
+    FillOneStep(d_type_keys + start, cur_walk, tmp_len, sample_res,
+                walk_degree_, step, len_per_row);
     VLOG(2) << "jump_row: " << jump_rows_;
     /////////
     if (debug_mode_) {
@@ -409,19 +730,22 @@ int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
     }
     /////////
     step++;
+    size_t path_len = path.size();
     for (; step < walk_len_; step++) {
       if (sample_res.total_sample_size == 0) {
         break;
       }
       auto sample_key_mem = sample_res.actual_val_mem;
-      int64_t *sample_keys_ptr =
-          reinterpret_cast<int64_t *>(sample_key_mem->ptr());
-      q.initialize(gpuid_, 0, (int64_t)sample_keys_ptr, 1,
+      uint64_t *sample_keys_ptr =
+          reinterpret_cast<uint64_t *>(sample_key_mem->ptr());
+      int edge_type_id = path[(step - 1) % path_len];
+      VLOG(2) << "sample edge type: " << edge_type_id << " step: " << step;
+      q.initialize(gpuid_, edge_type_id, (uint64_t)sample_keys_ptr, 1,
                    sample_res.total_sample_size);
       sample_res = gpu_graph_ptr->graph_neighbor_sample_v3(q, false);
 
-      FillOneStep(cur_walk, sample_res.total_sample_size, sample_res, 1, step,
-                  len_per_row);
+      FillOneStep(d_type_keys + start, cur_walk, sample_res.total_sample_size,
+                  sample_res, 1, step, len_per_row);
       if (debug_mode_) {
         cudaMemcpy(h_walk, walk, buf_size_ * sizeof(uint64_t),
                    cudaMemcpyDeviceToHost);
@@ -430,9 +754,10 @@ int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
         }
       }
     }
-    cursor_ += tmp_len;
+    // cursor_ += tmp_len;
     i += jump_rows_ * walk_len_;
     total_row += jump_rows_;
+    cursor_ += 1;
   }
   buf_state_.Reset(total_row);
   int *d_random_row = reinterpret_cast<int *>(d_random_row_->ptr());
@@ -453,7 +778,7 @@ int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
     for (int xx = 0; xx < total_row; xx++) {
       VLOG(2) << "h_random_row[" << xx << "]: " << h_random_row[xx];
     }
-    delete h_random_row;
+    delete[] h_random_row;
     delete[] h_walk;
     delete[] h_sample_keys;
     delete[] h_offset2idx;
@@ -462,6 +787,150 @@ int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
   }
   return total_row != 0;
 }
+
+void GraphDataGenerator::AllocResource(const paddle::platform::Place &place,
+                                       std::vector<LoDTensor *> feed_vec) {
+  place_ = place;
+  gpuid_ = place_.GetDeviceId();
+  VLOG(3) << "gpuid " << gpuid_;
+  stream_ = dynamic_cast<platform::CUDADeviceContext *>(
+                platform::DeviceContextPool::Instance().Get(place))
+                ->stream();
+  feed_vec_ = feed_vec;
+  slot_num_ = (feed_vec_.size() - 3) / 2;
+
+  // d_device_keys_.resize(h_device_keys_.size());
+  VLOG(2) << "h_device_keys size: " << h_device_keys_.size();
+
+  for (size_t i = 0; i < h_device_keys_.size(); i++) {
+    for (size_t j = 0; j < h_device_keys_[i]->size(); j++) {
+      VLOG(3) << "h_device_keys_[" << i << "][" << j
+              << "] = " << (*(h_device_keys_[i]))[j];
+    }
+    auto buf = memory::AllocShared(
+        place_, h_device_keys_[i]->size() * sizeof(uint64_t));
+    d_device_keys_.push_back(buf);
+    CUDA_CHECK(cudaMemcpyAsync(buf->ptr(), h_device_keys_[i]->data(),
+                               h_device_keys_[i]->size() * sizeof(uint64_t),
+                               cudaMemcpyHostToDevice, stream_));
+  }
+  // h_device_keys_ = h_device_keys;
+  // device_key_size_ = h_device_keys_->size();
+  // d_device_keys_ =
+  //    memory::AllocShared(place_, device_key_size_ * sizeof(int64_t));
+  // CUDA_CHECK(cudaMemcpyAsync(d_device_keys_->ptr(), h_device_keys_->data(),
+  //                           device_key_size_ * sizeof(int64_t),
+  //                           cudaMemcpyHostToDevice, stream_));
+  size_t once_max_sample_keynum = walk_degree_ * once_sample_startid_len_;
+  d_prefix_sum_ =
+      memory::AllocShared(place_, (once_max_sample_keynum + 1) * sizeof(int));
+  int *d_prefix_sum_ptr = reinterpret_cast<int *>(d_prefix_sum_->ptr());
+  cudaMemsetAsync(d_prefix_sum_ptr, 0,
+                  (once_max_sample_keynum + 1) * sizeof(int), stream_);
+  cursor_ = 0;
+  jump_rows_ = 0;
+  d_walk_ = memory::AllocShared(place_, buf_size_ * sizeof(uint64_t));
+  cudaMemsetAsync(d_walk_->ptr(), 0, buf_size_ * sizeof(uint64_t), stream_);
+  if (!FLAGS_enable_opt_get_features && slot_num_ > 0) {
+    d_feature_ = memory::AllocShared(place_, buf_size_ * slot_num_ * sizeof(uint64_t));
+    cudaMemsetAsync(d_feature_->ptr(), 0, buf_size_ * sizeof(uint64_t), stream_);
+  }
+  d_sample_keys_ =
+      memory::AllocShared(place_, once_max_sample_keynum * sizeof(uint64_t));
+
+  d_sampleidx2rows_.push_back(
+      memory::AllocShared(place_, once_max_sample_keynum * sizeof(int)));
+  d_sampleidx2rows_.push_back(
+      memory::AllocShared(place_, once_max_sample_keynum * sizeof(int)));
+  cur_sampleidx2row_ = 0;
+
+  d_len_per_row_ =
+      memory::AllocShared(place_, once_max_sample_keynum * sizeof(int));
+  for (int i = -window_; i < 0; i++) {
+    window_step_.push_back(i);
+  }
+  for (int i = 0; i < window_; i++) {
+    window_step_.push_back(i + 1);
+  }
+  buf_state_.Init(batch_size_, walk_len_, &window_step_);
+  d_random_row_ = memory::AllocShared(
+      place_,
+      (once_sample_startid_len_ * walk_degree_ * repeat_time_) * sizeof(int));
+  shuffle_seed_ = 0;
+
+  ins_buf_pair_len_ = 0;
+  d_ins_buf_ =
+      memory::AllocShared(place_, (batch_size_ * 2 * 2) * sizeof(int64_t));
+  if (slot_num_ > 0) {
+    d_feature_buf_ =
+        memory::AllocShared(place_, (batch_size_ * 2 * 2) * slot_num_ * sizeof(int64_t));
+  }
+  d_pair_num_ = memory::AllocShared(place_, sizeof(int));
+  if (FLAGS_enable_opt_get_features && slot_num_ > 0) {
+    d_slot_tensor_ptr_ = memory::AllocShared(place_, slot_num_ * sizeof(int64_t*));
+    d_slot_lod_tensor_ptr_ = memory::AllocShared(place_, slot_num_ * sizeof(int64_t*));
+  }
+
+  cudaStreamSynchronize(stream_);
+}
+
+void GraphDataGenerator::SetConfig(
+    const paddle::framework::DataFeedDesc &data_feed_desc) {
+  auto graph_config = data_feed_desc.graph_config();
+  walk_degree_ = graph_config.walk_degree();
+  walk_len_ = graph_config.walk_len();
+  window_ = graph_config.window();
+  once_sample_startid_len_ = graph_config.once_sample_startid_len();
+  debug_mode_ = graph_config.debug_mode();
+  if (debug_mode_) {
+    batch_size_ = graph_config.batch_size();
+  } else {
+    batch_size_ = once_sample_startid_len_;
+  }
+  repeat_time_ = graph_config.sample_times_one_chunk();
+  buf_size_ =
+      once_sample_startid_len_ * walk_len_ * walk_degree_ * repeat_time_;
+  VLOG(2) << "Confirm GraphConfig, walk_degree : " << walk_degree_
+          << ", walk_len : " << walk_len_ << ", window : " << window_
+          << ", once_sample_startid_len : " << once_sample_startid_len_
+          << ", sample_times_one_chunk : " << repeat_time_
+          << ", batch_size: " << batch_size_;
+  std::string first_node_type = graph_config.first_node_type();
+  std::string meta_path = graph_config.meta_path();
+  auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
+  auto edge_to_id = gpu_graph_ptr->edge_to_id;
+  auto node_to_id = gpu_graph_ptr->feature_to_id;
+  // parse first_node_type
+  auto node_types =
+      paddle::string::split_string<std::string>(first_node_type, ";");
+  VLOG(2) << "node_types: " << first_node_type;
+  finish_node_type_.clear();
+  node_type_start_.clear();
+  for (auto &type : node_types) {
+    auto iter = node_to_id.find(type);
+    PADDLE_ENFORCE_NE(
+        iter, node_to_id.end(),
+        platform::errors::NotFound("(%s) is not found in node_to_id.", type));
+    VLOG(2) << "node_to_id[" << type << "] = " << iter->second;
+    first_node_type_.push_back(iter->second);
+    node_type_start_[iter->second] = 0;
+  }
+  meta_path_.resize(first_node_type_.size());
+  auto meta_paths = paddle::string::split_string<std::string>(meta_path, ";");
+
+  for (size_t i = 0; i < meta_paths.size(); i++) {
+    auto path = meta_paths[i];
+    auto nodes = paddle::string::split_string<std::string>(path, "-");
+    for (auto &node : nodes) {
+      auto iter = edge_to_id.find(node);
+      PADDLE_ENFORCE_NE(
+          iter, edge_to_id.end(),
+          platform::errors::NotFound("(%s) is not found in edge_to_id.", node));
+      VLOG(2) << "edge_to_id[" << node << "] = " << iter->second;
+      meta_path_[i].push_back(iter->second);
+    }
+  }
+};
 
 }  // namespace framework
 }  // namespace paddle

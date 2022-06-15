@@ -31,12 +31,13 @@ class GraphGpuWrapper {
   }
   static std::shared_ptr<GraphGpuWrapper> s_instance_;
   void initialize();
+  void finalize();
   void set_device(std::vector<int> ids);
   void init_service();
   void set_up_types(std::vector<std::string>& edge_type,
                     std::vector<std::string>& node_type);
   void upload_batch(int etype_id, std::vector<std::vector<uint64_t>>& ids);
-  void upload_batch(int ntype_id, std::vector<std::vector<uint64_t>>& ids,
+  void upload_batch(std::vector<std::vector<uint64_t>>& ids,
                     int slot_num);
   void add_table_feat_conf(std::string table_name, std::string feat_name,
                            std::string feat_dtype, int feat_shape);
@@ -51,8 +52,11 @@ class GraphGpuWrapper {
   void make_complementary_graph(int idx, int64_t byte_size);
   void set_search_level(int level);
   void init_search_level(int level);
+  std::vector<std::vector<uint64_t>> get_all_id(int type, int slice_num);
   std::vector<std::vector<uint64_t>> get_all_id(int type, int idx,
                                                 int slice_num);
+  int get_all_feature_ids(int type, int idx, int slice_num,
+                        std::vector<std::vector<uint64_t>>* output);
   NodeQueryResult query_node_list(int gpu_id, int idx, int start,
                                   int query_size);
   NeighborSampleResult graph_neighbor_sample_v3(NeighborSampleQuery q,
@@ -63,6 +67,8 @@ class GraphGpuWrapper {
                                               std::vector<uint64_t>& key,
                                               int sample_size);
   void set_feature_separator(std::string ch);
+  int get_feature_of_nodes(int gpu_id, int64_t* d_walk, int64_t* d_offset,
+                        uint32_t size, int slot_num);
 
   std::unordered_map<std::string, int> edge_to_id, feature_to_id;
   std::vector<std::string> id_to_feature, id_to_edge;

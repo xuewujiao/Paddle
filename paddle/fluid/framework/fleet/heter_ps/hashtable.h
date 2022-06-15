@@ -72,6 +72,7 @@ class XPUCacheArray {
   }
 
   void print() {}
+  void print_collision(int i) {}
 
 #if defined(__xpu__)
   __device__ ValType* find(const KeyType& key) {
@@ -170,6 +171,8 @@ class HashTable {
   void set_accessor(CommonFeatureValueAccessor& accessor) {
    feature_value_accessor_ = accessor;
   }
+
+  void show_collision(int id) { return container_->print_collision(id); }
 
   std::unique_ptr<phi::RWLock> rwlock_{nullptr};
   CommonFeatureValueAccessor feature_value_accessor_;

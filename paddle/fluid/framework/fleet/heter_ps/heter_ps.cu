@@ -96,6 +96,10 @@ void HeterPs::set_accessor(CommonFeatureValueAccessor& accessor) {
   comm_->set_accessor(accessor);
 }
 
+void HeterPs::show_table_collisions() {
+  comm_->show_table_collisions();
+}
+
 }  // end namespace framework
 }  // end namespace paddle
 #endif
