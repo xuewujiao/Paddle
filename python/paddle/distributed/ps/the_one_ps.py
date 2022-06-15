@@ -601,10 +601,8 @@ class SparseTable(Table):
             warnings.warn(
                 "The accessor of sparse table is not set, use default value.")
 
-        # table_proto.accessor = usr_table_proto.accessor
         table_proto.accessor.ParseFromString(
             usr_table_proto.accessor.SerializeToString())
-        print("====table_proto:", table_proto)
         self.accessor._set(table_proto.accessor, self.common.table_name,
                            ctx.program_id(), self.context)
 
@@ -906,7 +904,6 @@ class TheOnePSRuntime(RuntimeBase):
         worker_desc = self.ps_desc_builder.build_worker_desc()
 
         if self.context['use_ps_gpu']:
-            #main_program._fleet_opt["fleet_desc"] = worker_desc()
             main_program = self.context['loss'].block.program
             if not main_program._fleet_opt:
                 main_program._fleet_opt = {}
