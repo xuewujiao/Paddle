@@ -208,10 +208,8 @@ void GraphGpuWrapper::upload_batch(int idx,
   debug_gpu_memory_info("upload_batch node start");
   GpuPsGraphTable *g = (GpuPsGraphTable *)graph_table;
   for (int i = 0; i < ids.size(); i++) {
-    VLOG(0) << "ith ids size is: " << ids[i].size();
     GpuPsCommGraph sub_graph =
         g->cpu_graph_table_->make_gpu_ps_graph(idx, ids[i]);
-    // sub_graph.display_on_cpu();
     g->build_graph_on_single_gpu(sub_graph, i, idx);
     sub_graph.release_on_cpu();
     VLOG(0) << "sub graph on gpu " << i << " is built";

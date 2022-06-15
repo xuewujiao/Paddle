@@ -170,7 +170,6 @@ paddle::framework::GpuPsCommGraph GraphTable::make_gpu_ps_graph(
     }
     offset += edge_array[i].size();
   }
-  VLOG(0) << "after make gpu ps, res len：" << res.node_size; 
   return res;
 }
 

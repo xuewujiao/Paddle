@@ -65,21 +65,22 @@ class GraphShard {
   }
   std::vector<uint64_t> get_all_id() {
     std::vector<uint64_t> res;
-    std::unordered_set<uint64_t> uset;
     for (int i = 0; i < (int)bucket.size(); i++) {
-      uset.emplace(bucket[i]->get_id());
+      res.push_back(bucket[i]->get_id());
     }
-    res.assign(uset.begin(), uset.end());
     return res;
   }
   std::vector<uint64_t> get_all_neighbor_id() {
     std::vector<uint64_t> res;
+    std::unordered_set<uint64_t> uset;
     for (size_t i = 0; i < bucket.size(); i++) {
       size_t neighbor_size = bucket[i]->get_neighbor_size();
       for (size_t j = 0; j < neighbor_size; j++) {
-        res.push_back(bucket[i]->get_neighbor_id(j));
+        uset.emplace(bucket[i]->get_neighbor_id(j));
+        //res.push_back(bucket[i]->get_neighbor_id(j));
       }
     }
+    res.assign(uset.begin(), uset.end());
     return res;
   }
   std::set<uint64_t> get_all_feature_ids() {
