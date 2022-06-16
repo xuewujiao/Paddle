@@ -494,6 +494,11 @@ class GraphTable : public Table {
                              const FsClientParameter &fs_config);
   virtual int32_t Initialize(const GraphParameter &config);
   int32_t Load(const std::string &path, const std::string &param);
+  
+  int32_t load_node_and_edge_file(std::string etype, std::string ntype, std::string epath,
+                                  std::string npath, int part_num, bool reverse);
+
+  std::string get_inverse_etype(std::string &etype);
 
   int32_t load_edges(const std::string &path, bool reverse,
                      const std::string &edge_type);
@@ -507,10 +512,13 @@ class GraphTable : public Table {
   int get_all_feature_ids(int type, int idx,
                         int slice_num, std::vector<std::vector<uint64_t>>* output);
   int32_t load_nodes(const std::string &path, std::string node_type);
+  int32_t load_nodes_once(std::vector<std::string> &node_path, std::vector<std::string> &ntypes);
   int32_t parse_edge_file(const std::string &path, int idx, bool reverse, 
                         uint64_t &count, uint64_t &valid_count);
   int32_t parse_node_file(const std::string &path, const std::string &node_type, 
                         int idx, uint64_t &count, uint64_t &valid_count);
+  int32_t parse_node_file_once(std::string &path, std::vector<std::string> &ntypes,
+                                  uint64_t &count, uint64_t &valid_count);
   int32_t add_graph_node(int idx, std::vector<uint64_t> &id_list,
                          std::vector<bool> &is_weight_list);
 
