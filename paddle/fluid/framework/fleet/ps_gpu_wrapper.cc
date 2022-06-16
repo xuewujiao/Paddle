@@ -655,11 +655,7 @@ void PSGPUWrapper::BuildGPUTask(std::shared_ptr<HeterContext> gpu_task) {
           ptr_val[cpu_table_accessor_->common_feature_value.EmbedG2SumIndex() + i];
       }
 
-      // VLOG(0)<< "CpuPtrIndex:" << feature_value_accessor_.common_feature_value.CpuPtrIndex();
-      // reinterpret_cast<uint64_t>(val[feature_value_accessor_.common_feature_value.CpuPtrIndex()]) =
-      //     (uint64_t)(device_dim_ptrs[k]);
       *(reinterpret_cast<uint64_t*>(val + feature_value_accessor_.common_feature_value.CpuPtrIndex())) = (uint64_t)(device_dim_ptrs[k]);
-      // (uint64_t*)(val + feature_value_accessor_.common_feature_value.CpuPtrIndex()) = (uint64_t)(device_dim_ptrs[k]);
       ptr_val[cpu_table_accessor_->common_feature_value.MfDimIndex()] = float(mf_dim);
       val[feature_value_accessor_.common_feature_value.MfDimIndex()] = mf_dim;
       if (dim > cpu_table_accessor_->GetAccessorInfo().dim - 
@@ -701,7 +697,6 @@ void PSGPUWrapper::BuildGPUTask(std::shared_ptr<HeterContext> gpu_task) {
               << "dim: " << mf_dim << " len: " << len;
       this->HeterPs_->show_one_table(i);
     }
-
     delete mem_pool;
   };
   threads.resize(device_num * multi_mf_dim_);

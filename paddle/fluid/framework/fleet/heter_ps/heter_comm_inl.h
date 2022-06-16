@@ -75,8 +75,8 @@ HeterComm<KeyType, ValType, GradType>::HeterComm(
     } else {
       max_mf_dim_ = resource_->max_mf_dim();
       feature_value_accessor_ = feature_value_accessor;
-      VLOG(0) << " HeterComm INIT:" << feature_value_accessor_.GetAccessorInfo().size 
-            << "  " << feature_value_accessor_.GetAccessorInfo().update_size;
+      VLOG(3) << " HeterComm init, feature_value_size:" << feature_value_accessor_.GetAccessorInfo().size 
+            << ", feature_value_push_size:" << feature_value_accessor_.GetAccessorInfo().update_size;
       size_t val_type_size = TYPEALIGN(8, feature_value_accessor_.GetAccessorInfo().size);
       size_t grad_type_size = TYPEALIGN(8, feature_value_accessor_.GetAccessorInfo().update_size);
       auto ptr_table = new PtrTable(capacity / load_factor_);
@@ -952,22 +952,12 @@ void HeterComm<KeyType, ValType, GradType>::push_sparse(int dev_num,
       if (h_left[i] == -1 || h_right[i] == -1) {
         continue;
       }
-      if (!multi_mf_dim_) {
-        create_storage(dev_num, i, shard_len * sizeof(KeyType),
-                       shard_len * sizeof(GradType));
-      } else {
-        create_storage(dev_num, i, shard_len * sizeof(KeyType),
-                       shard_len * grad_value_size);
-      }
+      create_storage(dev_num, i, shard_len * sizeof(KeyType),
+                      shard_len * grad_value_size);
     }
 
-    if (!multi_mf_dim_) {
-      walk_to_dest(dev_num, total_device, h_left, h_right, d_shard_keys_ptr,
-                   d_shard_grads_ptr);
-    } else {
-      walk_to_dest(dev_num, total_device, h_left, h_right, d_shard_keys_ptr,
-                   reinterpret_cast<char*>(d_shard_grads_ptr), grad_value_size);
-    }
+    walk_to_dest(dev_num, total_device, h_left, h_right, d_shard_keys_ptr,
+                  reinterpret_cast<char*>(d_shard_grads_ptr), grad_value_size);
   }
 
   for (int i = 0; i < total_device; ++i) {
