@@ -200,7 +200,6 @@ void SparseAdamSGDRule::UpdateValueWork(float* w, float* sgd, const float* grad,
   float beta1_pow_ = *beta1_pow;
   float beta2_pow_ = *beta2_pow;
 
-  // lr not change in one update
   lr *= sqrt(1 - beta2_pow_) / (1 - beta1_pow_);
   for (int i = 0; i < _embedding_dim; i++) {
     // Calculation
@@ -274,7 +273,6 @@ void SparseSharedAdamSGDRule::UpdateValueWork(float* w, float* sgd, const float*
   float gsum_ = *gsum;
   float g2sum_ = *g2sum;
 
-  // lr not change in one update
   lr *= sqrt(1 - beta2_pow_) / (1 - beta1_pow_);
   double sum_gsum = 0.0;
   double sum_g2sum = 0.0;

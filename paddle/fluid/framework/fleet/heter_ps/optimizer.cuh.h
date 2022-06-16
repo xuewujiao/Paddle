@@ -37,6 +37,7 @@ class Optimizer {
   __device__ void update_value(const OptimizerConfig& optimizer_config,
                                float& val,  // NOLINT
                                const float& grad) {
+    printf("Warning: update_value will not used. Please use dy_mf_update_value\n");
   }
 
   __device__ void dy_mf_update_value(const OptimizerConfig& optimizer_config,
@@ -86,6 +87,7 @@ class SparseAdagradOptimizer : public Optimizer {
   __device__ void update_value(const OptimizerConfig& optimizer_config,
                                float& val,  // NOLINT
                                const float& grad) {
+    printf("Warning: update_value will not used. Please use dy_mf_update_value\n");
   }
   __device__ void dy_mf_update_value(const OptimizerConfig& optimizer_config,
                                      float* ptr, const float* grad) {
@@ -220,6 +222,7 @@ class SparseAdamOptimizer : public Optimizer {
   __device__ void update_value(const OptimizerConfig& optimizer_config,
                                float& val,  // NOLINT
                                const float& grad) {
+    printf("Warning: update_value will not used. Please use dy_mf_update_value\n");
   }
   __device__ void dy_mf_update_value(const OptimizerConfig& optimizer_config,
                                      float* ptr, const float* grad) {
@@ -242,7 +245,7 @@ class SparseAdamOptimizer : public Optimizer {
               grad + feature_value_accessor_.common_push_value.EmbedGIndex(),
               g_show);
     int mf_dim = int(ptr[feature_value_accessor_.common_feature_value.MfDimIndex()]);
-    printf("mf_dim: %f, lr_gsum: %f, ", mf_dim, ptr[feature_value_accessor_.common_feature_value.EmbedG2SumIndex()]);
+    // printf("mf_dim: %f, lr_gsum: %f, ", mf_dim, ptr[feature_value_accessor_.common_feature_value.EmbedG2SumIndex()]);
     if (ptr[feature_value_accessor_.common_feature_value.MfSizeIndex()] == 0) {
       if (optimizer_config.mf_create_thresholds <=
           optimizer_config.nonclk_coeff * 
@@ -274,8 +277,8 @@ class SparseAdamOptimizer : public Optimizer {
           grad + feature_value_accessor_.common_push_value.EmbedxGIndex(),
           g_show);
     }
-    printf("EmbedxGIndex: %f, mf_gsum: %f, ", feature_value_accessor_.common_push_value.EmbedxGIndex(),
-             ptr[feature_value_accessor_.common_feature_value.EmbedxG2SumIndex()]);
+    // printf("EmbedxGIndex: %f, mf_gsum: %f, ", feature_value_accessor_.common_push_value.EmbedxGIndex(),
+    //          ptr[feature_value_accessor_.common_feature_value.EmbedxG2SumIndex()]);
   }
   
   __host__ __device__ size_t Dim() { return EmbedDim() + EmbedxDim(); }
@@ -345,6 +348,7 @@ class SparseAdamSharedOptimizer : public Optimizer {
   __device__ void update_value(const OptimizerConfig& optimizer_config,
                                float& val,  // NOLINT
                                const float& grad) {
+    printf("Warning: update_value will not used. Please use dy_mf_update_value\n");
   }
 
   __device__ void dy_mf_update_value(const OptimizerConfig& optimizer_config,
