@@ -517,8 +517,7 @@ class GraphTable : public Table {
                         uint64_t &count, uint64_t &valid_count);
   int32_t parse_node_file(const std::string &path, const std::string &node_type, 
                         int idx, uint64_t &count, uint64_t &valid_count);
-  int32_t parse_node_file_once(std::string &path, std::vector<std::string> &ntypes,
-                                  uint64_t &count, uint64_t &valid_count);
+  int32_t parse_node_file_one_read(const std::string &path, uint64_t &count, uint64_t &valid_count);
   int32_t add_graph_node(int idx, std::vector<uint64_t> &id_list,
                          std::vector<bool> &is_weight_list);
 

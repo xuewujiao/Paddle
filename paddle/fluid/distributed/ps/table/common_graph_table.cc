@@ -1043,21 +1043,14 @@ int32_t GraphTable::load_node_and_edge_file(std::string etype, std::string ntype
   VLOG(0) << "etypes size: " << etypes.size();
   VLOG(0) << "whether reverse: " << reverse;
   std::string delim = ";";
-  size_t total_len = etypes.size() + ntypes.size(); // 1 is for node
+  //size_t total_len = etypes.size() + ntypes.size(); // 1 is for node
+  size_t total_len = etypes.size() + 1; // 1 is for node
 
-  auto npath_list = paddle::framework::localfs_list(npath);
-  std::string npath_str;
-  if (part_num > 0 && part_num < (int)npath_list.size()) {
-    std::vector<std::string> sub_npath_list(npath_list.begin(), npath_list.begin() + part_num);
-    npath_str = boost::algorithm::join(sub_npath_list, delim);
-  } else {
-    npath_str = boost::algorithm::join(npath_list, delim);
-  }
   std::vector<std::future<int>> tasks;
   for (size_t i = 0; i < total_len; i++) {
     tasks.push_back(_shards_task_pool[i % task_pool_size_]->enqueue(
         [&, i, this]() ->int {
-          if (i < etypes.size()) {
+      if (i < etypes.size()) {
         std::string etype_path = epath + "/" + etypes[i];
         auto etype_path_list = paddle::framework::localfs_list(etype_path);
         std::string etype_path_str;
@@ -1073,29 +1066,28 @@ int32_t GraphTable::load_node_and_edge_file(std::string etype, std::string ntype
           this->load_edges(etype_path_str, true, r_etype);
         }
       } else {
-        this->load_nodes(npath_str, ntypes[i - etypes.size()]);
-        //if (ntypes.size() == 0) {
-        //  VLOG(0) << "node_type not specified, nothing will be loaded ";
-        //  return 0;
-        //} else {
-        //  for (size_t i = 0; i < ntypes.size(); i++) {
-        //    if (feature_to_id.find(ntypes[i]) == feature_to_id.end()) {
-        //      VLOG(0) << "node_type " << ntypes[i] << "is not defined, will not load";
-        //      return 0;
-        //    }
-        //  }
-        //}
-        //std::string ntype_path_str;
-        //if (part_num > 0 && part_num < (int)npath_list.size()) {
-        //  std::vector<std::string> sub_npath_list(npath_list.begin(), npath_list.begin() + part_num);
-        //  ntype_path_str = boost::algorithm::join(sub_npath_list, delim); 
-        //} else {
-        //  ntype_path_str = boost::algorithm::join(npath_list, delim);
-          //std::vector<std::string> sub_npath_list(npath_list.begin(), npath_list.begin() + part_num);
-          //this->load_nodes_once(sub_npath_list, ntypes);
-        //}
-        //this->load_nodes(ntype_path_str, ntypes[0]);
+        auto npath_list = paddle::framework::localfs_list(npath);
+        std::string npath_str;
+        if (part_num > 0 && part_num < (int)npath_list.size()) {
+          std::vector<std::string> sub_npath_list(npath_list.begin(), npath_list.begin() + part_num);
+          npath_str = boost::algorithm::join(sub_npath_list, delim);
+        } else {
+          npath_str = boost::algorithm::join(npath_list, delim);
+        }
+        
         //this->load_nodes(npath_str, ntypes[i - etypes.size()]);
+        if (ntypes.size() == 0) {
+          VLOG(0) << "node_type not specified, nothing will be loaded ";
+          return 0;
+        } else {
+          for (size_t i = 0; i < ntypes.size(); i++) {
+            if (feature_to_id.find(ntypes[i]) == feature_to_id.end()) {
+              VLOG(0) << "node_type " << ntypes[i] << "is not defined, will not load";
+              return 0;
+            }
+          }
+        }
+        this->load_nodes(npath_str, ntypes[0]);
       }
       return 0;
     }));
@@ -1182,7 +1174,7 @@ int32_t GraphTable::parse_node_file(const std::string &path, const std::string &
   return 0;   
 }
 
-int32_t GraphTable::parse_node_file_once(std::string &path, std::vector<std::string> &ntypes, uint64_t &count, uint64_t &valid_count) {
+int32_t GraphTable::parse_node_file_one_read(const std::string &path, uint64_t &count, uint64_t &valid_count) {
   std::ifstream file(path);
   std::string line;
   uint64_t local_count = 0;
@@ -1197,10 +1189,6 @@ int32_t GraphTable::parse_node_file_once(std::string &path, std::vector<std::str
     } else {
       idx = feature_to_id[values[0]];
     }
-    //int idx = feature_to_id[values[0]];
-    //if (values[0] != node_type) {
-    //  continue;
-    //}
 
     auto id = std::stoull(values[1]);
     size_t shard_id = id % shard_num;
@@ -1236,30 +1224,45 @@ int32_t GraphTable::load_nodes(const std::string &path, std::string node_type) {
   uint64_t count = 0;
   uint64_t valid_count = 0;
   int idx = 0;
-  if (node_type == "") {
-    VLOG(0) << "node_type not specified, loading edges to " << id_to_feature[0]
-            << " part";
-  } else {
-    if (feature_to_id.find(node_type) == feature_to_id.end()) {
-      VLOG(0) << "node_type " << node_type
-              << " is not defined, nothing will be loaded";
-      return 0;
-    }
-    idx = feature_to_id[node_type];
-  }
-  
-  VLOG(0) << "Begin GraphTable::load_nodes() node_type[" << node_type << "]";
+  //if (node_type == "") {
+  //  VLOG(0) << "node_type not specified, loading edges to " << id_to_feature[0]
+  //          << " part";
+  //} else {
+  //  if (feature_to_id.find(node_type) == feature_to_id.end()) {
+  //    VLOG(0) << "node_type " << node_type
+  //            << " is not defined, nothing will be loaded";
+  //    return 0;
+  //  }
+  //  idx = feature_to_id[node_type];
+  //}
+  //VLOG(0) << "Begin GraphTable::load_nodes() node_type[" << node_type << "]";
   if (FLAGS_graph_load_in_parallel) {
+    VLOG(0) << "Begin GraphTable::load_nodes()";
     std::vector<std::future<int>> tasks;
     for (size_t i = 0; i < paths.size(); i++) {
       tasks.push_back(load_node_edge_task_pool->enqueue(
-          [&, i, idx, this]() -> int {
-        parse_node_file(paths[i], node_type, idx, count, valid_count);
-        return 0;
+        [&, i, this]() -> int {
+          return parse_node_file_one_read(paths[i], count, valid_count);
+      //tasks.push_back(load_node_edge_task_pool->enqueue(
+      //    [&, i, idx, this]() -> int {
+      //  parse_node_file(paths[i], node_type, idx, count, valid_count);
+      //   return 0;
       }));
     }
     for (int i = 0; i < (int)tasks.size(); i++) tasks[i].get();
   } else {
+    VLOG(0) << "Begin GraphTable::load_nodes() node_type[" << node_type << "]";
+    if (node_type == "") {
+      VLOG(0) << "node_type not specified, loading edges to " << id_to_feature[0]
+              << " part";
+    } else {
+      if (feature_to_id.find(node_type) == feature_to_id.end()) {
+        VLOG(0) << "node_type " << node_type
+                << " is not defined, nothing will be loaded";
+        return 0;
+      }
+      idx = feature_to_id[node_type];
+    }
     for (auto path : paths) {
       VLOG(2) << "Begin GraphTable::load_nodes(), path[" << path << "]";
       parse_node_file(path, node_type, idx, count, valid_count);
@@ -1271,34 +1274,34 @@ int32_t GraphTable::load_nodes(const std::string &path, std::string node_type) {
   return 0;
 }
 
-int32_t GraphTable::load_nodes_once(std::vector<std::string> &node_path, std::vector<std::string> &ntypes) {
-  uint64_t count = 0;
-  uint64_t valid_count = 0;
-  if (ntypes.size() == 0) {
-    VLOG(0) << "node_type not specified, nothing will be loaded ";
-    return 0;
-  } else {
-    for (size_t i = 0; i < ntypes.size(); i++) {
-      if (feature_to_id.find(ntypes[i]) == feature_to_id.end()) {
-        VLOG(0) << "node_type " << ntypes[i] << "is not defined, will not load";
-        return 0;
-      }
-    }
-  }
+//int32_t GraphTable::load_nodes_once(std::vector<std::string> &node_path, std::vector<std::string> &ntypes) {
+//  uint64_t count = 0;
+//  uint64_t valid_count = 0;
+//  if (ntypes.size() == 0) {
+//    VLOG(0) << "node_type not specified, nothing will be loaded ";
+//    return 0;
+//  } else {
+//    for (size_t i = 0; i < ntypes.size(); i++) {
+//      if (feature_to_id.find(ntypes[i]) == feature_to_id.end()) {
+//        VLOG(0) << "node_type " << ntypes[i] << "is not defined, will not load";
+//        return 0;
+//      }
+//    }
+//  }
 
-  std::vector<std::future<int>> tasks;
-  for (size_t i = 0; i < node_path.size(); i++) {
-    tasks.push_back(load_node_edge_task_pool->enqueue(
-        [&, i, this]() -> int {
-      return parse_node_file_once(node_path[i], ntypes, count, valid_count);
-      //return 0;
-    }));
-  }
-  for (int i = 0; i < (int)tasks.size(); i++) tasks[i].get();
+//  std::vector<std::future<int>> tasks;
+//  for (size_t i = 0; i < node_path.size(); i++) {
+//    tasks.push_back(load_node_edge_task_pool->enqueue(
+//        [&, i, this]() -> int {
+//      return parse_node_file_once(node_path[i], ntypes, count, valid_count);
+//      //return 0;
+//    }));
+//  }
+//  for (int i = 0; i < (int)tasks.size(); i++) tasks[i].get();
 
-  VLOG(0) << valid_count << "/" << count << " nodes are loaded successfully!";
-  return 0;
-}
+//  VLOG(0) << valid_count << "/" << count << " nodes are loaded successfully!";
+//  return 0;
+//}
 
 int32_t GraphTable::build_sampler(int idx, std::string sample_type) {
   for (auto &shard : edge_shards[idx]) {
