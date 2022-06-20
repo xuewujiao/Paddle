@@ -240,7 +240,7 @@ void PSGPUWrapper::PreBuildTask(std::shared_ptr<HeterContext> gpu_task) {
            iter != total_data.begin() + end_index; iter++) {
         uint64_t cur_key = *iter;
         int shard_id = cur_key % thread_keys_shard_num_;
-        // int dim_id = slot_index_vec_[slot_idx];
+        // TODO: feasign <-> slot <-> multi_dim
         this->thread_dim_keys_[i][shard_id][0].insert(cur_key);
       }
     };
@@ -590,6 +590,7 @@ void PSGPUWrapper::BuildGPUTask(std::shared_ptr<HeterContext> gpu_task) {
     this->HeterPs_->set_multi_mf_dim(multi_mf_dim_, max_mf_dim_);
     // this->HeterPs_->set_accessor(feature_value_accessor_);
     int mf_dim = this->index_dim_vec_[j];
+    feature_value_accessor_.DynamicChangeDim(mf_dim);
     VLOG(0) << "building table: " << i << "with mf dim: " << mf_dim
             << " feature_value_DIM:" << feature_value_accessor_.GetAccessorInfo().dim;
     size_t feature_value_size = 
@@ -656,6 +657,7 @@ void PSGPUWrapper::BuildGPUTask(std::shared_ptr<HeterContext> gpu_task) {
       }
 
       *(reinterpret_cast<uint64_t*>(val + feature_value_accessor_.common_feature_value.CpuPtrIndex())) = (uint64_t)(device_dim_ptrs[k]);
+
       ptr_val[cpu_table_accessor_->common_feature_value.MfDimIndex()] = float(mf_dim);
       val[feature_value_accessor_.common_feature_value.MfDimIndex()] = mf_dim;
       if (dim > cpu_table_accessor_->GetAccessorInfo().dim - 
@@ -827,6 +829,7 @@ void PSGPUWrapper::EndPass() {
     auto& device_keys = this->current_task_->device_dim_keys_[i][j];
     size_t len = device_keys.size();
     int mf_dim = this->index_dim_vec_[j];
+    feature_value_accessor_.DynamicChangeDim(mf_dim);
     VLOG(0) << "dump pool to cpu table: " << i << "with mf dim: " << mf_dim
             << " key_len :" << len;
     size_t feature_value_size = 
@@ -967,8 +970,9 @@ void PSGPUWrapper::PullSparse(const paddle::platform::Place& place,
       std::accumulate(slot_lengths.begin(), slot_lengths.end(), 0UL);
   size_t feature_value_size = 0;
 
-  feature_value_size = TYPEALIGN( 8, feature_value_accessor_.GetAccessorInfo().size);
-  VLOG(5) << "PullSparse feature_value_size:" << feature_value_accessor_.GetAccessorInfo().size;
+  feature_value_accessor_.DynamicChangeDim(max_mf_dim_);
+  feature_value_size = TYPEALIGN(8, feature_value_accessor_.GetAccessorInfo().size);
+  VLOG(0) << "PullSparse max_dim:" << max_mf_dim_ << " feature_value_size:" << feature_value_accessor_.GetAccessorInfo().size;
   
 #ifdef PADDLE_WITH_CUDA
   VLOG(3) << "Begine Gpu Ps PullSparse";
@@ -1100,6 +1104,7 @@ void PSGPUWrapper::PushSparseGrad(const paddle::platform::Place& place,
       std::accumulate(slot_lengths.begin(), slot_lengths.end(), 0UL);
   // #ifdef PADDLE_WITH_CUDA
   VLOG(3) << "Begin GPUPS PushSparseGrad";
+  feature_value_accessor_.DynamicChangeDim(max_mf_dim_);
   size_t grad_value_size = 
         TYPEALIGN(8, feature_value_accessor_.GetAccessorInfo().update_size);
   auto buf = memory::Alloc(place, total_length * grad_value_size);
