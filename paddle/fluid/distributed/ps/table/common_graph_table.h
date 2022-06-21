@@ -511,12 +511,10 @@ class GraphTable : public Table {
                                                          int slice_num);
   int get_all_feature_ids(int type, int idx,
                         int slice_num, std::vector<std::vector<uint64_t>>* output);
-  int32_t load_nodes(const std::string &path, std::string node_type);
-  int32_t parse_edge_file(const std::string &path, int idx, bool reverse, 
-                        uint64_t &count, uint64_t &valid_count);
-  int32_t parse_node_file(const std::string &path, const std::string &node_type, 
-                        int idx, uint64_t &count, uint64_t &valid_count);
-  int32_t parse_node_file_one_read(const std::string &path, uint64_t &count, uint64_t &valid_count);
+  int32_t load_nodes(const std::string &path, std::string node_type = std::string());
+  std::pair<uint64_t, uint64_t> parse_edge_file(const std::string &path, int idx, bool reverse);
+  std::pair<uint64_t, uint64_t> parse_node_file(const std::string &path, const std::string &node_type, int idx);
+  std::pair<uint64_t, uint64_t> parse_node_file(const std::string &path);
   int32_t add_graph_node(int idx, std::vector<uint64_t> &id_list,
                          std::vector<bool> &is_weight_list);
 
@@ -626,7 +624,8 @@ class GraphTable : public Table {
   std::vector<std::vector<GraphShard *>> edge_shards, feature_shards;
   size_t shard_start, shard_end, server_num, shard_num_per_server, shard_num;
   int task_pool_size_ = 24;
-  int load_thread_num = 150;
+  int load_thread_num = 160;
+
   const int random_sample_nodes_ranges = 3;
 
   std::vector<std::vector<std::unordered_map<uint64_t, double>>> node_weight;
