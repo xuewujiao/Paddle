@@ -870,7 +870,7 @@ void GraphDataGenerator::AllocResource(const paddle::platform::Place &place,
   infer_node_type_start_ = std::vector<int>(h_device_keys_.size(), 0);
   for (size_t i = 0; i < h_device_keys_.size(); i++) {
     for (size_t j = 0; j < h_device_keys_[i]->size(); j++) {
-      VLOG(3) << "h_device_keys_[" << i << "][" << j
+      VLOG(7) << "h_device_keys_[" << i << "][" << j
               << "] = " << (*(h_device_keys_[i]))[j];
     }
     auto buf = memory::AllocShared(
