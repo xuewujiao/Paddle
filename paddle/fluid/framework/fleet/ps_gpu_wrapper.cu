@@ -318,7 +318,6 @@ void PSGPUWrapper::SetSparseSGD(float nonclk_coeff, float clk_coeff,
                                 float learning_rate, float initial_g2sum,
                                 float initial_range, float beta1_decay_rate,
                                 float beta2_decay_rate, float ada_epsilon) {
-  VLOG(0) << "INTO SetSparseSGD";
   optimizer_config_.set_sparse_sgd(nonclk_coeff, clk_coeff, min_bound, max_bound,
                                   learning_rate, initial_g2sum, initial_range,
                                   beta1_decay_rate, beta2_decay_rate, ada_epsilon);
