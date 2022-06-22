@@ -173,6 +173,7 @@ __global__ void merge_gradients_basic_kernel(const KeyType* d_keys,
         merger.merge_basic(out, in, feature_value_accessor);
       }
     }
+    printf("merge kernel, i=%lu num=%u key=%lu\n", i, num, key);
   }
 }
 
@@ -193,16 +194,18 @@ __global__ void merge_gradients_embedx_kernel(const KeyType* d_keys,
     size_t field_idx = i % grad_dim;
     uint32_t start = offset[value_idx];
     uint32_t num = fea_num[value_idx];
+    int ori_index = index[start];
+    float* in = (float*)(input + size_t(ori_index) * grad_value_size);
     float* out = (float*)(output + value_idx * grad_value_size);
+    merger.update_embedx(out, in, field_idx, feature_value_accessor);
     KeyType key = d_keys[value_idx];
     if (key != 0) {
-      for (int j = 0; j < num; ++j) {
+      for (int j = 1; j < num; ++j) {
         int ori_index = index[start + j];
         float* in = (float*)(input + size_t(ori_index) * grad_value_size);
         merger.merge_embedx(out, in, field_idx, feature_value_accessor);
       }
     }
-    //printf("merge kernel, i=%lu num=%u key=%lu\n", value_idx, num, key);
   }
 }
 

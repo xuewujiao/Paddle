@@ -628,7 +628,7 @@ void HeterComm<KeyType, ValType, GradType>::dynamic_merge_grad(
 
   size_t temp_storage_bytes;
 
-  size_t grad_dim = feature_value_accessor_.GetAccessorInfo().update_dim;
+  size_t grad_dim = feature_value_accessor_.GetAccessorInfo().embedx_dim;
   size_t grad_value_size = TYPEALIGN(8, feature_value_accessor_.GetAccessorInfo().update_size);
 
   auto d_merge_keys = memory::Alloc(place, len * sizeof(KeyType));

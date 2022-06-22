@@ -74,35 +74,42 @@ struct DynamicGradMerger {
   }
 
   __device__ __forceinline__ void update_basic(float* output, const float* input,
-                                            CommonFeatureValueAccessor& feature_value_accessor) {
-    output[feature_value_accessor.common_push_value.SlotIndex()] =
-        input[feature_value_accessor.common_push_value.SlotIndex()];
-    output[feature_value_accessor.common_push_value.ShowIndex()] =
-        input[feature_value_accessor.common_push_value.ShowIndex()];
-    output[feature_value_accessor.common_push_value.ClickIndex()] =
-        input[feature_value_accessor.common_push_value.ClickIndex()];
-    output[feature_value_accessor.common_push_value.MfDimIndex()] =
-        input[feature_value_accessor.common_push_value.MfDimIndex()];
-    output[feature_value_accessor.common_push_value.EmbedGIndex()] =
-        input[feature_value_accessor.common_push_value.EmbedGIndex()];
+                                            CommonFeatureValueAccessor& fv_accessor) {
+    output[fv_accessor.common_push_value.SlotIndex()] =
+        input[fv_accessor.common_push_value.SlotIndex()];
+    output[fv_accessor.common_push_value.ShowIndex()] =
+        input[fv_accessor.common_push_value.ShowIndex()];
+    output[fv_accessor.common_push_value.ClickIndex()] =
+        input[fv_accessor.common_push_value.ClickIndex()];
+    output[fv_accessor.common_push_value.MfDimIndex()] =
+        input[fv_accessor.common_push_value.MfDimIndex()];
+    output[fv_accessor.common_push_value.EmbedGIndex()] =
+        input[fv_accessor.common_push_value.EmbedGIndex()];
   }
 
   __device__ __forceinline__ void merge_basic(float* output, const float* input,
-                                          CommonFeatureValueAccessor& feature_value_accessor) {
-    output[feature_value_accessor.common_push_value.ShowIndex()] +=
-        input[feature_value_accessor.common_push_value.ShowIndex()];
-    output[feature_value_accessor.common_push_value.ClickIndex()] +=
-        input[feature_value_accessor.common_push_value.ClickIndex()];
-    output[feature_value_accessor.common_push_value.EmbedGIndex()] +=
-        input[feature_value_accessor.common_push_value.EmbedGIndex()];
+                                          CommonFeatureValueAccessor& fv_accessor) {
+    output[fv_accessor.common_push_value.ShowIndex()] +=
+        input[fv_accessor.common_push_value.ShowIndex()];
+    output[fv_accessor.common_push_value.ClickIndex()] +=
+        input[fv_accessor.common_push_value.ClickIndex()];
+    output[fv_accessor.common_push_value.EmbedGIndex()] +=
+        input[fv_accessor.common_push_value.EmbedGIndex()];
   }
 
+  __device__ __forceinline__ void update_embedx(float* output, const float* input, size_t embedx_idx,
+                                            CommonFeatureValueAccessor& fv_accessor) {
+    if (embedx_idx < output[fv_accessor.common_push_value.MfDimIndex()]) {
+      output[fv_accessor.common_push_value.EmbedxGIndex() + embedx_idx] =
+          input[fv_accessor.common_push_value.EmbedxGIndex() + embedx_idx];
+    }
+  }
 
   __device__ __forceinline__ void merge_embedx(float* output, const float* input, size_t embedx_idx,
-                                            CommonFeatureValueAccessor& feature_value_accessor) {
-    if (embedx_idx < output[feature_value_accessor.common_push_value.MfDimIndex()]) {
-      output[feature_value_accessor.common_push_value.EmbedxGIndex() + embedx_idx] =
-          input[feature_value_accessor.common_push_value.EmbedxGIndex() + embedx_idx];
+                                            CommonFeatureValueAccessor& fv_accessor) {
+    if (embedx_idx < output[fv_accessor.common_push_value.MfDimIndex()]) {
+      output[fv_accessor.common_push_value.EmbedxGIndex() + embedx_idx] +=
+          input[fv_accessor.common_push_value.EmbedxGIndex() + embedx_idx];
     }
   }
 };
