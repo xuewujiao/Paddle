@@ -22,6 +22,7 @@ limitations under the License. */
 #endif
 
 DECLARE_double(gpugraph_hbm_table_load_factor);
+DECLARE_bool(gpugraph_enable_gpu_direct_access);
 
 namespace paddle {
 namespace framework {
@@ -44,14 +45,8 @@ HeterComm<KeyType, ValType, GradType>::HeterComm(
       auto table = new Table(capacity / load_factor_);
       tables_.push_back(table);
     } else {
-      max_mf_dim_ = resource_->max_mf_dim();
-      size_t val_type_size = TYPEALIGN(
-          8, sizeof(FeatureValue) + sizeof(float) * (max_mf_dim_ + 1));
-      size_t grad_type_size = TYPEALIGN(
-          8, sizeof(FeaturePushValue) + (max_mf_dim_ * sizeof(float)));
-      auto ptr_table = new PtrTable(capacity / load_factor_);
-      ptr_table->set_feature_value_size(val_type_size, grad_type_size);
-      ptr_tables_.push_back(ptr_table);
+      VLOG(0) << "Error:use HeterComm Construct with accessor";
+      return;
     }
     if (multi_node_) {
       storage_[i].init(feanum_, resource_->dev_id(i));
@@ -60,6 +55,44 @@ HeterComm<KeyType, ValType, GradType>::HeterComm(
   heter_comm_kernel_ = std::make_unique<HeterCommKernel>(block_size_);
   init_path();
 }
+
+template <typename KeyType, typename ValType, typename GradType>
+HeterComm<KeyType, ValType, GradType>::HeterComm(
+    size_t capacity, std::shared_ptr<HeterPsResource> resource,
+    CommonFeatureValueAccessor& feature_value_accessor) {
+  VLOG(1) << "Construct new HeterComm";
+  resource_ = resource;
+  storage_.resize(resource_->total_device());
+  multi_mf_dim_ = resource->multi_mf();
+  for (int i = 0; i < resource_->total_device(); ++i) {
+#if defined(PADDLE_WITH_CUDA)
+    platform::CUDADeviceGuard guard(resource_->dev_id(i));
+    allocators_.push_back(std::make_shared<cub::CachingDeviceAllocator>(
+        8, 1, (unsigned int)-1, (size_t)-1, false, false));  // NOLINT
+#endif
+    if (!multi_mf_dim_) {
+      auto table = new Table(capacity / load_factor_);
+      tables_.push_back(table);
+    } else {
+      max_mf_dim_ = resource_->max_mf_dim();
+      feature_value_accessor_ = feature_value_accessor;
+      VLOG(3) << " HeterComm init, feature_value_size:" << feature_value_accessor_.GetAccessorInfo().size 
+            << ", feature_value_push_size:" << feature_value_accessor_.GetAccessorInfo().update_size;
+      size_t val_type_size = TYPEALIGN(8, feature_value_accessor_.GetAccessorInfo().size);
+      size_t grad_type_size = TYPEALIGN(8, feature_value_accessor_.GetAccessorInfo().update_size);
+      auto ptr_table = new PtrTable(capacity / load_factor_);
+      ptr_table->set_accessor(feature_value_accessor_);
+      ptr_table->set_feature_value_size(val_type_size, grad_type_size);
+      ptr_tables_.push_back(ptr_table);
+    }
+    if (multi_node_) {
+      storage_[i].init(feanum_, resource_->dev_id(i));
+    }
+  }
+  heter_comm_kernel_ = std::make_unique<HeterCommKernel>(block_size_, feature_value_accessor_);
+  init_path();
+}
+
 
 template <typename KeyType, typename ValType, typename GradType>
 void HeterComm<KeyType, ValType, GradType>::init_path() {
@@ -584,7 +617,7 @@ void HeterComm<KeyType, ValType, GradType>::merge_grad(
 
 template <typename KeyType, typename ValType, typename GradType>
 void HeterComm<KeyType, ValType, GradType>::dynamic_merge_grad(
-    int gpu_num, KeyType* d_keys, GradType* d_grads, size_t len,
+    int gpu_num, KeyType* d_keys, float* d_grads, size_t len,
     int& uniq_len) {
   int dev_id = resource_->dev_id(gpu_num);
   platform::CUDAPlace place = platform::CUDAPlace(dev_id);
@@ -593,16 +626,14 @@ void HeterComm<KeyType, ValType, GradType>::dynamic_merge_grad(
 
   size_t temp_storage_bytes;
 
-  // VLOG(1) << "hetercomm merge_grad: max_mf_dim: " << max_mf_dim_;
-  size_t grad_value_size =
-      TYPEALIGN(8, sizeof(FeaturePushValue) + (max_mf_dim_ * sizeof(float)));
+  size_t grad_value_size = TYPEALIGN(8, feature_value_accessor_.GetAccessorInfo().update_size);
 
   auto d_merge_keys = memory::Alloc(place, len * sizeof(KeyType));
   KeyType* d_merge_keys_ptr = reinterpret_cast<KeyType*>(d_merge_keys->ptr());
 
   auto d_merge_grads = memory::Alloc(place, len * grad_value_size);
-  GradType* d_merge_grads_ptr =
-      reinterpret_cast<GradType*>(d_merge_grads->ptr());
+  float* d_merge_grads_ptr =
+      reinterpret_cast<float*>(d_merge_grads->ptr());
 
   auto d_fea_num_info = memory::Alloc(place, sizeof(uint32_t) * (len * 3 + 1));
   uint32_t* d_fea_num_info_ptr =
@@ -652,7 +683,7 @@ void HeterComm<KeyType, ValType, GradType>::dynamic_merge_grad(
       uniq_len, stream));
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
   heter_comm_kernel_->merge_gradient(
-      d_offset, d_fea_num_info_ptr, d_index, (char*)d_grads,
+      d_keys, d_offset, d_fea_num_info_ptr, d_index, (char*)d_grads,
       (char*)d_merge_grads_ptr, uniq_len, grad_value_size, merger_, stream);
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
   PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyAsync(d_grads, d_merge_grads_ptr,
@@ -707,7 +738,7 @@ void HeterComm<KeyType, ValType, GradType>::split_input_to_shard(
 template <typename KeyType, typename ValType, typename GradType>
 void HeterComm<KeyType, ValType, GradType>::pull_sparse(int num,
                                                         KeyType* d_keys,
-                                                        ValType* d_vals,
+                                                        float* d_vals,
                                                         size_t len) {
   if (len == 0) {
     return;
@@ -750,12 +781,12 @@ void HeterComm<KeyType, ValType, GradType>::pull_sparse(int num,
 
   auto d_idx = memory::Alloc(place, len * sizeof(int));
   int* d_idx_ptr = reinterpret_cast<int*>(d_idx->ptr());
-  size_t val_type_size =
-      TYPEALIGN(8, sizeof(FeatureValue) + sizeof(float) * (max_mf_dim_ + 1));
+  size_t val_type_size = TYPEALIGN(8, feature_value_accessor_.GetAccessorInfo().size);
+  VLOG(5) << "pull_sparse len:" << len << "  val_type_size: " << val_type_size;  
   auto d_shard_keys = memory::Alloc(place, len * sizeof(KeyType));
   KeyType* d_shard_keys_ptr = reinterpret_cast<KeyType*>(d_shard_keys->ptr());
   auto d_shard_vals = memory::Alloc(place, len * val_type_size);
-  ValType* d_shard_vals_ptr = reinterpret_cast<ValType*>(d_shard_vals->ptr());
+  float* d_shard_vals_ptr = reinterpret_cast<float*>(d_shard_vals->ptr());
 
   split_input_to_shard(d_keys, d_idx_ptr, len, d_left_ptr, d_right_ptr, num);
 
@@ -772,27 +803,37 @@ void HeterComm<KeyType, ValType, GradType>::pull_sparse(int num,
   memory_copy(dst_place, h_right, src_place, d_right_ptr,
               total_device * sizeof(int), stream);
 
-  for (int i = 0; i < total_device; ++i) {
-    int shard_len = h_right[i] - h_left[i] + 1;
-    if (h_left[i] == -1 || h_right[i] == -1) {
-      continue;
+  if (!FLAGS_gpugraph_enable_gpu_direct_access) {
+    for (int i = 0; i < total_device; ++i) {
+      int shard_len = h_right[i] - h_left[i] + 1;
+      if (h_left[i] == -1 || h_right[i] == -1) {
+        continue;
+      }
+      create_storage(num, i, shard_len * sizeof(KeyType),
+                     shard_len * val_type_size);
     }
-    create_storage(num, i, shard_len * sizeof(KeyType),
-                   shard_len * val_type_size);
+    walk_to_dest(num, total_device, h_left, h_right, d_shard_keys_ptr, NULL);
   }
-  walk_to_dest(num, total_device, h_left, h_right, d_shard_keys_ptr, NULL);
-
   for (int i = 0; i < total_device; ++i) {
     if (h_left[i] == -1) {
       continue;
     }
     auto& node = path_[num][i].nodes_.back();
-    sync_stream(node.in_stream);
+    if (!FLAGS_gpugraph_enable_gpu_direct_access) {
+      sync_stream(node.in_stream);
+    }
     AnyDeviceGuard guard(resource_->dev_id(i));
     ptr_tables_[i]->rwlock_->RDLock();
-    ptr_tables_[i]->get(reinterpret_cast<KeyType*>(node.key_storage),
-                        node.val_storage, h_right[i] - h_left[i] + 1,
-                        resource_->remote_stream(i, num));
+    if (!FLAGS_gpugraph_enable_gpu_direct_access) {
+      ptr_tables_[i]->get(reinterpret_cast<KeyType*>(node.key_storage),
+                          node.val_storage, h_right[i] - h_left[i] + 1,
+                          resource_->remote_stream(i, num));
+    } else {
+      ptr_tables_[i]->get(
+          d_shard_keys_ptr + h_left[i],
+          reinterpret_cast<char*>(d_shard_vals_ptr) + h_left[i] * val_type_size,
+          h_right[i] - h_left[i] + 1, resource_->remote_stream(i, num));
+    }
   }
 
   for (int i = 0; i < total_device; ++i) {
@@ -802,21 +843,26 @@ void HeterComm<KeyType, ValType, GradType>::pull_sparse(int num,
     }
     ptr_tables_[i]->rwlock_->UNLock();
   }
-  walk_to_src(num, total_device, h_left, h_right,
-              reinterpret_cast<char*>(d_shard_vals_ptr), val_type_size);
-  for (int i = 0; i < total_device; ++i) {
-    auto& node = path_[num][i].nodes_.front();
-    sync_stream(node.out_stream);
+  if (!FLAGS_gpugraph_enable_gpu_direct_access) {
+    walk_to_src(num, total_device, h_left, h_right,
+                reinterpret_cast<char*>(d_shard_vals_ptr), val_type_size);
+    for (int i = 0; i < total_device; ++i) {
+      auto& node = path_[num][i].nodes_.front();
+      sync_stream(node.out_stream);
+    }
   }
+
   heter_comm_kernel_->dy_mf_fill_dvals(d_shard_vals_ptr, d_vals, d_idx_ptr, len,
                                        val_type_size, stream);
 
   sync_stream(stream);
-  for (int i = 0; i < total_device; ++i) {
-    if (h_left[i] == -1 || h_right[i] == -1) {
-      continue;
+  if (!FLAGS_gpugraph_enable_gpu_direct_access) {
+    for (int i = 0; i < total_device; ++i) {
+      if (h_left[i] == -1 || h_right[i] == -1) {
+        continue;
+      }
+      destroy_storage(num, i);
     }
-    destroy_storage(num, i);
   }
 }
 
@@ -825,7 +871,7 @@ template <typename KeyType, typename ValType, typename GradType>
 template <typename Sgd>
 void HeterComm<KeyType, ValType, GradType>::push_sparse(int dev_num,
                                                         KeyType* d_keys,
-                                                        GradType* d_grads,
+                                                        float* d_grads,
                                                         size_t len,
                                                         Sgd& sgd) {  // NOLINT
   if (len == 0) {
@@ -836,7 +882,7 @@ void HeterComm<KeyType, ValType, GradType>::push_sparse(int dev_num,
   int dev_id = resource_->dev_id(dev_num);
 
   size_t grad_value_size =
-      TYPEALIGN(8, sizeof(FeaturePushValue) + (max_mf_dim_ * sizeof(float)));
+        TYPEALIGN(8, feature_value_accessor_.GetAccessorInfo().update_size);
   DevPlace place = DevPlace(dev_id);
   AnyDeviceGuard guard(dev_id);
   auto stream = resource_->local_stream(dev_num, 0);
@@ -876,14 +922,9 @@ void HeterComm<KeyType, ValType, GradType>::push_sparse(int dev_num,
   auto d_shard_keys = memory::Alloc(place, len * sizeof(KeyType));
   KeyType* d_shard_keys_ptr = reinterpret_cast<KeyType*>(d_shard_keys->ptr());
 
-  GradType* d_shard_grads_ptr;
-  if (!multi_mf_dim_) {
-    auto d_shard_grads = memory::Alloc(place, len * sizeof(GradType));
-    d_shard_grads_ptr = reinterpret_cast<GradType*>(d_shard_grads->ptr());
-  } else {
-    auto d_shard_grads = memory::Alloc(place, len * grad_value_size);
-    d_shard_grads_ptr = reinterpret_cast<GradType*>(d_shard_grads->ptr());
-  }
+  float* d_shard_grads_ptr;
+  auto d_shard_grads = memory::Alloc(place, len * grad_value_size);
+  d_shard_grads_ptr = reinterpret_cast<float*>(d_shard_grads->ptr());
 
   int uniq_len = len;
   dynamic_merge_grad(dev_num, d_keys, d_grads, len, uniq_len);
@@ -892,16 +933,10 @@ void HeterComm<KeyType, ValType, GradType>::push_sparse(int dev_num,
 
   split_input_to_shard(d_keys, d_idx_ptr, uniq_len, d_left_ptr, d_right_ptr,
                        dev_num);
-
-  if (!multi_mf_dim_) {
-    heter_comm_kernel_->fill_shard_grads(d_shard_keys_ptr, d_keys,
-                                         d_shard_grads_ptr, d_grads, d_idx_ptr,
-                                         uniq_len, stream);
-  } else {
-    heter_comm_kernel_->dy_mf_fill_shard_grads(
-        d_shard_keys_ptr, d_keys, d_shard_grads_ptr, d_grads, d_idx_ptr,
-        uniq_len, grad_value_size, stream);
-  }
+ 
+  heter_comm_kernel_->dy_mf_fill_shard_grads(
+      d_shard_keys_ptr, d_keys, d_shard_grads_ptr, d_grads, d_idx_ptr,
+      uniq_len, grad_value_size, stream);
 
   sync_stream(stream);
 
@@ -912,26 +947,18 @@ void HeterComm<KeyType, ValType, GradType>::push_sparse(int dev_num,
   memory_copy(dst_place, h_right, src_place, d_right_ptr,
               total_device * sizeof(int), stream);
 
-  for (int i = 0; i < total_device; ++i) {
-    int shard_len = h_right[i] - h_left[i] + 1;
-    if (h_left[i] == -1 || h_right[i] == -1) {
-      continue;
-    }
-    if (!multi_mf_dim_) {
+  if (!FLAGS_gpugraph_enable_gpu_direct_access) {
+    for (int i = 0; i < total_device; ++i) {
+      int shard_len = h_right[i] - h_left[i] + 1;
+      if (h_left[i] == -1 || h_right[i] == -1) {
+        continue;
+      }
       create_storage(dev_num, i, shard_len * sizeof(KeyType),
-                     shard_len * sizeof(GradType));
-    } else {
-      create_storage(dev_num, i, shard_len * sizeof(KeyType),
-                     shard_len * grad_value_size);
+                      shard_len * grad_value_size);
     }
-  }
 
-  if (!multi_mf_dim_) {
     walk_to_dest(dev_num, total_device, h_left, h_right, d_shard_keys_ptr,
-                 d_shard_grads_ptr);
-  } else {
-    walk_to_dest(dev_num, total_device, h_left, h_right, d_shard_keys_ptr,
-                 reinterpret_cast<char*>(d_shard_grads_ptr), grad_value_size);
+                  reinterpret_cast<char*>(d_shard_grads_ptr), grad_value_size);
   }
 
   for (int i = 0; i < total_device; ++i) {
@@ -939,20 +966,22 @@ void HeterComm<KeyType, ValType, GradType>::push_sparse(int dev_num,
       continue;
     }
     auto& node = path_[dev_num][i].nodes_.back();
-    sync_stream(node.in_stream);
+    if (!FLAGS_gpugraph_enable_gpu_direct_access) {
+      sync_stream(node.in_stream);
+    }
 
     AnyDeviceGuard guard(resource_->dev_id(i));
-    if (!multi_mf_dim_) {
-      tables_[i]->rwlock_->WRLock();
-      tables_[i]->update(reinterpret_cast<KeyType*>(node.key_storage),
-                         reinterpret_cast<GradType*>(node.val_storage),
-                         h_right[i] - h_left[i] + 1, sgd,
-                         resource_->remote_stream(i, dev_num));
-    } else {
-      ptr_tables_[i]->rwlock_->WRLock();
+    ptr_tables_[i]->rwlock_->WRLock();
+    if (!FLAGS_gpugraph_enable_gpu_direct_access) {
       ptr_tables_[i]->update(reinterpret_cast<KeyType*>(node.key_storage),
-                             node.val_storage, h_right[i] - h_left[i] + 1, sgd,
-                             resource_->remote_stream(i, dev_num));
+                              node.val_storage, h_right[i] - h_left[i] + 1,
+                              sgd, resource_->remote_stream(i, dev_num));
+    } else {
+      ptr_tables_[i]->update(d_shard_keys_ptr + h_left[i],
+                              reinterpret_cast<char*>(d_shard_grads_ptr) +
+                                  grad_value_size * h_left[i],
+                              h_right[i] - h_left[i] + 1, sgd,
+                              resource_->remote_stream(i, dev_num));
     }
   }
 
@@ -966,12 +995,14 @@ void HeterComm<KeyType, ValType, GradType>::push_sparse(int dev_num,
       }
     }
   }
-
-  for (int i = 0; i < total_device; ++i) {
-    if (h_left[i] == -1 || h_right[i] == -1) {
-      continue;
+  
+  if (!FLAGS_gpugraph_enable_gpu_direct_access) {
+    for (int i = 0; i < total_device; ++i) {
+      if (h_left[i] == -1 || h_right[i] == -1) {
+        continue;
+      }
+      destroy_storage(dev_num, i);
     }
-    destroy_storage(dev_num, i);
   }
 }
 
