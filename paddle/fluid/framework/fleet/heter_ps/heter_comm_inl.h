@@ -22,6 +22,7 @@ limitations under the License. */
 #endif
 
 DECLARE_double(gpugraph_hbm_table_load_factor);
+DECLARE_bool(gpugraph_enable_gpu_direct_access);
 
 namespace paddle {
 namespace framework {
@@ -685,7 +686,7 @@ void HeterComm<KeyType, ValType, GradType>::dynamic_merge_grad(
       uniq_len, stream));
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
   heter_comm_kernel_->merge_gradient(
-      d_offset, d_fea_num_info_ptr, d_index, (char*)d_grads,
+      d_keys, d_offset, d_fea_num_info_ptr, d_index, (char*)d_grads,
       (char*)d_merge_grads_ptr, uniq_len, grad_value_size, merger_, stream);
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
   PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyAsync(d_grads, d_merge_grads_ptr,
@@ -805,7 +806,7 @@ void HeterComm<KeyType, ValType, GradType>::pull_sparse(int num,
   memory_copy(dst_place, h_right, src_place, d_right_ptr,
               total_device * sizeof(int), stream);
 
-  if (!direct_access_) {
+  if (!FLAGS_gpugraph_enable_gpu_direct_access) {
     for (int i = 0; i < total_device; ++i) {
       int shard_len = h_right[i] - h_left[i] + 1;
       if (h_left[i] == -1 || h_right[i] == -1) {
@@ -821,12 +822,12 @@ void HeterComm<KeyType, ValType, GradType>::pull_sparse(int num,
       continue;
     }
     auto& node = path_[num][i].nodes_.back();
-    if (!direct_access_) {
+    if (!FLAGS_gpugraph_enable_gpu_direct_access) {
       sync_stream(node.in_stream);
     }
     AnyDeviceGuard guard(resource_->dev_id(i));
     ptr_tables_[i]->rwlock_->RDLock();
-    if (!direct_access_) {
+    if (!FLAGS_gpugraph_enable_gpu_direct_access) {
       ptr_tables_[i]->get(reinterpret_cast<KeyType*>(node.key_storage),
                           node.val_storage, h_right[i] - h_left[i] + 1,
                           resource_->remote_stream(i, num));
@@ -845,8 +846,7 @@ void HeterComm<KeyType, ValType, GradType>::pull_sparse(int num,
     }
     ptr_tables_[i]->rwlock_->UNLock();
   }
-  VLOG(0) << "pull sparse get done";
-  if (!direct_access_) {
+  if (!FLAGS_gpugraph_enable_gpu_direct_access) {
     walk_to_src(num, total_device, h_left, h_right,
                 reinterpret_cast<char*>(d_shard_vals_ptr), val_type_size);
     for (int i = 0; i < total_device; ++i) {
@@ -858,8 +858,7 @@ void HeterComm<KeyType, ValType, GradType>::pull_sparse(int num,
   heter_comm_kernel_->dy_mf_fill_dvals(d_shard_vals_ptr, d_vals, d_idx_ptr, len,
                                        val_type_size, stream);
   sync_stream(stream);
-  VLOG(0) << "pull sparse dy_mf_fill_dvals done";
-  if (!direct_access_) {
+  if (!FLAGS_gpugraph_enable_gpu_direct_access) {
     for (int i = 0; i < total_device; ++i) {
       if (h_left[i] == -1 || h_right[i] == -1) {
         continue;
@@ -951,7 +950,7 @@ void HeterComm<KeyType, ValType, GradType>::push_sparse(int dev_num,
   memory_copy(dst_place, h_right, src_place, d_right_ptr,
               total_device * sizeof(int), stream);
 
-  if (!direct_access_) {
+  if (!FLAGS_gpugraph_enable_gpu_direct_access) {
     for (int i = 0; i < total_device; ++i) {
       int shard_len = h_right[i] - h_left[i] + 1;
       if (h_left[i] == -1 || h_right[i] == -1) {
@@ -970,13 +969,13 @@ void HeterComm<KeyType, ValType, GradType>::push_sparse(int dev_num,
       continue;
     }
     auto& node = path_[dev_num][i].nodes_.back();
-    if (!direct_access_) {
+    if (!FLAGS_gpugraph_enable_gpu_direct_access) {
       sync_stream(node.in_stream);
     }
 
     AnyDeviceGuard guard(resource_->dev_id(i));
     ptr_tables_[i]->rwlock_->WRLock();
-    if (!direct_access_) {
+    if (!FLAGS_gpugraph_enable_gpu_direct_access) {
       ptr_tables_[i]->update(reinterpret_cast<KeyType*>(node.key_storage),
                               node.val_storage, h_right[i] - h_left[i] + 1,
                               sgd, resource_->remote_stream(i, dev_num));
@@ -1001,7 +1000,7 @@ void HeterComm<KeyType, ValType, GradType>::push_sparse(int dev_num,
   }
   VLOG(0) << " PUSHSPARSE update done";
   
-  if (!direct_access_) {
+  if (!FLAGS_gpugraph_enable_gpu_direct_access) {
     for (int i = 0; i < total_device; ++i) {
       if (h_left[i] == -1 || h_right[i] == -1) {
         continue;
