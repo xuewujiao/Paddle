@@ -72,6 +72,39 @@ struct DynamicGradMerger {
           input[feature_value_accessor.common_push_value.EmbedxGIndex() + j];
     }
   }
+
+  __device__ __forceinline__ void update_basic(float* output, const float* input,
+                                            CommonFeatureValueAccessor& feature_value_accessor) {
+    output[feature_value_accessor.common_push_value.SlotIndex()] =
+        input[feature_value_accessor.common_push_value.SlotIndex()];
+    output[feature_value_accessor.common_push_value.ShowIndex()] =
+        input[feature_value_accessor.common_push_value.ShowIndex()];
+    output[feature_value_accessor.common_push_value.ClickIndex()] =
+        input[feature_value_accessor.common_push_value.ClickIndex()];
+    output[feature_value_accessor.common_push_value.MfDimIndex()] =
+        input[feature_value_accessor.common_push_value.MfDimIndex()];
+    output[feature_value_accessor.common_push_value.EmbedGIndex()] =
+        input[feature_value_accessor.common_push_value.EmbedGIndex()];
+  }
+
+  __device__ __forceinline__ void merge_basic(float* output, const float* input,
+                                          CommonFeatureValueAccessor& feature_value_accessor) {
+    output[feature_value_accessor.common_push_value.ShowIndex()] +=
+        input[feature_value_accessor.common_push_value.ShowIndex()];
+    output[feature_value_accessor.common_push_value.ClickIndex()] +=
+        input[feature_value_accessor.common_push_value.ClickIndex()];
+    output[feature_value_accessor.common_push_value.EmbedGIndex()] +=
+        input[feature_value_accessor.common_push_value.EmbedGIndex()];
+  }
+
+
+  __device__ __forceinline__ void merge_embedx(float* output, const float* input, size_t embedx_idx,
+                                            CommonFeatureValueAccessor& feature_value_accessor) {
+    if (embedx_idx < output[feature_value_accessor.common_push_value.MfDimIndex()]) {
+      output[feature_value_accessor.common_push_value.EmbedxGIndex() + embedx_idx] =
+          input[feature_value_accessor.common_push_value.EmbedxGIndex() + embedx_idx];
+    }
+  }
 };
 
 class HeterCommKernel {
@@ -138,7 +171,7 @@ class HeterCommKernel {
   template <typename KeyType, typename StreamType>
   void merge_gradient(const KeyType* d_shard_keys, const uint32_t* offset, const uint32_t* fea_num,
                       const uint32_t* index, const char* input, char* output,
-                      int n, size_t grad_value_size, DynamicGradMerger& merger_,
+                      int n, size_t grad_dim, size_t grad_value_size, DynamicGradMerger& merger,
                       const StreamType& stream);
 
   template <typename T, typename StreamType>
