@@ -1152,38 +1152,14 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(const std::string &pat
     if (shard_id >= shard_end || shard_id < shard_start) {
       VLOG(4) << "will not load " << id << " from " << path
           << ", please check id distribution";
-          continue;
+      continue;
     }
     local_count++;
-
-    //auto values = paddle::string::split_string<std::string>(line, "\t");
-    //if (values.size() < 2) continue;
-    //if (values[0] != node_type) {
-    //  continue;
-    //}
-    //auto id = std::stoull(values[1]);
-    //size_t shard_id = id % shard_num;
-    //if (shard_id >= shard_end || shard_id < shard_start) {
-    //  VLOG(4) << "will not load " << id << " from " << path
-    //      << ", please check id distribution";
-    //  continue;
-    //}
-    //local_count++;
-
-    // while (end != std::string::npos) {
-    //   start = end;
-    //   end = line.find_first_of('\t', start + 1);
-    //   std::string tmp_str = line.substr(start + 1, end - start - 1);
-    //   std::cout << tmp_str << std::endl;
-    // }
 
     size_t index = shard_id - shard_start;
     auto node = feature_shards[idx][index]->add_feature_node(id, false);
     if (node != NULL) {
       node->set_feature_size(feat_name[idx].size());
-      //for (size_t slice = 2; slice < values.size(); slice++) {
-      //  parse_feature(idx, values[slice], node);
-      //}
       while (end != std::string::npos) {
         start = end;
         end = line.find_first_of('\t', start + 1);
