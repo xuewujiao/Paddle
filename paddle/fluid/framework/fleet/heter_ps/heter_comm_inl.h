@@ -854,7 +854,6 @@ void HeterComm<KeyType, ValType, GradType>::pull_sparse(int num,
       sync_stream(node.out_stream);
     }
   }
-  VLOG(0) << "pull sparse dy_mf_fill_dvals before";
   heter_comm_kernel_->dy_mf_fill_dvals(d_shard_vals_ptr, d_vals, d_idx_ptr, len,
                                        val_type_size, stream);
   sync_stream(stream);
@@ -866,7 +865,6 @@ void HeterComm<KeyType, ValType, GradType>::pull_sparse(int num,
       destroy_storage(num, i);
     }
   }
-  VLOG(0) << "pull sparse done";
 }
 
 #if defined(PADDLE_WITH_CUDA)
@@ -998,7 +996,6 @@ void HeterComm<KeyType, ValType, GradType>::push_sparse(int dev_num,
       }
     }
   }
-  VLOG(0) << " PUSHSPARSE update done";
   
   if (!FLAGS_gpugraph_enable_gpu_direct_access) {
     for (int i = 0; i < total_device; ++i) {
@@ -1008,9 +1005,6 @@ void HeterComm<KeyType, ValType, GradType>::push_sparse(int dev_num,
       destroy_storage(dev_num, i);
     }
   }
-
-  VLOG(0) << " PUSHSPARSE destroy_storage done";
-
 }
 
 #elif defined(PADDLE_WITH_XPU_KP)
