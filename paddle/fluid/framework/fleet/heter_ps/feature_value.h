@@ -199,13 +199,6 @@ class CommonFeatureValueAccessor : public FeatureValueAccessor {
     _accessor_info.update_size = _accessor_info.update_dim * sizeof(float);
     _accessor_info.mf_size =
         (embedx_dim + common_feature_value.embedx_sgd_dim) * sizeof(float);
-
-    printf("dim:%lu size:%lu update_dim:%lu update_size:%lu mf_size:%lu\n",
-            _accessor_info.dim,
-            _accessor_info.size,
-            _accessor_info.update_dim,
-            _accessor_info.update_size,
-            _accessor_info.mf_size);
   }
 
   __host__ __device__ std::string ParseToString(const float* v, int param_size) {
