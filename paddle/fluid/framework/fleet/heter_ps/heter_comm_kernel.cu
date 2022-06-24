@@ -173,7 +173,6 @@ __global__ void merge_gradients_basic_kernel(const KeyType* d_keys,
         merger.merge_basic(out, in, feature_value_accessor);
       }
     }
-    printf("merge kernel, i=%lu num=%u key=%lu\n", i, num, key);
   }
 }
 
@@ -368,7 +367,7 @@ void HeterCommKernel::merge_gradient(
     int grid_size2 = (n * grad_dim - 1) / block_size_ + 1;
     merge_gradients_embedx_kernel<<<grid_size2, block_size_, 0, stream>>>(
             d_keys,
-            offset, fea_num, index, input, output, n, grad_dim, grad_value_size, merger, feature_value_accessor_);
+            offset, fea_num, index, input, output, n * grad_dim, grad_dim, grad_value_size, merger, feature_value_accessor_);
   }
 }
 
