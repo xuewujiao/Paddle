@@ -587,8 +587,11 @@ class SparseTable(Table):
             if proto.table_name == self.common.table_name:
                 usr_table_proto = proto
                 break
-        table_proto.table_class = 'MemorySparseTable'
-        warnings.warn("The PS mode must use MemorySparseTable.")
+        if usr_table_proto.HasField("table_class"):
+            table_proto.table_class = usr_table_proto.table_class
+        else:
+            table_proto.table_class = 'MemorySparseTable'
+            warnings.warn("The PS mode must use MemorySparseTable.")
         if usr_table_proto.HasField("shard_num"):
             table_proto.shard_num = usr_table_proto.shard_num
         else:
@@ -795,6 +798,7 @@ class PsDescBuilder(object):
                 self.barrier_table_id = table.idx
         self.service._set(
             self.ps_desc.server_param.downpour_server_param.service_param)
+        self.fs_client._set(self.ps_desc.fs_client_param)
         return text_format.MessageToString(self.ps_desc)
 
     def build_server_desc(self):
