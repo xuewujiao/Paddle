@@ -32,6 +32,8 @@ struct GpuAccessorInfo {
   size_t dim;
   // value各个维度的size
   size_t size;
+  // embedx维度 
+  size_t embedx_dim;
   // push value维度
   size_t update_dim;
   // push value各个维度的size
@@ -233,6 +235,7 @@ class CommonFeatureValueAccessor : public FeatureValueAccessor {
   __host__ __device__ virtual void InitAccessorInfo() {
     _accessor_info.dim = common_feature_value.Dim();
     _accessor_info.size = common_feature_value.Size();
+    _accessor_info.embedx_dim = common_feature_value.EmbedWDim();
     _accessor_info.update_dim = 5 + common_feature_value.EmbedWDim();
     _accessor_info.update_size = _accessor_info.update_dim * sizeof(float);
     _accessor_info.mf_size =
