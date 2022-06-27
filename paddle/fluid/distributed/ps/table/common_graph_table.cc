@@ -1764,7 +1764,6 @@ int GraphTable::parse_feature(int idx, const std::string& feat_str,
 }
 
 int GraphTable::get_all_id(int type_id, int slice_num, std::vector<std::vector<uint64_t>> *output) {
-  //std::vector<std::vector<uint64_t>> res(slice_num);
   output->resize(slice_num); 
   auto &search_shards = type_id == 0 ? edge_shards : feature_shards;
   std::vector<std::future<std::vector<uint64_t>>> tasks;
@@ -1782,16 +1781,13 @@ int GraphTable::get_all_id(int type_id, int slice_num, std::vector<std::vector<u
   for (size_t i = 0; i < tasks.size(); i++) {
     auto ids = tasks[i].get();
     for (auto &id : ids) {
-      //res[(uint64_t)(id) % slice_num].push_back(id);
       (*output)[(uint64_t)(id) % slice_num].push_back(id);
     }
   }
-  //return res;
   return 0;
 }
 
 int GraphTable::get_all_neighbor_id(int type_id, int slice_num, std::vector<std::vector<uint64_t>> *output) {
-  //std::vector<std::vector<uint64_t>> res(slice_num);
   output->resize(slice_num); 
   auto &search_shards = type_id == 0 ? edge_shards : feature_shards;
   std::vector<std::future<std::vector<uint64_t>>> tasks;
@@ -1809,17 +1805,14 @@ int GraphTable::get_all_neighbor_id(int type_id, int slice_num, std::vector<std:
   for (size_t i = 0; i < tasks.size(); i++) {
     auto ids = tasks[i].get();
     for (auto &id : ids) {
-      //res[(uint64_t)(id) % slice_num].push_back(id);
       (*output)[(uint64_t)(id) % slice_num].push_back(id);
     }
   }
   return 0;
-  //return res;
 }
 
 int GraphTable::get_all_id(int type_id, int idx,
                            int slice_num, std::vector<std::vector<uint64_t>> *output) {
-  //std::vector<std::vector<uint64_t>> res(slice_num);
   output->resize(slice_num);
   auto &search_shards = type_id == 0 ? edge_shards[idx] : feature_shards[idx];
   std::vector<std::future<std::vector<uint64_t>>> tasks;
@@ -1837,15 +1830,12 @@ int GraphTable::get_all_id(int type_id, int idx,
   for (size_t i = 0; i < tasks.size(); i++) {
     auto ids = tasks[i].get();
     for (auto &id : ids) (*output)[id % slice_num].push_back(id);
-    //for (auto &id : ids) res[id % slice_num].push_back(id);
   }
   return 0;
-  //return res;
 }
 
 int GraphTable::get_all_neighbor_id(int type_id, int idx,
                                     int slice_num, std::vector<std::vector<uint64_t>> *output) {
-  //std::vector<std::vector<uint64_t>> res(slice_num);
   output->resize(slice_num);
   auto &search_shards = type_id == 0 ? edge_shards[idx] : feature_shards[idx];
   std::vector<std::future<std::vector<uint64_t>>> tasks;
@@ -1863,10 +1853,8 @@ int GraphTable::get_all_neighbor_id(int type_id, int idx,
   for (size_t i = 0; i < tasks.size(); i++) {
     auto ids = tasks[i].get();
     for (auto &id : ids) (*output)[id % slice_num].push_back(id);
-    //for (auto &id : ids) res[id % slice_num].push_back(id);
   }
   return 0;
-  //return res;
 }
 
 int GraphTable::get_all_feature_ids(int type_id, int idx, int slice_num,

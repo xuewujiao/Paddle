@@ -36,9 +36,6 @@ class GraphGpuWrapper {
   void init_service();
   void set_up_types(std::vector<std::string>& edge_type,
                     std::vector<std::string>& node_type);
-  //void upload_batch(int etype_id, std::vector<std::vector<uint64_t>>& ids);
-  //void upload_batch(std::vector<std::vector<uint64_t>>& ids,
-  //                  int slot_num);
   void upload_batch(int type, int idx, int slice_num, std::string edge_type);
   void upload_batch(int type, int slice_num, int slot_num);
   void add_table_feat_conf(std::string table_name, std::string feat_name,

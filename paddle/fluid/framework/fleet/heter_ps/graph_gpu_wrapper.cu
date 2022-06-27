@@ -229,15 +229,6 @@ void GraphGpuWrapper::upload_batch(int type, int idx, int slice_num, std::string
       VLOG(0) << "sub graph on gpu " << i << " is built";
       return 0;
     }));
-    /**
-    VLOG(0) << "begin make_gpu_ps_graph, node_id[" << i << "]_size["
-        << ids[i].size() << "]";
-    GpuPsCommGraph sub_graph =
-        g->cpu_graph_table_->make_gpu_ps_graph(idx, ids[i]);
-    g->build_graph_on_single_gpu(sub_graph, i, idx);
-    sub_graph.release_on_cpu();
-    VLOG(0) << "sub graph on gpu " << i << " is built";
-    **/
   }
   for (size_t i = 0; i < tasks.size(); i++) tasks[i].get();
   debug_gpu_memory_info("upload_batch node end");
@@ -266,21 +257,6 @@ void GraphGpuWrapper::upload_batch(int type, int slice_num, int slot_num) {
       VLOG(0) << "sub graph fea on gpu " << i << " is built";
       return 0;
     }));
-    /**
-    VLOG(0) << "begin make_gpu_ps_graph_fea, node_ids[" << i << "]_size["
-            << node_ids[i].size() << "]";
-    GpuPsCommGraphFea sub_graph = g->cpu_graph_table_->make_gpu_ps_graph_fea(
-        node_ids[i], slot_num);
-
-    // sub_graph.display_on_cpu();
-    VLOG(0) << "begin build_graph_fea_on_single_gpu, node_ids[" << i
-            << "]_size[" << node_ids[i].size() << "]";
-    g->build_graph_fea_on_single_gpu(sub_graph, i);
-
-    sub_graph.release_on_cpu();
-
-    VLOG(0) << "sub graph fea on gpu " << i << " is built";
-    **/
   }
   for (size_t i = 0; i < tasks.size(); i++) tasks[i].get();
   // g->build_graph_from_cpu(vec);
