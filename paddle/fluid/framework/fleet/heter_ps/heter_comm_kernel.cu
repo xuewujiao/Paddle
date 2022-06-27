@@ -235,8 +235,7 @@ __global__ void dy_mf_fill_dvals_kernel(float* d_shard_vals, float* d_vals,
     }
     cur[feature_value_accessor.common_feature_value.SlotIndex()] =
       shard_val[feature_value_accessor.common_feature_value.SlotIndex()];
-    cur[feature_value_accessor.common_feature_value.MfDimIndex()] =
-      shard_val[feature_value_accessor.common_feature_value.MfDimIndex()];
+    cur[feature_value_accessor.common_feature_value.MfDimIndex()] = mf_dim;
     cur[feature_value_accessor.common_feature_value.MfSizeIndex()] =
       shard_val[feature_value_accessor.common_feature_value.MfSizeIndex()];
 
