@@ -351,7 +351,7 @@ void BindGraphGpuWrapper(py::module* m) {
       .def("load_edge_file", &GraphGpuWrapper::load_edge_file)
       .def("load_node_and_edge", &GraphGpuWrapper::load_node_and_edge)
       .def("upload_batch",
-           py::overload_cast<int, int, int, std::string>(
+           py::overload_cast<int, int, int, const std::string&>(
                &GraphGpuWrapper::upload_batch))
       .def("upload_batch",
            py::overload_cast<int, int, int>(

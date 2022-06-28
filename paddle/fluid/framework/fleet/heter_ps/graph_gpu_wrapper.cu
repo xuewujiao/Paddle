@@ -208,7 +208,7 @@ void GraphGpuWrapper::finalize() {
   ((GpuPsGraphTable *)graph_table)->show_table_collisions();
 }
 
-void GraphGpuWrapper::upload_batch(int type, int idx, int slice_num, std::string edge_type) {
+void GraphGpuWrapper::upload_batch(int type, int idx, int slice_num, const std::string &edge_type) {
   VLOG(0) << "begin upload edge, type[" << edge_type << "]";
   std::vector<std::vector<uint64_t>> ids;
   ((GpuPsGraphTable *)graph_table)
