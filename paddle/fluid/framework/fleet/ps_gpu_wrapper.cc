@@ -801,7 +801,7 @@ void PSGPUWrapper::BeginPass() {
         "[BeginPass] after build_task, current task is not null."));
   }
 
-  VLOG(0) << "BeginPass end, cost time: " << timer.ElapsedSec() << "s";
+  VLOG(0) << "STAGE [BeginPass] finished, time cost: " << timer.ElapsedSec() << " sec";
 }
 
 void PSGPUWrapper::EndPass() {
@@ -938,7 +938,7 @@ void PSGPUWrapper::EndPass() {
   current_task_ = nullptr;
   gpu_free_channel_->Put(current_task_);
   timer.Pause();
-  VLOG(0) << "EndPass end, cost time: " << timer.ElapsedSec() << "s";
+  VLOG(0) << "STAGE [EndPass] finished, time cost: " << timer.ElapsedSec() << " sec";
 }
 
 void PSGPUWrapper::PullSparse(const paddle::platform::Place& place,
