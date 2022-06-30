@@ -476,11 +476,11 @@ int GraphDataGenerator::GenerateSampleGraph(uint64_t* node_ids, int len) {
               dev_ctx_, uniq_nodes, neighbors, count, nullptr, nullptr, false,
               &reindex_src, &reindex_dst, &final_nodes);
     } else {
+      edges_split_num.push_back(final_nodes.numel()); // For block slice.
       phi::DenseTensor copy_final_nodes = 
           phi::Empty<int64_t>(dev_ctx_, {final_nodes.numel()});
       cudaMemcpy(copy_final_nodes.data<int64_t>(), final_nodes.data<int64_t>(),
                  sizeof(int64_t) * final_nodes.numel(), cudaMemcpyDeviceToDevice);
-      edges_split_num.push_back(copy_final_nodes.numel()); // For next num nodes
       phi::GraphReindexKernel<int64_t, typename paddle::framework::ConvertToPhiContext<
           platform::CUDADeviceContext>::TYPE>(
               dev_ctx_, copy_final_nodes, neighbors, count, nullptr, nullptr, false,
