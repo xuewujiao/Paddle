@@ -29,6 +29,25 @@ DECLARE_uint64(gpugraph_merge_grads_segment_size);
 
 namespace paddle {
 namespace framework {
+template<typename T>
+void show_list(int gpu_id, const T* d_ids, int len, const char* desc) {
+  static int i = 0;
+  if (gpu_id != 0) return;
+  if (++i > 4) return;
+
+  T* h_nodes = nullptr;
+  size_t size = sizeof(T) * len;
+  cudaMallocHost((void**)&h_nodes, size);
+  cudaMemcpy(h_nodes, d_ids, size, cudaMemcpyDeviceToHost);
+  for (size_t idx = 0; idx < len; ++idx) {
+    VLOG(0) << "device:" << gpu_id <<
+      ", " << "list[" << idx << "]=" << h_nodes[idx] <<
+      ", desc=" << desc;
+  }
+  cudaFree(&h_nodes);
+  h_nodes = nullptr;
+}
+
 template <typename KeyType, typename ValType, typename GradType>
 HeterComm<KeyType, ValType, GradType>::HeterComm(
     size_t capacity, std::shared_ptr<HeterPsResource> resource) {
@@ -630,7 +649,6 @@ void HeterComm<KeyType, ValType, GradType>::dynamic_merge_grad(
   auto stream = resource_->local_stream(gpu_num, 0);
 
   size_t temp_storage_bytes;
-
   size_t grad_dim = max_mf_dim_;
   size_t grad_value_size = TYPEALIGN(8, feature_value_accessor_.common_push_value.Size(max_mf_dim_));
 
@@ -689,7 +707,8 @@ void HeterComm<KeyType, ValType, GradType>::dynamic_merge_grad(
     timeline.Start();
     segment_merge_grad(
             gpu_num,
-            d_keys, d_grads, d_index, len,
+            //d_keys, d_grads, d_index, len,
+            d_merge_keys_ptr, d_grads, d_index, len,
             d_fea_num_info_ptr,
             d_offset, uniq_len,
             segment_len);
@@ -713,8 +732,9 @@ void HeterComm<KeyType, ValType, GradType>::dynamic_merge_grad(
     PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
 
     timeline.Pause();
-    VLOG(0) << "card:" << dev_id << ", raw merge_grad cost " <<
-        timeline.ElapsedSec() << "seconds";
+    VLOG(0) << "card:" << dev_id << ", merge_grad cost " <<
+        timeline.ElapsedSec() << "seconds" << ", len=" << len <<
+        ", uniq_len=" << uniq_len << ", segments_num=" << segment_len;
   }
 }
 
@@ -736,13 +756,8 @@ void HeterComm<KeyType, ValType, GradType>::segment_merge_grad(
   auto stream = resource_->local_stream(gpu_num, 0);
   auto grad_dim = max_mf_dim_;
   auto grad_value_size = TYPEALIGN(8, feature_value_accessor_.common_push_value.Size(max_mf_dim_));
-
   auto d_buffer1 = memory::Alloc(place, sizeof(uint32_t) * len);
   auto d_segments = reinterpret_cast<uint32_t*>(d_buffer1->ptr());
-  auto d_buffer2 = memory::Alloc(place, sizeof(uint32_t) * len);
-  auto d_segments_offset = reinterpret_cast<uint32_t*>(d_buffer2->ptr());
-  auto d_buffer3 = memory::Alloc(place, sizeof(uint32_t) * len);
-  auto d_segments_fea_num_info = reinterpret_cast<uint32_t*>(d_buffer3->ptr());
   auto d_buffer4 = memory::Alloc(place, sizeof(uint32_t));
   auto d_segments_num = reinterpret_cast<uint32_t*>(d_buffer4->ptr());
   CUDA_CHECK(cudaMemsetAsync(d_segments_num, 0, sizeof(uint32_t), stream));
@@ -755,7 +770,6 @@ void HeterComm<KeyType, ValType, GradType>::segment_merge_grad(
           segment_size, stream);
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
 
-#if 0
   size_t temp_storage_bytes = 0;
   PADDLE_ENFORCE_GPU_SUCCESS(cub::DeviceReduce::Sum(
       NULL, temp_storage_bytes, d_segments, d_segments_num,
@@ -764,17 +778,23 @@ void HeterComm<KeyType, ValType, GradType>::segment_merge_grad(
   PADDLE_ENFORCE_GPU_SUCCESS(cub::DeviceReduce::Sum(
       d_temp_storage->ptr(), temp_storage_bytes, d_segments, d_segments_num,
       uniq_len, stream));
-#else
   CUDA_CHECK(cudaMemcpyAsync(&segments_num, d_segments_num, sizeof(uint32_t),
              cudaMemcpyDeviceToHost, stream));
-#endif
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
 
-  size_t temp_storage_bytes = 0;
+  auto d_buffer2 = memory::Alloc(place, sizeof(uint32_t) * segments_num);
+  auto d_segments_offset = reinterpret_cast<uint32_t*>(d_buffer2->ptr());
+  auto d_buffer3 = memory::Alloc(place, sizeof(uint32_t) * segments_num);
+  auto d_segments_fea_num_info = reinterpret_cast<uint32_t*>(d_buffer3->ptr());
+
+  temp_storage_bytes = 0;
   PADDLE_ENFORCE_GPU_SUCCESS(cub::DeviceScan::ExclusiveSum(
       NULL, temp_storage_bytes, d_segments, d_segments_offset,
       uniq_len, stream));
-  auto d_temp_storage = memory::Alloc(place, temp_storage_bytes);
+  if (d_temp_storage->size() < temp_storage_bytes) {
+    d_temp_storage = NULL;
+    d_temp_storage = memory::Alloc(place, temp_storage_bytes);
+  }
   PADDLE_ENFORCE_GPU_SUCCESS(cub::DeviceScan::ExclusiveSum(
       d_temp_storage->ptr(), temp_storage_bytes, d_segments, d_segments_offset,
       uniq_len, stream));
@@ -786,6 +806,7 @@ void HeterComm<KeyType, ValType, GradType>::segment_merge_grad(
           d_segments_fea_num_info, segment_size, stream);
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
 
+  // reuse d_segments_offset
   PADDLE_ENFORCE_GPU_SUCCESS(cub::DeviceScan::ExclusiveSum(
       NULL, temp_storage_bytes, d_segments_fea_num_info, d_segments_offset,
       segments_num, stream));
@@ -810,11 +831,11 @@ void HeterComm<KeyType, ValType, GradType>::segment_merge_grad(
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
 
   timeline.Pause();
-  VLOG(0) << "card:" << dev_id << ", segment merge_grad cost " <<
+  VLOG(0) << "card:" << dev_id << ", merge_grad cost " <<
       timeline.ElapsedSec() << "seconds" << ", len=" << len <<
       ", uniq_len=" << uniq_len << ", segments_num=" << segments_num;
 
-  auto d_segments_keys = memory::Alloc(place, sizeof(KeyType) * len);
+  auto d_segments_keys = memory::Alloc(place, sizeof(KeyType) * segments_num);
   auto d_segments_keys_ptr = reinterpret_cast<KeyType*>(d_segments_keys->ptr());
   heter_comm_kernel_->shrink_keys(
           d_keys, d_segments_offset,
@@ -829,6 +850,11 @@ void HeterComm<KeyType, ValType, GradType>::segment_merge_grad(
               grad_value_size * segments_num,
               cudaMemcpyDeviceToDevice, stream));
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
+
+  //show_list(dev_id, d_keys, len, "d_keys");
+  //show_list(dev_id, d_segments_fea_num_info, segments_num, "d_segments_fea_num_info");
+  //show_list(dev_id, d_segments_offset, segments_num, "d_segments_offset");
+  //show_list(dev_id, d_segments_keys_ptr, segments_num, "d_segments_keys");
 }
 
 template <typename KeyType, typename ValType, typename GradType>
@@ -1068,6 +1094,7 @@ void HeterComm<KeyType, ValType, GradType>::push_sparse(int dev_num,
     // do two gradient merge
     // 1st. do segmented gradient merge
     // 2nd. do global gradient merge
+    //len = 1000;
     dynamic_merge_grad(dev_num, d_keys, d_grads, len, uniq_len, segment_len, true);
     len = segment_len;
     uniq_len = 0;

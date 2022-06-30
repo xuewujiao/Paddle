@@ -220,7 +220,6 @@ __global__ void split_segments_kernel(
   auto fea_num = d_fea_num_info[tx];
   auto seg_num = (uint32_t)((fea_num - 1) / segment_size + 1);
   d_segments[tx] = seg_num;
-  atomicAdd(d_segments_num, seg_num);
 }
 
 __global__ void expand_segments_kernel(
