@@ -240,7 +240,7 @@ int32_t MemorySparseTable::Save(const std::string& dirname,
 
   size_t file_start_idx = _avg_local_shard_num * _shard_idx;
 
-  int thread_num = _real_local_shard_num < 20 ? _real_local_shard_num : 20;
+  int thread_num = _real_local_shard_num < 37 ? _real_local_shard_num : 37;
   omp_set_num_threads(thread_num);
 #pragma omp parallel for schedule(dynamic)
   for (size_t i = 0; i < _real_local_shard_num; ++i) {
