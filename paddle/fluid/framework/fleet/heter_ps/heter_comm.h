@@ -61,7 +61,7 @@ class HeterComm {
           size_t len, int& uniq_len, size_t& segment_len, bool enable_segment_merge_grad);
   void segment_merge_grad(int gpu_num, KeyType* d_keys, float* d_grads,
           const uint32_t* d_index, size_t len,
-          const uint32_t* d_fea_num_info, const uint32_t* d_offset,
+          const uint32_t* d_fea_num_info,
           size_t uniq_len, size_t& segment_len);
   void pull_sparse(int num, KeyType* d_keys, float* d_vals, size_t len);
   void build_ps(int num, KeyType* h_keys, ValType* h_vals, size_t len,
