@@ -117,11 +117,11 @@ __global__ void fill_dvals_kernel(ValType* d_shard_vals, ValType* d_vals,
   }
 }
 
-template <typename KeyType, typename T>
+template <typename KeyType, typename T, typename FVAceessor>
 __global__ void dy_mf_fill_shard_grads_kernel(
     KeyType* d_shard_keys, KeyType* d_keys, float* d_shard_grads,
     float* d_grads, T* idx, size_t len, size_t grad_value_size,
-    CommonFeatureValueAccessor feature_value_accessor) {
+    FVAceessor feature_value_accessor) {
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < len) {
     d_shard_keys[i] = d_keys[idx[i]];
@@ -132,7 +132,7 @@ __global__ void dy_mf_fill_shard_grads_kernel(
   }
 }
 
-template <typename KeyType>
+template <typename KeyType, typename FVAceessor>
 __global__ void merge_gradients_basic_kernel(const KeyType* d_keys,
                                        const uint32_t* offset,
                                        const uint32_t* fea_num,
@@ -140,7 +140,7 @@ __global__ void merge_gradients_basic_kernel(const KeyType* d_keys,
                                        char* output, int n,
                                        size_t grad_value_size,
                                        DynamicGradMerger& merger,
-                                      CommonFeatureValueAccessor& feature_value_accessor) {
+                                       FVAceessor& feature_value_accessor) {
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
 
   if (i < n) {
@@ -162,7 +162,7 @@ __global__ void merge_gradients_basic_kernel(const KeyType* d_keys,
   }
 }
 
-template <typename KeyType>
+template <typename KeyType, typename FVAceessor>
 __global__ void merge_gradients_embedx_kernel(const KeyType* d_keys,
                                        const uint32_t* offset,
                                        const uint32_t* fea_num,
@@ -171,7 +171,7 @@ __global__ void merge_gradients_embedx_kernel(const KeyType* d_keys,
                                        size_t grad_dim,
                                        size_t grad_value_size,
                                        DynamicGradMerger& merger,
-                                      CommonFeatureValueAccessor& feature_value_accessor) {
+                                       FVAceessor& feature_value_accessor) {
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
 
   if (i < n) {
@@ -194,10 +194,10 @@ __global__ void merge_gradients_embedx_kernel(const KeyType* d_keys,
   }
 }
 
-template <typename T>
+template <typename T, typename FVAceessor>
 __global__ void dy_mf_fill_dvals_kernel(float* d_shard_vals, float* d_vals,
                                         T* idx, size_t len, size_t val_size,
-                                       CommonFeatureValueAccessor feature_value_accessor) {
+                                        FVAceessor feature_value_accessor) {
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < len) {
     uint64_t new_offset = uint64_t(idx[i]) * val_size;
