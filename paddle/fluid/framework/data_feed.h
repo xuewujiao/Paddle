@@ -909,7 +909,8 @@ class GraphDataGenerator {
   void SampleNeighbors(int64_t* uniq_nodes, int len, int sample_size,
                        phi::DenseTensor* neighbors, phi::DenseTensor* count,
                        std::vector<int64_t>& edges_split_num);
-  int GenerateSampleGraph(uint64_t* node_ids, int len);
+  int GenerateSampleGraph(uint64_t* node_ids, int len, phi::DenseTensor* final_nodes,
+                          phi::DenseTensor* inverse);
 
  protected:
   int walk_degree_;
@@ -931,11 +932,6 @@ class GraphDataGenerator {
   int* index_tensor_ptr_;
   int64_t* show_tensor_ptr_;
   int64_t* clk_tensor_ptr_;
-  int64_t* num_nodes_tensor_ptr_;
-  int64_t* next_num_nodes_tensor_ptr_;
-  int64_t* edges_src_tensor_ptr_;
-  int64_t* edges_dst_tensor_ptr_;
-  int64_t* edges_split_tensor_ptr_;
 
   cudaStream_t stream_;
   paddle::platform::Place place_;
