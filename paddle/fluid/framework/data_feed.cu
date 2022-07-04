@@ -589,6 +589,12 @@ int GraphDataGenerator::GenerateBatch() {
         ins_buf_pair_len_ < batch_size_ ? ins_buf_pair_len_ : batch_size_;
 
     total_instance *= 2;
+    id_tensor_ptr_ =
+        feed_vec_[0]->mutable_data<int64_t>({total_instance, 1}, this->place_);
+    show_tensor_ptr_ =
+        feed_vec_[1]->mutable_data<int64_t>({total_instance}, this->place_);
+    clk_tensor_ptr_ =
+        feed_vec_[2]->mutable_data<int64_t>({total_instance}, this->place_);
   }
 
   int64_t *slot_tensor_ptr_[slot_num_];
@@ -619,12 +625,6 @@ int GraphDataGenerator::GenerateBatch() {
     ins_cursor = ins_buf + ins_buf_pair_len_ * 2 - total_instance;
 
     if (!sage_mode_) {
-      id_tensor_ptr_ =
-          feed_vec_[0]->mutable_data<int64_t>({total_instance, 1}, this->place_);
-      show_tensor_ptr_ =
-          feed_vec_[1]->mutable_data<int64_t>({total_instance}, this->place_);
-      clk_tensor_ptr_ =
-          feed_vec_[2]->mutable_data<int64_t>({total_instance}, this->place_);
       cudaMemcpyAsync(id_tensor_ptr_, ins_cursor,
                       sizeof(uint64_t) * total_instance, cudaMemcpyDeviceToDevice,
                       stream_);
@@ -646,9 +646,9 @@ int GraphDataGenerator::GenerateBatch() {
           feed_vec_[2]->mutable_data<int64_t>({final_nodes.numel()}, this->place_);
       int index_offset = 3 + slot_num_ * 2 + 5 * samples_.size();
       index_tensor_ptr_ =
-          feed_vec_[index_offset]->mutable_data<int>({inverse.numel()}, this->place_);
+          feed_vec_[index_offset]->mutable_data<int>({total_instance}, this->place_);
 
-      cudaMemcpy(id_tensor_ptr_, final_nodes.data<int64_t>(), 
+      cudaMemcpy(id_tensor_ptr_, final_nodes.data<int64_t>(),
                  sizeof(int64_t) * final_nodes.numel(), cudaMemcpyDeviceToDevice);
       cudaMemcpy(index_tensor_ptr_, inverse.data<int>(), sizeof(int) * inverse.numel(),
                  cudaMemcpyDeviceToDevice);
