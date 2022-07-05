@@ -99,8 +99,7 @@ class GraphShard {
     return dedup2shard_keys(&keys, total_res, slice_num);
   }
   size_t dedup2shard_keys(std::vector<uint64_t> *keys,
-                           std::vector<std::vector<uint64_t>> *total_res,
-                           int slice_num) {
+      std::vector<std::vector<uint64_t>> *total_res, int slice_num) {
     size_t num = keys->size();
     uint64_t last_key = 0;
     // sort key insert to vector
