@@ -206,6 +206,8 @@ __global__ void GraphFillFeatureKernel(uint64_t *id_tensor, int *fill_ins_num,
     }
   }
 
+  __syncthreads();
+
   if (threadIdx.x == 0) {
     global_num = atomicAdd(fill_ins_num, local_num);
   }
@@ -244,6 +246,8 @@ __global__ void GraphFillIdKernel(uint64_t *id_tensor, int *fill_ins_num,
       local_key[dst * 2 + 1] = walk[src + step];
     }
   }
+
+  __syncthreads();
 
   if (threadIdx.x == 0) {
     global_num = atomicAdd(fill_ins_num, local_num);
@@ -340,7 +344,6 @@ int GraphDataGenerator::FillInsBuf() {
   int h_pair_num;
   cudaMemcpyAsync(&h_pair_num, d_pair_num, sizeof(int), cudaMemcpyDeviceToHost,
                   stream_);
-
   if (!FLAGS_enable_opt_get_features && slot_num_ > 0) {
     uint64_t *feature_buf = reinterpret_cast<uint64_t *>(d_feature_buf_->ptr());
     uint64_t *feature = reinterpret_cast<uint64_t *>(d_feature_->ptr());
@@ -551,7 +554,7 @@ int GraphDataGenerator::GenerateBatch() {
   }
 
   cudaStreamSynchronize(stream_);
-  if (!gpu_graph_training_) return total_instance / 2;
+  if (!gpu_graph_training_) return 1;
   ins_buf_pair_len_ -= total_instance / 2;
   if (debug_mode_) {
     uint64_t h_slot_tensor[slot_num_][total_instance];
@@ -963,12 +966,12 @@ void GraphDataGenerator::SetConfig(
   window_ = graph_config.window();
   once_sample_startid_len_ = graph_config.once_sample_startid_len();
   debug_mode_ = graph_config.debug_mode();
-  if (debug_mode_) {
+  gpu_graph_training_ = graph_config.gpu_graph_training();
+  if (debug_mode_ || !gpu_graph_training_) {
     batch_size_ = graph_config.batch_size();
   } else {
     batch_size_ = once_sample_startid_len_;
   }
-  gpu_graph_training_ = graph_config.gpu_graph_training();
   repeat_time_ = graph_config.sample_times_one_chunk();
   buf_size_ =
       once_sample_startid_len_ * walk_len_ * walk_degree_ * repeat_time_;
