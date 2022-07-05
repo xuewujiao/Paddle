@@ -634,7 +634,7 @@ int GraphDataGenerator::GenerateBatch() {
                            stream_>>>(clk_tensor_ptr_, total_instance);
 
     } else {
-      VLOG(0) << gpuid_ << " " << "Ready to enter GenerateSampleGraph";
+      VLOG(2) << gpuid_ << " " << "Ready to enter GenerateSampleGraph";
       phi::DenseTensor final_nodes, inverse;
       uniq_instance_ = GenerateSampleGraph(ins_cursor, total_instance, &final_nodes,
                                            &inverse);
