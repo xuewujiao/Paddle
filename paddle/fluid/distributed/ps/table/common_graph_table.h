@@ -106,7 +106,7 @@ class GraphShard {
     std::sort(keys->begin(), keys->end());
     total_res->resize(slice_num);
     for (int shard_id = 0; shard_id < slice_num; ++shard_id) {
-      (*total_res)[shard_id].reserve((num + slice_num - 1) / slice_num);
+      (*total_res)[shard_id].reserve(num / slice_num);
     }
     for (size_t i = 0; i < num; ++i) {
       const uint64_t &k = (*keys)[i];

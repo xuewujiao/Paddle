@@ -117,8 +117,10 @@ class FeatureNode : public Node {
       //        PADDLE_ENFORCE_EQ(field.c_str() + field.length(), head_ptr);
       //        res->insert(feasign);
       //      }
+      const uint64_t *feas = (const uint64_t *)(feature_item.c_str());
       size_t num = feature_item.length() / sizeof(uint64_t);
-      uint64_t *feas = (uint64_t *)(feature_item.c_str());
+      CHECK((feature_item.length() % sizeof(uint64_t)) == 0)
+          << "bad feature_item: [" << feature_item << "]";
       size_t n = res->size();
       res->resize(n + num);
       for (size_t i = 0; i < num; ++i) {
@@ -145,9 +147,12 @@ class FeatureNode : public Node {
       //        res->push_back(feasign);
       //      }
       const std::string &s = this->feature[slot_idx];
+      const uint64_t *feas = (const uint64_t *)(s.c_str());
+
       size_t num = s.length() / sizeof(uint64_t);
+      CHECK((s.length() % sizeof(uint64_t)) == 0)
+                << "bad feature_item: [" << s << "]";
       res->resize(num);
-      uint64_t *feas = (uint64_t *)(s.c_str());
       for (size_t i = 0; i < num; ++i) {
         (*res)[i] = feas[i];
       }
@@ -220,29 +225,17 @@ class FeatureNode : public Node {
       std::vector<paddle::string::str_ptr>::iterator feat_str_begin,
       std::vector<paddle::string::str_ptr>::iterator feat_str_end,
       std::string *output) {
-    T v;
     size_t feat_str_size = feat_str_end - feat_str_begin;
     size_t Tsize = sizeof(T) * feat_str_size;
     size_t num = output->length();
-    output->reserve(num + Tsize);
+    output->resize(num + Tsize);
+
+    T *fea_ptrs = (T *)(&(*output)[num]);
 
     thread_local paddle::string::str_ptr_stream ss;
     for (size_t i = 0; i < feat_str_size; i++) {
       ss.reset(*(feat_str_begin + i));
-      ss >> v;
-      output->append((char *)&v, sizeof(T));
-    }
-  }
-  template <typename T>
-  static void parse_value_to_bytes(const char *ptr, size_t len,
-                                   std::string *output) {
-    thread_local paddle::string::str_ptr_stream ss;
-    ss.reset(ptr, len);
-
-    T v;
-    while (!ss.is_finish()) {
-      ss >> v;
-      output->append((char *)&v, sizeof(T));
+      ss >> fea_ptrs[i];
     }
   }
 

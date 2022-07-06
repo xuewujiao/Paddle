@@ -1212,7 +1212,7 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
     }
     local_valid_count++;
   }
-  VLOG(0) << "node_type[" << node_type << "] loads " << local_count
+  VLOG(2) << "node_type[" << node_type << "] loads " << local_count
           << " nodes from filepath->" << path;
   return {local_count, local_valid_count};
 }
@@ -1264,7 +1264,7 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
     }
     local_valid_count++;
   }
-  VLOG(0) << local_valid_count << "/" << local_count << " nodes from filepath->"
+  VLOG(2) << local_valid_count << "/" << local_count << " nodes from filepath->"
           << path;
   return {local_count, local_valid_count};
 }
@@ -1381,7 +1381,7 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_edge_file(
 
     local_valid_count++;
   }
-  VLOG(0) << local_count << " edges are loaded from filepath->" << path;
+  VLOG(2) << local_count << " edges are loaded from filepath->" << path;
   return {local_count, local_valid_count};
 }
 
