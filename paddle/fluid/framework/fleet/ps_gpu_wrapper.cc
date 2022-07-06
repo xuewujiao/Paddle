@@ -608,10 +608,9 @@ void PSGPUWrapper::BuildGPUTask(std::shared_ptr<HeterContext> gpu_task) {
             new MemoryPool(len, feature_value_size);
         auto& mem_pool = this->mem_pools_[i * this->multi_mf_dim_ + j];
         for (size_t k = 0; k < len; k++) {
-          // float* val = (float*)(mem_pool->mem_address(k));
           void* val = mem_pool->mem_address(k);
-          float* ptr_val = device_dim_ptrs[k]->data();
-          size_t dim = device_dim_ptrs[k]->size();
+          // float* ptr_val = device_dim_ptrs[k]->data();
+          // size_t dim = device_dim_ptrs[k]->size();
 #ifdef PADDLE_WITH_PSLIB
           val->delta_score =
               ptr_val[paddle::ps::DownpourCtrDymfAccessor::
@@ -647,9 +646,9 @@ void PSGPUWrapper::BuildGPUTask(std::shared_ptr<HeterContext> gpu_task) {
         }
 #endif
 #ifdef PADDLE_WITH_PSCORE
-        VLOG(5) << "cpu build " << k
-                << " cpuptr: " << (uint64_t)(device_dim_ptrs[k])
-                << " |: " << cpu_table_accessor_->ParseToString(ptr_val, dim);
+        // VLOG(5) << "cpu build " << k
+        //         << " cpuptr: " << (uint64_t)(device_dim_ptrs[k])
+        //         << " |: " << cpu_table_accessor_->ParseToString(ptr_val, dim);
         accessor_wrapper_ptr->BuildFill(val, device_dim_ptrs[k],
                                         cpu_table_accessor_, mf_dim);
         VLOG(5) << "build " << k << " : "
@@ -860,17 +859,15 @@ void PSGPUWrapper::EndPass() {
 #endif
 #ifdef PADDLE_WITH_PSCORE
         accessor_wrapper_ptr->DumpFill(gpu_val, cpu_table_accessor_, mf_dim);
-        auto* downpour_value = (paddle::distributed::FixedFeatureValue*)(*(
-            reinterpret_cast<uint64_t*>(gpu_val)));
-        float* cpu_val = downpour_value->data();
-        VLOG(5) << "dump to cpu " << index << "  gpu_value: "
-                << accessor_wrapper_ptr->ParseToString(
-                       gpu_val,
-                       int(accessor_wrapper_ptr->GetFeatureValueSize(mf_dim) /
-                           sizeof(float)))
-                << " \t cpu_value:"
-                << cpu_table_accessor_->ParseToString(cpu_val,
-                                                      downpour_value->size());
+        // auto* downpour_value = (paddle::distributed::FixedFeatureValue*)(*(
+        //     reinterpret_cast<uint64_t*>(gpu_val)));
+        // float* cpu_val = downpour_value->data();
+        // VLOG(5) << "dump to cpu " << index << "  gpu_value: "
+        //         << accessor_wrapper_ptr->ParseToString(gpu_val,
+        //              int(accessor_wrapper_ptr->GetFeatureValueSize(mf_dim) / sizeof(float)))
+        //         << " \t cpu_value:"
+        //         << cpu_table_accessor_->ParseToString(cpu_val,
+        //                                               downpour_value->size());
       }
 #endif
   free(test_build_values);

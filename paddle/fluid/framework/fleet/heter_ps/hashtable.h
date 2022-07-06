@@ -169,14 +169,10 @@ class HashTable {
             << " push value size: " << push_grad_value_size_;
   }
 
-  // void set_accessor(FVAccessor& accessor) {
-  //  feature_value_accessor_ = accessor;
-  // }
 
   void show_collision(int id) { return container_->print_collision(id); }
 
   std::unique_ptr<phi::RWLock> rwlock_{nullptr};
-  // FVAccessor feature_value_accessor_;
 
  private:
 #if defined(PADDLE_WITH_CUDA)

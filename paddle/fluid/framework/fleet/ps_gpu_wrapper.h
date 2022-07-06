@@ -407,24 +407,7 @@ class PSGPUWrapper {
     optimizer_type_ = (config.find("optimizer_type") == config.end())
                           ? 1
                           : int(config["optimizer_type"]);
-    embedx_dim_ = (config.find("embedx_dim") == config.end())
-                      ? 8
-                      : int(config["embedx_dim"]);
-    if (optimizer_type_ == 3) {  // adam
-      embed_sgd_dim_ = 4;
-      embedx_sgd_dim_ = embedx_dim_ * 2 + 2;
-    } else if (optimizer_type_ == 4) {  // shared_adam
-      embed_sgd_dim_ = 4;
-      embedx_sgd_dim_ = 4;
-    } else {
-      embed_sgd_dim_ = 1;
-      embedx_sgd_dim_ = 1;
-    }
-
-    VLOG(0) << "InitializeGPUServer embed_sgd_dim_:" << embed_sgd_dim_
-            << " embedx_sgd_dim_:" << embedx_sgd_dim_
-            << "  embedx_dim_:" << embedx_dim_
-            << " optimizer_type_:" << optimizer_type_;
+   
   }
 
   void SetDate(int year, int month, int day) {
@@ -537,8 +520,7 @@ class PSGPUWrapper {
 
 #ifdef PADDLE_WITH_PSCORE
   void SetTableAccessor(paddle::distributed::ValueAccessor* accessor) {
-    cpu_table_accessor_ =
-        dynamic_cast<paddle::distributed::CtrDymfAccessor*>(accessor);
+    cpu_table_accessor_ = accessor;
   }
 #endif
 
@@ -595,13 +577,10 @@ class PSGPUWrapper {
   bool slot_info_initialized_ = false;
   int use_afs_api_ = 0;
   int optimizer_type_ = 1;
-  int embed_sgd_dim_ = 1;
-  int embedx_sgd_dim_ = 1;
-  int embedx_dim_ = 8;
   std::string accessor_class_;
   std::unordered_map<std::string, float> fleet_config_;
 #ifdef PADDLE_WITH_PSCORE
-  paddle::distributed::CtrDymfAccessor* cpu_table_accessor_;
+  paddle::distributed::ValueAccessor* cpu_table_accessor_;
 #endif
 
 #ifdef PADDLE_WITH_CUDA
