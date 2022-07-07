@@ -48,8 +48,6 @@ template <typename KeyType, typename ValType, typename GradType,
 class HeterComm {
  public:
   HeterComm(size_t capacity, std::shared_ptr<HeterPsResource> resource);
-  HeterComm(size_t capacity, std::shared_ptr<HeterPsResource> resource,
-            CommonFeatureValueAccessor& accessor);
   virtual ~HeterComm();
   HeterComm(const HeterComm&) = delete;
   HeterComm& operator=(const HeterComm&) = delete;
@@ -121,9 +119,6 @@ class HeterComm {
 
   void set_accessor(FVAccessor& accessor) {
     feature_value_accessor_ = accessor;
-    //  for (auto& ptr_table: ptr_tables_) {
-    //    ptr_table->set_accessor(feature_value_accessor_);
-    //  }
   }
 #endif
 
@@ -255,8 +250,6 @@ class HeterComm {
   float load_factor_{0.75};
   int block_size_{256};
   std::unique_ptr<HeterCommKernel> heter_comm_kernel_;
-
-  CommonFeatureValueAccessor feature_value_accessor_;
 
  private:
   int topo_aware_{0};

@@ -29,36 +29,6 @@ DECLARE_uint64(gpugraph_merge_grads_segment_size);
 
 namespace paddle {
 namespace framework {
-// template <typename KeyType, typename ValType, typename GradType, typename
-// FVAccessor>
-// HeterComm<KeyType, ValType, GradType, FVAccessor>::HeterComm(
-//     size_t capacity, std::shared_ptr<HeterPsResource> resource) {
-//   VLOG(1) << "Construct new HeterComm";
-//   resource_ = resource;
-//   storage_.resize(resource_->total_device());
-//   multi_mf_dim_ = resource->multi_mf();
-//   load_factor_ = FLAGS_gpugraph_hbm_table_load_factor;
-//   VLOG(0) << "load_factor = " << load_factor_;
-//   for (int i = 0; i < resource_->total_device(); ++i) {
-// #if defined(PADDLE_WITH_CUDA)
-//     platform::CUDADeviceGuard guard(resource_->dev_id(i));
-//     allocators_.push_back(std::make_shared<cub::CachingDeviceAllocator>(
-//         8, 1, (unsigned int)-1, (size_t)-1, false, false));  // NOLINT
-// #endif
-//     if (!multi_mf_dim_) {
-//       auto table = new Table(capacity / load_factor_);
-//       tables_.push_back(table);
-//     } else {
-//       VLOG(0) << "Error:use HeterComm Construct with accessor";
-//       return;
-//     }
-//     if (multi_node_) {
-//       storage_[i].init(feanum_, resource_->dev_id(i));
-//     }
-//   }
-//   heter_comm_kernel_ = std::make_unique<HeterCommKernel>(block_size_);
-//   init_path();
-// }
 
 template <typename KeyType, typename ValType, typename GradType,
           typename FVAccessor>
@@ -98,8 +68,6 @@ HeterComm<KeyType, ValType, GradType, FVAccessor>::HeterComm(
       storage_[i].init(feanum_, resource_->dev_id(i));
     }
   }
-  // heter_comm_kernel_ = std::make_unique<HeterCommKernel>(block_size_,
-  // feature_value_accessor_);
   heter_comm_kernel_ = std::make_unique<HeterCommKernel>(block_size_);
   init_path();
 }
@@ -645,7 +613,7 @@ void HeterComm<KeyType, ValType, GradType, FVAccessor>::merge_grad(
 
 template <typename KeyType, typename ValType, typename GradType,
           typename FVAccessor>
-void HeterComm<KeyType, ValType, GradType>::dynamic_merge_grad(
+void HeterComm<KeyType, ValType, GradType, FVAccessor>::dynamic_merge_grad(
     int gpu_num, KeyType* d_keys, float* d_grads, size_t len,
     int& uniq_len, size_t& segment_len, bool enable_segment_merge_grad) {
   int dev_id = resource_->dev_id(gpu_num);
@@ -725,7 +693,7 @@ void HeterComm<KeyType, ValType, GradType>::dynamic_merge_grad(
 
     heter_comm_kernel_->merge_gradient(
             d_keys, d_offset, d_fea_num_info_ptr, d_index, (char*)d_grads,
-            (char*)d_merge_grads_ptr, uniq_len, grad_dim, grad_value_size, merger_, stream);
+            (char*)d_merge_grads_ptr, uniq_len, grad_dim, grad_value_size, merger_, stream, feature_value_accessor_);
     PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyAsync(d_grads, d_merge_grads_ptr,
                 grad_value_size * uniq_len,
                 cudaMemcpyDeviceToDevice, stream));
@@ -733,8 +701,9 @@ void HeterComm<KeyType, ValType, GradType>::dynamic_merge_grad(
   }
 }
 
-template <typename KeyType, typename ValType, typename GradType>
-void HeterComm<KeyType, ValType, GradType>::segment_merge_grad(
+template <typename KeyType, typename ValType, typename GradType,
+          typename FVAccessor>
+void HeterComm<KeyType, ValType, GradType, FVAccessor>::segment_merge_grad(
     int gpu_num,                        // the device number
     KeyType* d_keys,                    // the sorted keys list, which will be modified after merged
     float* d_grads,                     // the raw grads list, which will be modified after merged
