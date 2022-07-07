@@ -872,34 +872,34 @@ void PSGPUWrapper::EndPass() {
         //                                               downpour_value->size());
       }
 #endif
-  free(test_build_values);
-};
-if (multi_mf_dim_) {
-  VLOG(0) << "psgpu wrapper dump pool: multi_mf_dim_: " << multi_mf_dim_;
-  size_t device_num = heter_devices_.size();
-  std::vector<std::thread> threads(device_num * multi_mf_dim_);
-  for (size_t i = 0; i < device_num; i++) {
-    for (int j = 0; j < multi_mf_dim_; j++) {
-      threads[i + j * device_num] = std::thread(dump_pool_to_cpu_func, i, j);
+    free(test_build_values);
+  };
+  if (multi_mf_dim_) {
+    VLOG(0) << "psgpu wrapper dump pool: multi_mf_dim_: " << multi_mf_dim_;
+    size_t device_num = heter_devices_.size();
+    std::vector<std::thread> threads(device_num * multi_mf_dim_);
+    for (size_t i = 0; i < device_num; i++) {
+      for (int j = 0; j < multi_mf_dim_; j++) {
+        threads[i + j * device_num] = std::thread(dump_pool_to_cpu_func, i, j);
+      }
+    }
+    for (std::thread& t : threads) {
+      t.join();
     }
   }
-  for (std::thread& t : threads) {
-    t.join();
+  if (keysize_max != 0) {
+    HeterPs_->end_pass();
   }
-}
-if (keysize_max != 0) {
-  HeterPs_->end_pass();
-}
-VLOG(0) << "HeterPs_->end_pass end";
-for (size_t i = 0; i < hbm_pools_.size(); i++) {
-  delete hbm_pools_[i];
-}
-gpu_task_pool_.Push(current_task_);
-current_task_ = nullptr;
-gpu_free_channel_->Put(current_task_);
-timer.Pause();
-VLOG(0) << "EndPass end, cost time: " << timer.ElapsedSec() << "s";
-}  // namespace paddle
+  VLOG(0) << "HeterPs_->end_pass end";
+  for (size_t i = 0; i < hbm_pools_.size(); i++) {
+    delete hbm_pools_[i];
+  }
+  gpu_task_pool_.Push(current_task_);
+  current_task_ = nullptr;
+  gpu_free_channel_->Put(current_task_);
+  timer.Pause();
+  VLOG(0) << "EndPass end, cost time: " << timer.ElapsedSec() << "s";
+  }  // namespace paddle
 
 void PSGPUWrapper::PullSparse(const paddle::platform::Place& place,
                               const int table_id,
