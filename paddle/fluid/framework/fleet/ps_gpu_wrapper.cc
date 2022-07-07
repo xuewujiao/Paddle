@@ -145,8 +145,8 @@ void PSGPUWrapper::PreBuildTask(std::shared_ptr<HeterContext> gpu_task) {
       remain = total_len % thread_keys_thread_num_;
       VLOG(0) << "total len: " << total_len;
       auto gen_dynamic_mf_func = [this](
-          const std::deque<SlotRecord>& total_data, int begin_index,
-          int end_index, int i) {
+                                     const std::deque<SlotRecord>& total_data,
+                                     int begin_index, int end_index, int i) {
         for (auto iter = total_data.begin() + begin_index;
              iter != total_data.begin() + end_index; iter++) {
           const auto& ins = *iter;
@@ -233,17 +233,17 @@ void PSGPUWrapper::PreBuildTask(std::shared_ptr<HeterContext> gpu_task) {
         this->thread_keys_[i][shard_id].insert(cur_key);
       }
     };
-    auto gen_graph_dynamic_mf_func = [this](
-        const std::vector<uint64_t>& total_data, int begin_index, int end_index,
-        int i) {
-      for (auto iter = total_data.begin() + begin_index;
-           iter != total_data.begin() + end_index; iter++) {
-        uint64_t cur_key = *iter;
-        int shard_id = cur_key % thread_keys_shard_num_;
-        // TODO: feasign <-> slot <-> multi_dim
-        this->thread_dim_keys_[i][shard_id][0].insert(cur_key);
-      }
-    };
+    auto gen_graph_dynamic_mf_func =
+        [this](const std::vector<uint64_t>& total_data, int begin_index,
+               int end_index, int i) {
+          for (auto iter = total_data.begin() + begin_index;
+               iter != total_data.begin() + end_index; iter++) {
+            uint64_t cur_key = *iter;
+            int shard_id = cur_key % thread_keys_shard_num_;
+            // TODO: feasign <-> slot <-> multi_dim
+            this->thread_dim_keys_[i][shard_id][0].insert(cur_key);
+          }
+        };
     for (int i = 0; i < thread_keys_thread_num_; i++) {
       if (!multi_mf_dim_) {
         VLOG(1) << "psgpu graph wrapper genfunc";
@@ -609,8 +609,8 @@ void PSGPUWrapper::BuildGPUTask(std::shared_ptr<HeterContext> gpu_task) {
         auto& mem_pool = this->mem_pools_[i * this->multi_mf_dim_ + j];
         for (size_t k = 0; k < len; k++) {
           void* val = mem_pool->mem_address(k);
-          // float* ptr_val = device_dim_ptrs[k]->data();
-          // size_t dim = device_dim_ptrs[k]->size();
+      // float* ptr_val = device_dim_ptrs[k]->data();
+      // size_t dim = device_dim_ptrs[k]->size();
 #ifdef PADDLE_WITH_PSLIB
           val->delta_score =
               ptr_val[paddle::ps::DownpourCtrDymfAccessor::
@@ -648,7 +648,8 @@ void PSGPUWrapper::BuildGPUTask(std::shared_ptr<HeterContext> gpu_task) {
 #ifdef PADDLE_WITH_PSCORE
         // VLOG(5) << "cpu build " << k
         //         << " cpuptr: " << (uint64_t)(device_dim_ptrs[k])
-        //         << " |: " << cpu_table_accessor_->ParseToString(ptr_val, dim);
+        //         << " |: " << cpu_table_accessor_->ParseToString(ptr_val,
+        //         dim);
         accessor_wrapper_ptr->BuildFill(val, device_dim_ptrs[k],
                                         cpu_table_accessor_, mf_dim);
         VLOG(5) << "build " << k << " : "
@@ -687,7 +688,7 @@ for (std::thread& t : threads) {
 }
 timeline.Pause();
 VLOG(0) << "GpuPs build table total costs: " << timeline.ElapsedSec() << " s.";
-}
+}  // namespace framework
 
 void PSGPUWrapper::LoadIntoMemory(bool is_shuffle) {
   platform::Timer timer;
@@ -864,7 +865,8 @@ void PSGPUWrapper::EndPass() {
         // float* cpu_val = downpour_value->data();
         // VLOG(5) << "dump to cpu " << index << "  gpu_value: "
         //         << accessor_wrapper_ptr->ParseToString(gpu_val,
-        //              int(accessor_wrapper_ptr->GetFeatureValueSize(mf_dim) / sizeof(float)))
+        //              int(accessor_wrapper_ptr->GetFeatureValueSize(mf_dim) /
+        //              sizeof(float)))
         //         << " \t cpu_value:"
         //         << cpu_table_accessor_->ParseToString(cpu_val,
         //                                               downpour_value->size());
@@ -897,7 +899,7 @@ current_task_ = nullptr;
 gpu_free_channel_->Put(current_task_);
 timer.Pause();
 VLOG(0) << "EndPass end, cost time: " << timer.ElapsedSec() << "s";
-}
+}  // namespace paddle
 
 void PSGPUWrapper::PullSparse(const paddle::platform::Place& place,
                               const int table_id,
