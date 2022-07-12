@@ -101,13 +101,18 @@ __global__ void dy_mf_search_kernel(Table* table,
          input[feature_value_accessor.common_feature_value.ClickIndex()];
       cur[feature_value_accessor.common_pull_value.EmbedWIndex()] =
          input[feature_value_accessor.common_feature_value.EmbedWIndex()];
-      int embedx_dim = int(input[feature_value_accessor.common_feature_value.MfSizeIndex()]);
-      cur[feature_value_accessor.common_pull_value.MfSizeIndex()] = embedx_dim;
+      
+      int mf_size = int(input[feature_value_accessor.common_feature_value.MfSizeIndex()]);
+      cur[feature_value_accessor.common_pull_value.MfSizeIndex()] = mf_size;
+      if (mf_size == 0) {
+          return;
+      }
        
       int embedx_off = feature_value_accessor.common_pull_value.EmbedxWIndex();
-      int value_off = feature_value_accessor.common_feature_value.EmbedxWOffsetIndex(input);
-      for (int i = 0; i < embedx_dim; ++i) {
-          cur[embedx_off + i] = input[value_off + i];
+      int value_off = feature_value_accessor.common_feature_value.EmbedxWIndex();
+      int mf_dim = int(input[feature_value_accessor.common_feature_value.MfDimIndex()]);
+      for (int k = 0; k < mf_dim; ++k) {
+          cur[embedx_off + k] = input[value_off + k];
       }
     }
   }
