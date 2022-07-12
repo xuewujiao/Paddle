@@ -94,7 +94,7 @@ __global__ void dy_mf_search_kernel(Table* table,
       uint64_t offset = i * pull_feature_value_size;
       float* cur = (float*)(vals + offset);
       float* input = it->second;
-
+      
       cur[feature_value_accessor.common_pull_value.ShowIndex()] =
          input[feature_value_accessor.common_feature_value.ShowIndex()];
       cur[feature_value_accessor.common_pull_value.ClickIndex()] =
