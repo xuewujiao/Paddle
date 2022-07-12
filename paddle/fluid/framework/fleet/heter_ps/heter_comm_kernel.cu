@@ -480,8 +480,16 @@ __global__ void kernel_fill_restore_idx_by_search(
     const size_t merge_num, const T* d_offset, T* d_restore_idx) {
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < N) {
-    int low = 0;
+    if (i < d_offset[1]) {
+        d_restore_idx[d_sorted_idx[i]] = 0;
+        return;
+    }
     int high = merge_num - 1;
+    if (i > d_offset[high]) {
+        d_restore_idx[d_sorted_idx[i]] = high;
+        return;
+    }
+    int low = 0;
     while (low < high) {
       int mid = (low + high) / 2;
       if (i < d_offset[mid + 1]) {
