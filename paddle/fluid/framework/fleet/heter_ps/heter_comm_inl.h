@@ -920,7 +920,7 @@ void HeterComm<KeyType, ValType, GradType>::merge_keys(
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
 
   heter_comm_kernel_->fill_restore_idx(
-      true, uniq_len, d_merged_keys, d_index, d_offset,
+      true, len, uniq_len, d_merged_keys, d_index, d_offset,
       d_fea_num_info_ptr, d_restore_idx, stream);
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
 }
@@ -1767,7 +1767,7 @@ int HeterComm<KeyType, ValType, GradType>::dedup_keys_and_fillidx(
   }
   // fill restore idx [1,3,5,2,4,6] = [1,2,1,3,2,1]
   heter_comm_kernel_->fill_restore_idx(filter_zero,
-        merged_size, d_merged_keys, d_sorted_idx,
+        total_fea_num, merged_size, d_merged_keys, d_sorted_idx,
         d_offset, d_merged_cnts, d_restore_idx, stream);
 
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));

@@ -217,7 +217,8 @@ class HeterCommKernel {
                    const StreamType& stream);
 
   template <typename KeyType, typename StreamType>
-  void fill_restore_idx(bool filter_zero, const size_t N, const KeyType *d_keys,
+  void fill_restore_idx(bool filter_zero, const size_t total_num,
+                        const size_t merge_size, const KeyType *d_keys,
                         const uint32_t* d_sorted_idx, const uint32_t* d_offset,
                         const uint32_t* d_merged_cnts, uint32_t* d_restore_idx,
                         const StreamType& stream);

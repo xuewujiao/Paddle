@@ -1290,8 +1290,8 @@ void PSGPUWrapper::PushSparseGrad(const paddle::platform::Place& place,
       int64_t total_bytes = dedup_size * grad_value_size;
       float* total_grad_values_gpu =
           dev.pull_push_tensor.mutable_data<float>(total_bytes, place);
-
-      if (FLAGS_gpugraph_dedup_pull_push_mode & 0x01) {
+      // dedup rate more than 3
+      if (total_length > dedup_size * 3) {
         const uint32_t* d_restore_idx =
                     reinterpret_cast<const uint32_t*>(&key2slot[total_length]);
         this->CopyForPush(place, total_keys, gpu_values, total_grad_values_gpu,

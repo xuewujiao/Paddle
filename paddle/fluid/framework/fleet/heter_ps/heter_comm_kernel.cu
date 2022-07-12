@@ -474,20 +474,48 @@ __global__ void kernel_fill_restore_idx_filter_zero(
     }
   }
 }
+template <typename T>
+__global__ void kernel_fill_restore_idx_by_search(
+    const size_t N, const T* d_sorted_idx,
+    const size_t merge_num, const T* d_offset, T* d_restore_idx) {
+  const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < N) {
+    int low = 0;
+    int high = merge_num - 1;
+    while (low < high) {
+      int mid = (low + high) / 2;
+      if (i < d_offset[mid + 1]) {
+         high = mid;
+      } else {
+         low = mid + 1;
+      }
+    }
+    d_restore_idx[d_sorted_idx[i]] = low;
+  }
+}
 template <typename KeyType, typename StreamType>
 void HeterCommKernel::fill_restore_idx(
-    bool filter_zero, const size_t N, const KeyType *d_keys, 
+    bool filter_zero, const size_t total_num, 
+    const size_t merge_size, const KeyType *d_keys, 
     const uint32_t* d_sorted_idx,
     const uint32_t* d_offset, const uint32_t* d_merged_cnts,
     uint32_t* d_restore_idx, const StreamType& stream) {
   // fill restore idx [1,3,5,2,4,6] = [1,2,1,3,2,1]
-  size_t grid_size = (N - 1) / block_size_ + 1;
-  if (filter_zero) {
-      kernel_fill_restore_idx_filter_zero<<<grid_size, block_size_, 0, stream>>>(
-              N, d_keys, d_sorted_idx, d_offset, d_merged_cnts, d_restore_idx);
+  if (merge_size * 3 > total_num) {
+      // repetition rate is not very high
+      size_t grid_size = (merge_size - 1) / block_size_ + 1;
+      if (filter_zero) {
+          kernel_fill_restore_idx_filter_zero<<<grid_size, block_size_, 0, stream>>>(
+                  merge_size, d_keys, d_sorted_idx, d_offset, d_merged_cnts, d_restore_idx);
+      } else {
+          kernel_fill_restore_idx<<<grid_size, block_size_, 0, stream>>>(
+                  merge_size, d_sorted_idx, d_offset, d_merged_cnts, d_restore_idx);
+      }
   } else {
-      kernel_fill_restore_idx<<<grid_size, block_size_, 0, stream>>>(
-              N, d_sorted_idx, d_offset, d_merged_cnts, d_restore_idx);
+      size_t grid_size = (total_num - 1) / block_size_ + 1;
+      // mid search
+      kernel_fill_restore_idx_by_search<<<grid_size, block_size_, 0, stream>>>(
+              total_num, d_sorted_idx, merge_size, d_offset, d_restore_idx);
   }
 }
 template <typename KeyType, typename StreamType>
@@ -603,12 +631,12 @@ template void HeterCommKernel::shrink_keys<uint64_t, cudaStream_t>(
     uint64_t* d_segments_keys, size_t total_segment_num, const cudaStream_t& stream);
 
 template void HeterCommKernel::fill_restore_idx<uint64_t, cudaStream_t>(
-    bool filter_zero, const size_t N, const uint64_t *d_keys, 
+    bool filter_zero, const size_t total_num, const size_t merge_size, const uint64_t *d_keys, 
     const uint32_t* d_sorted_idx, const uint32_t* d_offset, const uint32_t* d_merged_cnts,
     uint32_t* d_restore_idx, const cudaStream_t& stream);
 
 template void HeterCommKernel::fill_restore_idx<uint32_t, cudaStream_t>(
-    bool filter_zero, const size_t N, const uint32_t *d_keys, 
+    bool filter_zero, const size_t total_num, const size_t merge_size, const uint32_t *d_keys, 
     const uint32_t* d_sorted_idx, const uint32_t* d_offset, const uint32_t* d_merged_cnts,
     uint32_t* d_restore_idx, const cudaStream_t& stream);
 
