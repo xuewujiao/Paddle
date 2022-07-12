@@ -223,10 +223,37 @@ __global__ void shrink_keys_kernel(const KeyType* d_keys,
   d_segments_keys[tx] = d_keys[d_segments_offset[tx]];
 }
 
+template<typename KeyType>
+__global__ void unpack_merged_vals_kernel(
+        const KeyType* d_keys,
+        const float* d_merged_vals,
+        const uint32_t* d_restored_idx,
+        float* d_out, size_t val_size, const size_t n) {
+  const size_t tx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tx >= n) {
+    return;
+  }
+
+  size_t src_val_idx = 0;
+  const KeyType & key = d_keys[tx];
+  if (key != 0) {
+    src_val_idx = d_restored_idx[tx];
+  }
+
+  uint64_t dst_offset = uint64_t(tx) * val_size;
+  float* dst = (float*)((char*)d_out + dst_offset);
+  float* src_val = (float*)((char*)d_merged_vals + uint64_t(src_val_idx) * val_size);
+  
+  size_t n_float = val_size / sizeof(float);
+  for (size_t k = 0; k < n_float; ++k) {
+      dst[k] = src_val[k];
+  }
+}
+
 template <typename TUnit, typename T>
 __global__ void scatter_dvals_by_unit_kernel(TUnit* d_dest_vals,
-                                             const TUnit* d_src_vals, T* idx,
-                                             size_t len, size_t val_size_unit) {
+                                     const TUnit* d_src_vals, T* idx,
+                                     size_t len, size_t val_size_unit) {
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < len) {
     size_t pos = idx[i / val_size_unit] * val_size_unit + (i % val_size_unit);
@@ -412,10 +439,8 @@ void HeterCommKernel::expand_segments(const uint32_t* d_fea_num_info,
 }
 
 template <typename KeyType, typename StreamType>
-void HeterCommKernel::shrink_keys(const KeyType* d_keys,
-                                  const uint32_t* d_segments_offset,
-                                  KeyType* d_segments_keys, size_t n,
-                                  const StreamType& stream) {
+void HeterCommKernel::shrink_keys(const KeyType* d_keys, const uint32_t* d_segments_offset,
+          KeyType* d_segments_keys, size_t n, const StreamType& stream) {
   int grid_size = (n - 1) / block_size_ + 1;
   shrink_keys_kernel<<<grid_size, block_size_, 0, stream>>>(
       d_keys, d_segments_offset, d_segments_keys, n);
@@ -464,6 +489,15 @@ void HeterCommKernel::fill_restore_idx(
       kernel_fill_restore_idx<<<grid_size, block_size_, 0, stream>>>(
               N, d_sorted_idx, d_offset, d_merged_cnts, d_restore_idx);
   }
+}
+template <typename KeyType, typename StreamType>
+void HeterCommKernel::unpack_merged_vals(size_t n, const KeyType* d_keys,
+        const void* d_merged_vals, const uint32_t* d_restore_idx,
+        void* d_vals, size_t val_size, const StreamType& stream) {
+  int grid_size = (n - 1) / block_size_ + 1;
+  unpack_merged_vals_kernel<<<grid_size, block_size_, 0, stream>>>(
+          d_keys, (const float *)d_merged_vals, d_restore_idx,
+          (float *)d_vals, val_size, n);
 }
 
 template void HeterCommKernel::fill_idx<int, cudaStream_t>(
@@ -566,14 +600,27 @@ template void HeterCommKernel::shrink_keys<uint32_t, cudaStream_t>(
 
 template void HeterCommKernel::shrink_keys<uint64_t, cudaStream_t>(
     const uint64_t* d_keys, const uint32_t* d_segments,
-    uint64_t* d_segments_keys, size_t total_segment_num,
-    const cudaStream_t& stream);
+    uint64_t* d_segments_keys, size_t total_segment_num, const cudaStream_t& stream);
 
 template void HeterCommKernel::fill_restore_idx<uint64_t, cudaStream_t>(
     bool filter_zero, const size_t N, const uint64_t *d_keys, 
     const uint32_t* d_sorted_idx, const uint32_t* d_offset, const uint32_t* d_merged_cnts,
     uint32_t* d_restore_idx, const cudaStream_t& stream);
 
+template void HeterCommKernel::fill_restore_idx<uint32_t, cudaStream_t>(
+    bool filter_zero, const size_t N, const uint32_t *d_keys, 
+    const uint32_t* d_sorted_idx, const uint32_t* d_offset, const uint32_t* d_merged_cnts,
+    uint32_t* d_restore_idx, const cudaStream_t& stream);
+
+template void HeterCommKernel::unpack_merged_vals<uint64_t, cudaStream_t>(
+        size_t n, const uint64_t* d_keys, const void* d_merged_vals,
+        const uint32_t* d_restore_idx, void* d_vals, size_t val_size,
+        const cudaStream_t& stream);
+
+template void HeterCommKernel::unpack_merged_vals<uint32_t, cudaStream_t>(
+        size_t n, const uint32_t* d_keys, const void* d_merged_vals,
+        const uint32_t* d_restore_idx, void* d_vals, size_t val_size,
+        const cudaStream_t& stream);
 #endif
 
 }  // namespace framework

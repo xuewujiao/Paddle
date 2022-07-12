@@ -56,7 +56,12 @@ class HeterComm {
   HeterComm& operator=(const HeterComm&) = delete;
 
   void split_input_to_shard(KeyType* d_keys, int* d_idx_ptr, size_t len,
-                            int* left, int* right, int gpu_num);
+          int* left, int* right, int gpu_num);
+  void merge_keys(int gpu_num, const KeyType* d_keys, size_t len,
+          KeyType* d_sorted_keys,
+          KeyType* d_merged_keys,
+          uint32_t* d_restore_idx,
+          size_t & uniq_len);
   void merge_grad(int gpu_num, KeyType* d_keys, GradType* d_grads, size_t len,
                   int& uniq_len);  // NOLINT
   void dynamic_merge_grad(int gpu_num, KeyType* d_keys, float* d_grads,
@@ -254,6 +259,9 @@ class HeterComm {
                    ValType* src_val);
   void walk_to_src(int start_index, int gpu_num, int* h_left, int* h_right,
                    char* src_val, size_t val_size);
+ protected:
+  void pull_merge_sparse(int num, KeyType* d_keys, float* d_vals, size_t len);
+  void pull_normal_sparse(int num, KeyType* d_keys, float* d_vals, size_t len);
 
  protected:
   using Table = HashTable<KeyType, ValType>;
