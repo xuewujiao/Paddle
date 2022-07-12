@@ -485,11 +485,7 @@ __global__ void kernel_fill_restore_idx_by_search(
         return;
     }
     int high = merge_num - 1;
-    if (i > d_offset[high]) {
-        d_restore_idx[d_sorted_idx[i]] = high;
-        return;
-    }
-    int low = 0;
+    int low = 1;
     while (low < high) {
       int mid = (low + high) / 2;
       if (i < d_offset[mid + 1]) {
