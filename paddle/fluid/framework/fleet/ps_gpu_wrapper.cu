@@ -248,8 +248,13 @@ void PSGPUWrapper::CopyKeys(const paddle::platform::Place& place,
   cudaStreamSynchronize(stream);
 }
 
-__global__ void FillKey2Slot(const int total_len, const int64_t* slot_lens,
-                             const int slot_num, int* key2slots) {
+__global__ void CopyKeysKernel2(
+        const int total_len,  
+        uint64_t** src_keys,
+        uint64_t* dest_total_keys,
+        const int slot_num,
+        const int64_t* slot_lens, 
+        int* key2slots) {
   CUDA_KERNEL_LOOP(i, total_len) {
     int low = 0;
     int high = slot_num - 1;
@@ -262,16 +267,8 @@ __global__ void FillKey2Slot(const int total_len, const int64_t* slot_lens,
       }
     }
     key2slots[i] = low;
-  }
-}
-
-__global__ void CopyKeysKernel2(const int total_len, uint64_t** src_keys,
-                                uint64_t* dest_total_keys,
-                                const int64_t* slot_lens, const int* key2slot) {
-  CUDA_KERNEL_LOOP(i, total_len) {
-    int x = key2slot[i];
-    int y = i - slot_lens[x];
-    dest_total_keys[i] = src_keys[x][y];
+    int y = i - slot_lens[low];
+    dest_total_keys[i] = src_keys[low][y];
   }
 }
 void PSGPUWrapper::CopyKeys(const paddle::platform::Place& place,
@@ -281,10 +278,8 @@ void PSGPUWrapper::CopyKeys(const paddle::platform::Place& place,
   auto stream = dynamic_cast<platform::CUDADeviceContext*>(
                     platform::DeviceContextPool::Instance().Get(place))
                     ->stream();
-  FillKey2Slot<<<CUDA_BLOCK(total_len), stream>>>(total_len, slot_lens,
-                                                  slot_num, key2slot);
   CopyKeysKernel2<<<CUDA_BLOCK(total_len), stream>>>(
-      total_len, origin_keys, total_keys, slot_lens, key2slot);
+      total_len, origin_keys, total_keys, slot_num, slot_lens, key2slot);
   cudaStreamSynchronize(stream);
 }
 template<typename TAccess>
