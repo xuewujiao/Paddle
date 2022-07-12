@@ -963,9 +963,6 @@ void HeterComm<KeyType, ValType, GradType>::pull_merge_sparse(
                         XPUAPIErrorMsg[r2]));
 #endif
 
-  auto d_idx = memory::Alloc(place, len * sizeof(int));
-  int* d_idx_ptr = reinterpret_cast<int*>(d_idx->ptr());
-
   size_t val_type_size = feature_value_accessor_.common_pull_value.Size(max_mf_dim_);
   VLOG(3) << "pull_sparse len:" << len << "  val_type_size: " << val_type_size;
   auto d_sorted_keys = memory::Alloc(place, len * sizeof(KeyType));
