@@ -90,15 +90,11 @@ __global__ void dy_mf_search_kernel(Table* table,
   // return;
   if (i < len) {
     auto it = table->find(keys[i]);
-
     if (it != table->end()) {
       uint64_t offset = i * pull_feature_value_size;
       float* cur = (float*)(vals + offset);
       float* input = it->second;
-      int mf_dim =
-          int(input[feature_value_accessor.common_feature_value.MfDimIndex()]);
-
-      feature_value_accessor.FeatureValueFill(cur, input, mf_dim);
+      feature_value_accessor.PullValueFill(cur, input);
     }
   }
 }
@@ -139,9 +135,9 @@ __global__ void dy_mf_update_kernel(Table* table,
 template <typename KeyType, typename ValType>
 HashTable<KeyType, ValType>::HashTable(size_t capacity) {
   container_ = new TableContainer<KeyType, ValType>(capacity);
-  cudaMalloc((void**)&device_optimizer_config_, sizeof(OptimizerConfig));
-  cudaMemcpy((void*)device_optimizer_config_, &host_optimizer_config_,
-             sizeof(OptimizerConfig), cudaMemcpyHostToDevice);
+  CUDA_RT_CALL(cudaMalloc((void**)&device_optimizer_config_, sizeof(OptimizerConfig)));
+  CUDA_RT_CALL(cudaMemcpy((void*)device_optimizer_config_, &host_optimizer_config_,
+             sizeof(OptimizerConfig), cudaMemcpyHostToDevice));
   rwlock_.reset(new phi::RWLock);
 }
 

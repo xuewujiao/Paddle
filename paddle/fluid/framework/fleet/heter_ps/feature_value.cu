@@ -47,6 +47,52 @@ __global__ void PullCopy(float** dest,
   }
 }
 
+template<typename TAccess>
+__global__ void PullDedupCopy(
+    const size_t N, const uint64_t* total_keys, float** dest, const float* src,
+    const int64_t* slot_lens, uint64_t max_val_size, const int* slot_dims,
+    const int hidden, const int* key2slot, const uint32_t* restore_idx,
+    TAccess accessor) {
+  CUDA_KERNEL_LOOP(idx, N) {
+    int i = idx / hidden;
+    int off = idx % hidden;
+
+    int x = key2slot[i];
+    int y = i - slot_lens[x];
+
+    assert(slot_dims[x] == hidden);
+    float* dest_ptr = dest[x] + y * hidden;
+    // 0 key fill zero
+    if (total_keys[i] == 0) {
+      *(dest_ptr + off) = 0;
+      return;
+    }
+
+    float* src_ptr =
+        (float*)((char*)src +
+                 uint64_t(restore_idx[i]) * uint64_t(max_val_size));
+    switch (off) {
+      case 0:
+        *(dest_ptr + off) = src_ptr[accessor.ShowIndex()];
+        break;
+      case 1:
+        *(dest_ptr + off) = src_ptr[accessor.ClickIndex()];
+        break;
+      case 2:
+        *(dest_ptr + off) = src_ptr[accessor.EmbedWIndex()];
+        break;
+      default:
+        if (src_ptr[accessor.MfSizeIndex()] == 0) {
+          *(dest_ptr + off) = 0;
+        } else {
+          *(dest_ptr + off) =
+                  src_ptr[accessor.EmbedxWIndex() + off - 3];
+        }
+        break;
+    }
+  }
+}
+
 template <typename FVAccessor>
 __global__ void PushCopyWithPool(float* dest,
                                  float** src,
@@ -86,6 +132,135 @@ __global__ void PushCopyWithPool(float* dest,
     for (int j = 0; j < mf_dim; j++) {
       cur[feature_value_accessor.common_push_value.EmbedxGIndex() + j] =
           *(src[x] + y * (mf_dim + 3) + 3 + j) * -1. * bs;
+    }
+  }
+}
+
+template<typename TAccess>
+__global__ void PushMergeCopyAtomic(
+    const size_t N, const uint64_t* total_keys, float* dest, float** src,
+    const int hidden, const int bs, const int* slot_vector,
+    const int* slot_dims, const int64_t* slot_lens, const int* key2slot,
+    const uint32_t* d_restore_idx, size_t grad_value_size,
+    TAccess accessor) {
+  CUDA_KERNEL_LOOP(idx, N) {
+    int i = idx / hidden;
+    int off = idx % hidden;
+    // filter 0 keys
+    if (total_keys[i] == 0) {
+      return;
+    }
+
+    int x = key2slot[i];
+    int y = i - slot_lens[x];
+
+    const float* ptr = src[x] + y * hidden;
+    float* cur = (float*)((char*)dest + d_restore_idx[i] * grad_value_size);
+    int mf_dim = slot_dims[x] - 3;
+    switch (off) {
+      case 0:
+        cur[accessor.SlotIndex()] = (float)slot_vector[x];
+        cur[accessor.MfDimIndex()] = mf_dim;
+        paddle::platform::CudaAtomicAdd(
+            &cur[accessor.ShowIndex()], *(ptr + off));
+        break;
+      case 1:
+        paddle::platform::CudaAtomicAdd(
+            &cur[accessor.ClickIndex()], *(ptr + off));
+        break;
+      case 2:
+        paddle::platform::CudaAtomicAdd(
+            &cur[accessor.EmbedGIndex()], *(ptr + off) * -1. * bs);
+        break;
+      default:
+        int embedx_idx = off - 3;
+        if (mf_dim < embedx_idx) {
+            return;
+        }
+        paddle::platform::CudaAtomicAdd(
+            &cur[accessor.EmbedxGIndex() + embedx_idx], *(ptr + off) * -1. * bs);
+        break;
+    }
+  }
+}
+
+#define SUM_GRAD_VALUE      \
+   for (uint32_t j = 0; j < count; ++j) { \
+      const uint32_t& pos = d_sort_idx[start + j]; \
+      const int& x = key2slot[pos]; \
+      y = pos - slot_lens[x]; \
+      val += *(reinterpret_cast<float*>(src[x] + y * hidden + off)); \
+   }
+
+template<typename TAccess>
+__global__ void PushMergeCopy(
+    const size_t N, const uint64_t* total_keys, float* dest, float** src,
+    const int hidden, const int bs, const int* slot_vector,
+    const int* slot_dims, const int64_t* slot_lens, const int* key2slot,
+    const uint32_t* d_sort_idx, 
+    const uint32_t* d_sort_offset, 
+    const uint32_t* d_sort_cnt, size_t grad_value_size,
+    TAccess accessor) {
+  CUDA_KERNEL_LOOP(idx, N) {
+    int i = idx / hidden;
+    int off = idx % hidden;
+    // filter 0 keys
+    float* cur = (float*)((char*)dest + i * grad_value_size);
+    
+    if (total_keys[i] == 0) {
+      switch (off) {
+      case 0:
+        cur[accessor.SlotIndex()] = 0;
+        cur[accessor.MfDimIndex()] = 0;
+        cur[accessor.ShowIndex()] = 0.0;
+        break;
+      case 1:
+        cur[accessor.ClickIndex()] = 0.0;
+        break;
+      case 2:
+        cur[accessor.EmbedGIndex()] = 0.0;
+        break;
+      default: 
+        cur[accessor.EmbedxGIndex() + off - 3] = 0.0;
+        break;
+      }
+      return;
+    }
+    
+    const uint32_t& start = d_sort_offset[i];
+    const uint32_t& count = d_sort_cnt[i];
+    const uint32_t& pos = d_sort_idx[start];
+
+    const int& x = key2slot[pos];
+    int y = pos - slot_lens[x];
+    int mf_dim = slot_dims[x] - 3;
+        
+    double val = 0.0;
+    
+    switch (off) {
+      case 0: 
+        cur[accessor.SlotIndex()] = (float)slot_vector[x];
+        cur[accessor.MfDimIndex()] = mf_dim;
+        SUM_GRAD_VALUE
+        cur[accessor.ShowIndex()] = val;
+        break;
+      case 1: 
+        SUM_GRAD_VALUE
+        cur[accessor.ClickIndex()] = val;
+        break;
+      case 2: 
+        SUM_GRAD_VALUE
+        cur[accessor.EmbedGIndex()] = val * -1. * bs;
+        break;
+      default: 
+        int embedx_idx = off - 3;
+        if (mf_dim < embedx_idx) {
+            cur[accessor.EmbedxGIndex() + embedx_idx] = 0.0;
+            return;
+        }
+        SUM_GRAD_VALUE
+        cur[accessor.EmbedxGIndex() + embedx_idx] = val * -1. * bs;
+        break;
     }
   }
 }
@@ -180,6 +355,78 @@ void AccessorWrapper<GPUAccessor>::CopyForPushImpl(
       d_mf_dim_vector,
       grad_value_size,
       gpu_accessor_);
+  cudaStreamSynchronize(stream);
+}
+
+template <typename GPUAccessor>
+void AccessorWrapper<GPUAccessor>::CopyForPullDedupImpl(
+    const paddle::platform::Place& place,
+    const uint64_t* total_keys, float** gpu_values,
+    const float* total_values_gpu,
+    const int64_t* slot_lens, const int* key2slot,
+    const int hidden_size,
+    const int64_t total_length, 
+    const int* slot_dims,
+    const uint32_t* gpu_restore_idx) {
+  auto stream = dynamic_cast<paddle::platform::CUDADeviceContext*>(
+                    paddle::platform::DeviceContextPool::Instance().Get(place))
+                    ->stream();
+  size_t N = total_length * hidden_size;
+  PullDedupCopy<<<CUDA_BLOCK(N), stream>>>(
+      N, total_keys, gpu_values, total_values_gpu, slot_lens, pull_type_size_,
+      slot_dims, hidden_size, key2slot, gpu_restore_idx,
+      gpu_accessor_.common_pull_value);
+  cudaStreamSynchronize(stream);
+}
+
+template <typename GPUAccessor>
+void AccessorWrapper<GPUAccessor>::CopyForPushDedupImpl(
+    const paddle::platform::Place& place,
+    const uint64_t* total_keys, float** grad_values,
+    float* total_grad_values_gpu, const int* slots,
+    const int64_t* slot_lens, const int hidden_size,
+    const int64_t total_length,
+    const int64_t dedup_length, const int batch_size,
+    const int* slot_dims, const int* key2slot,
+    const uint32_t* d_restore_idx,
+    const size_t grad_value_size) {
+  auto stream = dynamic_cast<paddle::platform::CUDADeviceContext*>(
+                    paddle::platform::DeviceContextPool::Instance().Get(place))
+                    ->stream();
+  cudaMemsetAsync(total_grad_values_gpu, 0, dedup_length * grad_value_size,
+                  stream);
+  size_t N = total_length * hidden_size;
+  PushMergeCopyAtomic<<<CUDA_BLOCK(N), stream>>>(
+      N, total_keys, total_grad_values_gpu, grad_values, hidden_size,
+      batch_size, slots, slot_dims, slot_lens, key2slot, d_restore_idx,
+      grad_value_size, gpu_accessor_.common_push_value);
+
+  cudaStreamSynchronize(stream);
+}
+
+template <typename GPUAccessor>
+void AccessorWrapper<GPUAccessor>::CopyForPushDedupImpl(
+    const paddle::platform::Place& place,
+    const uint64_t* total_keys, float** grad_values,
+    float* total_grad_values_gpu, const int* slots,
+    const int64_t* slot_lens, const int hidden_size,
+    const int64_t total_length, const int64_t dedup_length,
+    const int batch_size, const int* slot_dims,
+    const int* key2slot,
+    const uint32_t* gpu_sort_idx,
+    const uint32_t* gpu_sort_offset,
+    const uint32_t* gpu_sort_lens,
+    const size_t grad_value_size) {
+  auto stream = dynamic_cast<paddle::platform::CUDADeviceContext*>(
+                    paddle::platform::DeviceContextPool::Instance().Get(place))
+                    ->stream();
+  // merge all grad to one
+  size_t N = dedup_length * hidden_size;
+  PushMergeCopy<<<CUDA_BLOCK(N), stream>>>(
+        N, total_keys, total_grad_values_gpu, grad_values, hidden_size,
+        batch_size, slots, slot_dims, slot_lens, key2slot, 
+        gpu_sort_idx, gpu_sort_offset, gpu_sort_lens,
+        grad_value_size, gpu_accessor_.common_push_value);
   cudaStreamSynchronize(stream);
 }
 

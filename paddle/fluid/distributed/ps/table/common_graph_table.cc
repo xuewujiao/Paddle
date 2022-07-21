@@ -1106,16 +1106,15 @@ int32_t GraphTable::load_node_and_edge_file(std::string etype,
             if (ntypes.size() == 0) {
               VLOG(0) << "node_type not specified, nothing will be loaded ";
               return 0;
+            } 
+            
+            if (FLAGS_graph_load_in_parallel) {
+              this->load_nodes(npath_str, "");
             } else {
-              for (size_t i = 0; i < ntypes.size(); i++) {
-                if (feature_to_id.find(ntypes[i]) == feature_to_id.end()) {
-                  VLOG(0) << "node_type " << ntypes[i]
-                          << "is not defined, will not load";
-                  return 0;
-                }
+              for (size_t j = 0; j < ntypes.size(); j++) {
+                this->load_nodes(npath_str, ntypes[j]);
               }
-            }
-            this->load_nodes(npath_str, "");
+            } 
           }
           return 0;
         }));
@@ -1205,7 +1204,7 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
     auto node = feature_shards[idx][index]->add_feature_node(id, false);
     if (node != NULL) {
       node->set_feature_size(feat_name[idx].size());
-      for (int i = 1; i < n; ++i) {
+      for (int i = 1; i < num; ++i) {
         auto &v = vals[i];
         parse_feature(idx, v.ptr, v.len, node);
       }
@@ -1444,12 +1443,14 @@ int32_t GraphTable::load_edges(const std::string &path, bool reverse_edge,
   }
 #endif
 
-#ifdef PADDLE_WITH_GPU_GRAPH
+if(!build_sampler_on_cpu){
   // To reduce memory overhead, CPU samplers won't be created in gpugraph.
   // In order not to affect the sampler function of other scenario,
   // this optimization is only performed in load_edges function.
   VLOG(0) << "run in gpugraph mode!";
-#else
+}
+else {
+  std::string sample_type = "random";
   VLOG(0) << "build sampler ... ";
   for (auto &shard : edge_shards[idx]) {
     auto bucket = shard->get_bucket();
@@ -1457,7 +1458,8 @@ int32_t GraphTable::load_edges(const std::string &path, bool reverse_edge,
       bucket[i]->build_sampler(sample_type);
     }
   }
-#endif
+}
+
   return 0;
 }
 
@@ -2062,6 +2064,7 @@ void GraphTable::load_node_weight(int type_id, int idx, std::string path) {
 }
 int32_t GraphTable::Initialize(const GraphParameter &graph) {
   task_pool_size_ = graph.task_pool_size();
+  build_sampler_on_cpu = graph.build_sampler_on_cpu();
 
 #ifdef PADDLE_WITH_HETERPS
   _db = NULL;

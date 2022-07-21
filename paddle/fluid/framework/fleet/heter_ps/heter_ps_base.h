@@ -14,6 +14,7 @@ limitations under the License. */
 
 #pragma once
 #include <vector>
+
 #include "paddle/fluid/framework/fleet/heter_ps/feature_value.h"
 #include "paddle/fluid/framework/fleet/heter_ps/heter_resource.h"
 #include "paddle/fluid/framework/fleet/heter_ps/optimizer_conf.h"
@@ -58,6 +59,19 @@ class HeterPsBase {
       //  CommonFeatureValueAccessor feature_value_accessor,
       std::unordered_map<std::string, float> fleet_config,
       std::string accessor_type, int optimizer_type);
+#if defined(PADDLE_WITH_CUDA)
+  // dedup
+  virtual int dedup_keys_and_fillidx(const int gpu_id,
+         const int total_fea_num,
+         const FeatureKey* d_keys,   // input
+         FeatureKey* d_merged_keys,  // output
+         FeatureKey* d_sorted_keys,
+         uint32_t* d_restore_idx,
+         uint32_t* d_sorted_idx,
+         uint32_t* d_offset,
+         uint32_t* d_merged_cnts,
+         bool filter_zero) = 0;
+#endif
 };
 
 }  // end namespace framework

@@ -13,6 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #include <vector>
+
 #include "paddle/fluid/framework/fleet/heter_ps/heter_ps.h"
 
 #ifdef PADDLE_WITH_HETERPS
@@ -95,8 +96,8 @@ void HeterPs<FVAccessor>::show_one_table(int gpu_num) {
 }
 
 template <typename FVAccessor>
-void HeterPs<FVAccessor>::push_sparse(int num, FeatureKey* d_keys,
-                                      float* d_grads, size_t len) {
+void HeterPs::push_sparse(int num, FeatureKey* d_keys, float* d_grads,
+                          size_t len) {
   if (accessor_type_ == "CtrDymfAccessor") {
     if (optimizer_type_ == 3) {  // adam
       auto optimizer = SparseAdamOptimizer(feature_value_accessor_);
@@ -144,6 +145,29 @@ void HeterPs<FVAccessor>::set_accessor(FVAccessor& accessor) {
 template <typename FVAccessor>
 void HeterPs<FVAccessor>::show_table_collisions() {
   comm_->show_table_collisions();
+}
+
+template <typename FVAccessor>
+int HeterPs<FVAccessor>::dedup_keys_and_fillidx(const int gpu_id, 
+        const int total_fea_num,
+        const FeatureKey* d_keys,   // input
+        FeatureKey* d_merged_keys,  // output
+        FeatureKey* d_sorted_keys,
+        uint32_t* d_restore_idx,
+        uint32_t* d_sorted_idx, 
+        uint32_t* d_offset,
+        uint32_t* d_merged_cnts,
+        bool filter_zero) {
+  return comm_->dedup_keys_and_fillidx(gpu_id, 
+           total_fea_num,
+           d_keys,         // input
+           d_merged_keys,  // output
+           d_sorted_keys, 
+           d_restore_idx,
+           d_sorted_idx, 
+           d_offset, 
+           d_merged_cnts,
+           filter_zero);
 }
 
 }  // end namespace framework

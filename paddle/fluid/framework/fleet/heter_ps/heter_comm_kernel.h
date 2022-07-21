@@ -95,10 +95,10 @@ class HeterCommKernel {
   HeterCommKernel() {}
   explicit HeterCommKernel(const int block_size) : block_size_(block_size) {}
 
-  // explicit HeterCommKernel(const int block_size, CommonFeatureValueAccessor&
-  // feature_value_accessor) : block_size_(block_size),
-  // feature_value_accessor_(feature_value_accessor) {}
-  // explicit HeterCommKernel(const int block_size) : block_size_(block_size) {}
+  // explicit HeterCommKernel(const int block_size,
+  //                          CommonFeatureValueAccessor& feature_value_accessor)
+  //     : block_size_(block_size),
+  //       feature_value_accessor_(feature_value_accessor) {}
 
   template <typename T, typename StreamType>
   void fill_idx(T* idx, long long len, const StreamType& stream);
@@ -164,29 +164,45 @@ class HeterCommKernel {
                       const StreamType& stream,
                       FVAccessor& feature_value_accessor);
 
-  template <typename T, typename StreamType, typename FVAccessor>
+  template <typename T, typename StreamType>
   void dy_mf_fill_dvals(float* d_shard_vals, float* d_vals, T* idx,
                         long long len, size_t val_size,
-                        const StreamType& stream,
-                        FVAccessor& feature_value_accessor);
+                        const StreamType& stream);
 
   template <typename StreamType>
-  void split_segments(const uint32_t* d_fea_num_info,
-          size_t len, uint32_t* d_segments, uint32_t* d_segments_num,
-          size_t segment_size, const StreamType& stream);
+  void split_segments(const uint32_t* d_fea_num_info, size_t len,
+                      uint32_t* d_segments, uint32_t* d_segments_num,
+                      size_t segment_size, const StreamType& stream);
 
   template <typename StreamType>
   void expand_segments(const uint32_t* d_fea_num_info,
-          const uint32_t* d_segments_offset, size_t segments_num,
-          uint32_t* d_segments_fea_num_info, uint32_t segment_size,
-          const StreamType& stream);
+                       const uint32_t* d_segments_offset, size_t segments_num,
+                       uint32_t* d_segments_fea_num_info, uint32_t segment_size,
+                       const StreamType& stream);
 
   template <typename KeyType, typename StreamType>
   void shrink_keys(const KeyType* d_keys, const uint32_t* d_segments_offset,
-          KeyType* d_segments_keys, size_t segments_num, const StreamType& stream);
+                   KeyType* d_segments_keys, size_t segments_num,
+                   const StreamType& stream);
+
+  template <typename KeyType, typename StreamType>
+  void fill_restore_idx(bool filter_zero, const size_t total_num,
+                        const size_t merge_size, const KeyType *d_keys,
+                        const uint32_t* d_sorted_idx, const uint32_t* d_offset,
+                        const uint32_t* d_merged_cnts, uint32_t* d_restore_idx,
+                        const StreamType& stream);
+
+  template <typename KeyType, typename StreamType>
+  void unpack_merged_vals(size_t n,
+          const KeyType* d_keys,
+          const void* d_merged_vals,
+          const uint32_t* d_restore_idx,
+          void* d_vals, size_t val_size,
+          const StreamType& stream);
 
  private:
   int block_size_{256};
+  CommonFeatureValueAccessor feature_value_accessor_;
 };
 
 }  // end namespace framework

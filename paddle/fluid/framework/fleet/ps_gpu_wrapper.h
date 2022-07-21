@@ -13,7 +13,6 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #pragma once
-
 #ifdef PADDLE_WITH_HETERPS
 
 #include <atomic>
@@ -94,6 +93,55 @@ class AfsWrapper {
 #endif
 
 class PSGPUWrapper {
+  class DCacheBuffer {
+   public:
+    DCacheBuffer() : buf_(nullptr) {}
+    ~DCacheBuffer() {}
+    /**
+     * @Brief get data
+     */
+    template <typename T>
+    T* mutable_data(const size_t total_bytes,
+                    const paddle::platform::Place& place) {
+      if (buf_ == nullptr) {
+        buf_ = memory::AllocShared(place, total_bytes);
+      } else if (buf_->size() < total_bytes) {
+        buf_.reset();
+        buf_ = memory::AllocShared(place, total_bytes);
+      }
+      return reinterpret_cast<T*>(buf_->ptr());
+    }
+    template <typename T>
+    T* data() {
+      return reinterpret_cast<T*>(buf_->ptr());
+    }
+    size_t memory_size() {
+      if (buf_ == nullptr) {
+        return 0;
+      }
+      return buf_->size();
+    }
+    bool IsInitialized(void) { return (buf_ != nullptr); }
+
+   private:
+    std::shared_ptr<memory::Allocation> buf_ = nullptr;
+  };
+  struct PSDeviceData {
+    DCacheBuffer keys_tensor;
+    DCacheBuffer dims_tensor;
+    DCacheBuffer keys_ptr_tensor;
+    DCacheBuffer values_ptr_tensor;
+    DCacheBuffer pull_push_tensor;
+
+    DCacheBuffer slot_lens;
+    DCacheBuffer d_slot_vector;
+    DCacheBuffer keys2slot;
+
+    int64_t total_key_length = 0;
+    int64_t dedup_key_length = 0;
+  };
+  PSDeviceData* device_caches_ = nullptr;
+
  public:
   ~PSGPUWrapper();
 
@@ -128,6 +176,9 @@ class PSGPUWrapper {
   void CopyKeys(const paddle::platform::Place& place, uint64_t** origin_keys,
                 uint64_t* total_keys, const int64_t* gpu_len, int slot_num,
                 int total_len);
+  void CopyKeys(const paddle::platform::Place& place, uint64_t** origin_keys,
+                uint64_t* total_keys, const int64_t* gpu_len, int slot_num,
+                int total_len, int* key2slot);
 
   void BuildGPUTask(std::shared_ptr<HeterContext> gpu_task);
   void PreBuildTask(std::shared_ptr<HeterContext> gpu_task);
@@ -153,6 +204,10 @@ class PSGPUWrapper {
     s_instance_ = nullptr;
     VLOG(3) << "PSGPUWrapper Finalize Finished.";
     HeterPs_->show_table_collisions();
+    if (device_caches_ != nullptr) {
+      delete[] device_caches_;
+      device_caches_ = nullptr;
+    }
   }
 
   void InitializeGPU(const std::vector<int>& dev_ids) {
@@ -162,6 +217,7 @@ class PSGPUWrapper {
       resource_ = std::make_shared<HeterPsResource>(dev_ids);
       resource_->enable_p2p();
       keys_tensor.resize(resource_->total_device());
+      device_caches_ = new PSDeviceData[resource_->total_device()];
 #ifdef PADDLE_WITH_GLOO
       auto gloo = paddle::framework::GlooWrapper::GetInstance();
       if (gloo->Size() > 1) {
@@ -476,8 +532,10 @@ class PSGPUWrapper {
         GlobalAccessorTransfor::GetInstance().GetAccessorWrapper();
     val_type_size_ = accessor_wrapper_ptr->GetFeatureValueSize(max_mf_dim_);
     grad_type_size_ = accessor_wrapper_ptr->GetPushValueSize(max_mf_dim_);
-    VLOG(0) << "InitSlotInfo: val_type_size_" << val_type_size_
-            << " grad_type_size_:" << grad_type_size_;
+    pull_type_size_ = accessor_wrapper_ptr->GetPullValueSize(max_mf_dim_);
+    VLOG(0) << "InitS  lotInfo: val_type_size_" << val_type_size_
+            << " grad_type_size_:" << grad_type_size_
+            << " pull_type_size_:" << pull_type_size_;
     slot_info_initialized_ = true;
   }
 #endif
@@ -525,6 +583,7 @@ class PSGPUWrapper {
   int max_mf_dim_{0};
   size_t val_type_size_{0};
   size_t grad_type_size_{0};
+  size_t pull_type_size_{0};
 
   double time_1 = 0.0;
   double time_2 = 0.0;
