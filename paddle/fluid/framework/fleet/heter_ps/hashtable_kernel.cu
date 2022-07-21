@@ -90,42 +90,31 @@ __global__ void dy_mf_search_kernel(Table* table,
   // return;
   if (i < len) {
     auto it = table->find(keys[i]);
-
     if (it != table->end()) {
       uint64_t offset = i * pull_feature_value_size;
       float* cur = (float*)(vals + offset);
       float* input = it->second;
       
-      cur[feature_value_accessor.common_feature_value.SlotIndex()] =
-        input[feature_value_accessor.common_feature_value.SlotIndex()];
-      cur[feature_value_accessor.common_feature_value.ShowIndex()] =
-        input[feature_value_accessor.common_feature_value.ShowIndex()];
-      cur[feature_value_accessor.common_feature_value.ClickIndex()] =
-        input[feature_value_accessor.common_feature_value.ClickIndex()];
-      cur[feature_value_accessor.common_feature_value.MfDimIndex()] =
-        input[feature_value_accessor.common_feature_value.MfDimIndex()];
-      cur[feature_value_accessor.common_feature_value.EmbedWIndex()] =
-        input[feature_value_accessor.common_feature_value.EmbedWIndex()];
-      cur[feature_value_accessor.common_feature_value.MfSizeIndex()] =
-        input[feature_value_accessor.common_feature_value.MfSizeIndex()];
-      cur[feature_value_accessor.common_feature_value.CpuPtrIndex()] =
-        input[feature_value_accessor.common_feature_value.CpuPtrIndex()];
-      cur[feature_value_accessor.common_feature_value.DeltaScoreIndex()] =
-        input[feature_value_accessor.common_feature_value.DeltaScoreIndex()];
-      cur[feature_value_accessor.common_feature_value.EmbedWIndex()] =
-        input[feature_value_accessor.common_feature_value.EmbedWIndex()];
-      for (int i = 0; i < feature_value_accessor.common_feature_value.EmbedDim(); i++) {
-        cur[feature_value_accessor.common_feature_value.EmbedG2SumIndex() + i] = 
-          input[feature_value_accessor.common_feature_value.EmbedG2SumIndex() + i];
+      cur[feature_value_accessor.common_pull_value.ShowIndex()] =
+         input[feature_value_accessor.common_feature_value.ShowIndex()];
+      cur[feature_value_accessor.common_pull_value.ClickIndex()] =
+         input[feature_value_accessor.common_feature_value.ClickIndex()];
+      cur[feature_value_accessor.common_pull_value.EmbedWIndex()] =
+         input[feature_value_accessor.common_feature_value.EmbedWIndex()];
+      
+      int mf_size = int(input[feature_value_accessor.common_feature_value.MfSizeIndex()]);
+      if (mf_size == 0) {
+          cur[feature_value_accessor.common_pull_value.MfSizeIndex()] = 0;
+          return;
       }
-
-      for (int x = 0; x < feature_value_accessor.common_feature_value.EmbedXDim(); x++) {
-        cur[feature_value_accessor.common_feature_value.EmbedxG2SumIndex() + x]  = 
-          input[feature_value_accessor.common_feature_value.EmbedxG2SumIndex() + x];
-      }
-      for (int x = 0; x < feature_value_accessor.common_feature_value.EmbedWDim(); x++) {
-        cur[feature_value_accessor.common_feature_value.EmbedxWIndex() + x] = 
-          input[feature_value_accessor.common_feature_value.EmbedxWIndex() + x];
+      // set pull value real dim size
+      int mf_dim = int(input[feature_value_accessor.common_feature_value.MfDimIndex()]);
+      cur[feature_value_accessor.common_pull_value.MfSizeIndex()] = mf_dim;
+       
+      int embedx_off = feature_value_accessor.common_pull_value.EmbedxWIndex();
+      int value_off = feature_value_accessor.common_feature_value.EmbedxWIndex();
+      for (int k = 0; k < mf_dim; ++k) {
+          cur[embedx_off + k] = input[value_off + k];
       }
     }
   }
@@ -167,9 +156,9 @@ __global__ void dy_mf_update_kernel(Table* table,
 template <typename KeyType, typename ValType>
 HashTable<KeyType, ValType>::HashTable(size_t capacity) {
   container_ = new TableContainer<KeyType, ValType>(capacity);
-  cudaMalloc((void**)&device_optimizer_config_, sizeof(OptimizerConfig));
-  cudaMemcpy((void*)device_optimizer_config_, &host_optimizer_config_,
-             sizeof(OptimizerConfig), cudaMemcpyHostToDevice);
+  CUDA_RT_CALL(cudaMalloc((void**)&device_optimizer_config_, sizeof(OptimizerConfig)));
+  CUDA_RT_CALL(cudaMemcpy((void*)device_optimizer_config_, &host_optimizer_config_,
+             sizeof(OptimizerConfig), cudaMemcpyHostToDevice));
   rwlock_.reset(new phi::RWLock);
 }
 
