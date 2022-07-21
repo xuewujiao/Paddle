@@ -183,6 +183,13 @@ class CommonFeatureValueAccessor : public FeatureValueAccessor {
       float mf_size
       std::vector<float> embedx_w;
     */
+    __host__ __device__ static int Dim(int embedx_dim) {
+      return 4 + embedx_dim;
+    }
+    __host__ __device__ int DimSize(size_t dim) { return sizeof(float); }
+    __host__ __device__ int Size(int embedx_dim) {
+      return TYPEALIGN(8, Dim(embedx_dim) * sizeof(float));
+    }
     __host__ __device__ int ShowIndex() { return 0; }
     __host__ __device__ int ClickIndex() { return 1; }
     __host__ __device__ int EmbedWIndex() { return 2; }
@@ -190,9 +197,6 @@ class CommonFeatureValueAccessor : public FeatureValueAccessor {
       return 3;
     }  // actual mf size (ex. 0)
     __host__ __device__ int EmbedxWIndex() { return 4; }
-    __host__ __device__ int Size(const int mf_dim) {
-      return (4 + mf_dim) * sizeof(float);
-    }
   };
 
   struct CommonPushValue {
@@ -246,39 +250,6 @@ class CommonFeatureValueAccessor : public FeatureValueAccessor {
     }
     __host__ __device__ float* EmbedxG(float* val) {
       return val + CommonPushValue::EmbedxGIndex();
-    }
-  };
-
-  struct CommonPullValue {
-    /*
-       float show;
-       float click;
-       float embed_w;
-       std::vector<float> embedx_w;
-       */
-
-    __host__ __device__ static int Dim(int embedx_dim) {
-      return 3 + embedx_dim;
-    }
-    __host__ __device__ int DimSize(size_t dim) { return sizeof(float); }
-    __host__ __device__ int Size(int embedx_dim) {
-      return TYPEALIGN(8, Dim(embedx_dim) * sizeof(float));
-    }
-    __host__ __device__ int ShowIndex() { return 0; }
-    __host__ __device__ int ClickIndex() { return 1; }
-    __host__ __device__ int EmbedWIndex() { return 2; }
-    __host__ __device__ int EmbedxWIndex() { return 3; }
-    __host__ __device__ float& Show(float* val) {
-      return val[CommonPullValue::ShowIndex()];
-    }
-    __host__ __device__ float& Click(float* val) {
-      return val[CommonPullValue::ClickIndex()];
-    }
-    __host__ __device__ float& EmbedW(float* val) {
-      return val[CommonPullValue::EmbedWIndex()];
-    }
-    __host__ __device__ float* EmbedxW(float* val) {
-      return val + CommonPullValue::EmbedxWIndex();
     }
   };
 
@@ -532,22 +503,22 @@ class CommonFeatureValueAccessor : public FeatureValueAccessor {
       *(dest_val + common_pull_value.EmbedWIndex()) = 0;
     } else {
       *(dest_val + common_pull_value.ShowIndex()) =
-          src_val[common_feature_value.ShowIndex()];
+          src_val[common_pull_value.ShowIndex()];
       *(dest_val + common_pull_value.ClickIndex()) =
-          src_val[common_feature_value.ClickIndex()];
+          src_val[common_pull_value.ClickIndex()];
       *(dest_val + common_pull_value.EmbedWIndex()) =
-          src_val[common_feature_value.EmbedWIndex()];
+          src_val[common_pull_value.EmbedWIndex()];
     }
 
-    if (src_val[common_feature_value.MfSizeIndex()] == 0 || *key == 0) {
+    if (src_val[common_pull_value.MfSizeIndex()] == 0 || *key == 0) {
       for (int j = 0; j < mf_dim; j++) {
         *(dest_val + common_pull_value.EmbedxWIndex() + j) = 0;
       }
     } else {
       for (int j = 0; j < mf_dim; j++) {
-        *(dest_val + common_pull_value.EmbedxWIndex() + j) =
-            src_val[common_feature_value.EmbedxWIndex() + j];
-        // src_val[common_feature_value.EmbedxWOffsetIndex(src_val) + j];
+        // common_pull_value EmbedxWIndex 之前还有 MfSizeIndex，
+        // 所以这里没有直接使用 common_pull_value.EmbedxWIndex()
+        *(dest_val + 3 + j) = src_val[common_pull_value.EmbedxWIndex() + j];
       }
     }
   }
@@ -698,7 +669,8 @@ class VirtualAccessor {
                            const int64_t* slot_lens, const int* key2slot,
                            const int hidden_size, const int64_t total_length,
                            const int* slot_dims,
-                           const uint32_t* gpu_restore_idx) = 0;
+                           const uint32_t* gpu_restore_idx,
+                           int pull_value_size) = 0;
 
   virtual void CopyForPush(const paddle::platform::Place& place,
                            const std::vector<const float*>& grad_values,
@@ -787,10 +759,11 @@ class AccessorWrapper : public VirtualAccessor {
                            const int64_t* slot_lens, const int* key2slot,
                            const int hidden_size, const int64_t total_length,
                            const int* slot_dims,
-                           const uint32_t* gpu_restore_idx) {
+                           const uint32_t* gpu_restore_idx,
+                           int pull_value_size) {
     CopyForPullDedupImpl(place, total_keys, gpu_values, total_values_gpu,
                          slot_lens, key2slot, hidden_size, total_length,
-                         slot_dims, gpu_restore_idx);
+                         slot_dims, gpu_restore_idx, pull_value_size);
   }
 
   virtual void CopyForPush(const paddle::platform::Place& place,
@@ -857,7 +830,8 @@ class AccessorWrapper : public VirtualAccessor {
                             const int64_t* slot_lens, const int* key2slot,
                             const int hidden_size, const int64_t total_length,
                             const int* slot_dims,
-                            const uint32_t* gpu_restore_idx);
+                            const uint32_t* gpu_restore_idx,
+                            int pull_value_size);
 
   void CopyForPushDedupImpl(const paddle::platform::Place& place,
                             const uint64_t* total_keys, float** grad_values,

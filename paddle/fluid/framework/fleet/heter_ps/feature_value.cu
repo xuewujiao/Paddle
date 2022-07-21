@@ -13,9 +13,14 @@ limitations under the License. */
 
 #ifdef PADDLE_WITH_HETERPS
 #include "paddle/fluid/framework/fleet/heter_ps/feature_value.h"
+#include "paddle/fluid/platform/device/gpu/gpu_primitives.h"
 
 namespace paddle {
 namespace framework {
+
+const int CUDA_NUM_THREADS = platform::PADDLE_CUDA_NUM_THREADS;
+#define GET_BLOCK(N) ((N + CUDA_NUM_THREADS - 1) / CUDA_NUM_THREADS)
+#define CUDA_BLOCK(N) GET_BLOCK(N), CUDA_NUM_THREADS, 0
 
 template <typename FVAccessor>
 __global__ void PullCopy(float** dest,
@@ -367,13 +372,14 @@ void AccessorWrapper<GPUAccessor>::CopyForPullDedupImpl(
     const int hidden_size,
     const int64_t total_length, 
     const int* slot_dims,
-    const uint32_t* gpu_restore_idx) {
+    const uint32_t* gpu_restore_idx,
+    int pull_value_size) {
   auto stream = dynamic_cast<paddle::platform::CUDADeviceContext*>(
                     paddle::platform::DeviceContextPool::Instance().Get(place))
                     ->stream();
   size_t N = total_length * hidden_size;
   PullDedupCopy<<<CUDA_BLOCK(N), stream>>>(
-      N, total_keys, gpu_values, total_values_gpu, slot_lens, pull_type_size_,
+      N, total_keys, gpu_values, total_values_gpu, slot_lens, pull_value_size,
       slot_dims, hidden_size, key2slot, gpu_restore_idx,
       gpu_accessor_.common_pull_value);
   cudaStreamSynchronize(stream);

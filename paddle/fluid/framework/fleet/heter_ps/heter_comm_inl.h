@@ -1023,12 +1023,14 @@ void HeterComm<KeyType, ValType, GradType, FVAccessor>::pull_merge_sparse(
     if (!FLAGS_gpugraph_enable_gpu_direct_access) {
       ptr_tables_[i]->get(reinterpret_cast<KeyType*>(node.key_storage),
                           node.val_storage, h_right[i] - h_left[i] + 1,
-                          resource_->remote_stream(i, num));
+                          resource_->remote_stream(i, num),
+                          feature_value_accessor_);
     } else {
       ptr_tables_[i]->get(
           d_shard_keys_ptr + h_left[i],
           reinterpret_cast<char*>(d_shard_vals_ptr) + h_left[i] * val_type_size,
-          h_right[i] - h_left[i] + 1, resource_->remote_stream(i, num));
+          h_right[i] - h_left[i] + 1, resource_->remote_stream(i, num),
+          feature_value_accessor_);
     }
   }
 
@@ -1200,8 +1202,9 @@ void HeterComm<KeyType, ValType, GradType, FVAccessor>::pull_normal_sparse(
   }
 }
 
-template <typename KeyType, typename ValType, typename GradType>
-void HeterComm<KeyType, ValType, GradType>::pull_sparse(int num,
+template <typename KeyType, typename ValType, typename GradType,
+          typename FVAccessor>
+void HeterComm<KeyType, ValType, GradType, FVAccessor>::pull_sparse(int num,
                                                         KeyType* d_keys,
                                                         float* d_vals,
                                                         size_t len) {

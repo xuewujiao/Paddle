@@ -96,7 +96,7 @@ void HeterPs<FVAccessor>::show_one_table(int gpu_num) {
 }
 
 template <typename FVAccessor>
-void HeterPs::push_sparse(int num, FeatureKey* d_keys, float* d_grads,
+void HeterPs<FVAccessor>::push_sparse(int num, FeatureKey* d_keys, float* d_grads,
                           size_t len) {
   if (accessor_type_ == "CtrDymfAccessor") {
     if (optimizer_type_ == 3) {  // adam
