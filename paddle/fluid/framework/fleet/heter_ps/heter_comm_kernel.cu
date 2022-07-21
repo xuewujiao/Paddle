@@ -117,141 +117,112 @@ __global__ void fill_dvals_kernel(ValType* d_shard_vals, ValType* d_vals,
   }
 }
 
-// template <typename KeyType, typename T, typename FVAccessor>
-// __global__ void dy_mf_fill_shard_grads_kernel(
-//     KeyType* d_shard_keys, KeyType* d_keys, float* d_shard_grads,
-//     float* d_grads, T* idx, size_t len, size_t grad_value_size,
-//     FVAccessor feature_value_accessor) {
-//   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-//   if (i < len) {
-//     d_shard_keys[i] = d_keys[idx[i]];
-//     float* cur = (float*)((char*)d_shard_grads + i * grad_value_size);
-//     float* shard_val =
-//         (float*)((char*)d_grads + uint64_t(idx[i]) * grad_value_size);
+template <typename KeyType, typename FVAccessor>
+__global__ void merge_gradients_basic_kernel(
+    const KeyType* d_keys, const uint32_t* offset, const uint32_t* fea_num,
+    const uint32_t* index, const char* input, char* output, int n,
+    size_t grad_value_size, DynamicGradMerger& merger,
+    FVAccessor& feature_value_accessor) {
+  const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
 
-//     feature_value_accessor.PushValueFill(cur, shard_val);
-//   }
-// }
+  if (i < n) {
+    uint32_t start = offset[i];
+    uint32_t num = fea_num[i];
+    int ori_index = index[start];
+    float* out = (float*)(output + i * grad_value_size);
+    float* in = (float*)(input + size_t(ori_index) * grad_value_size);
+    merger.update_basic(out, in, feature_value_accessor);
+    KeyType key = d_keys[i];
+    if (key != 0) {
+      for (int j = 1; j < num; ++j) {
+        ori_index = index[start + j];
+        in = (float*)(input + size_t(ori_index) * grad_value_size);
+        merger.merge_basic(out, in, feature_value_accessor);
+      }
+    }
+  }
+}
 
-// template <typename KeyType, typename FVAccessor>
-// __global__ void merge_gradients_basic_kernel(
-//     const KeyType* d_keys, const uint32_t* offset, const uint32_t* fea_num,
-//     const uint32_t* index, const char* input, char* output, int n,
-//     size_t grad_value_size, DynamicGradMerger& merger,
-//     FVAccessor& feature_value_accessor) {
-//   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+template <typename KeyType, typename FVAccessor>
+__global__ void merge_gradients_embedx_kernel(
+    const KeyType* d_keys, const uint32_t* offset, const uint32_t* fea_num,
+    const uint32_t* index, const char* input, char* output, int n,
+    size_t grad_dim, size_t grad_value_size, DynamicGradMerger& merger,
+    FVAccessor& feature_value_accessor) {
+  const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
 
-//   if (i < n) {
-//     uint32_t start = offset[i];
-//     uint32_t num = fea_num[i];
-//     int ori_index = index[start];
-//     float* out = (float*)(output + i * grad_value_size);
-//     float* in = (float*)(input + size_t(ori_index) * grad_value_size);
-//     merger.update_basic(out, in, feature_value_accessor);
-//     KeyType key = d_keys[i];
-//     if (key != 0) {
-//       for (int j = 1; j < num; ++j) {
-//         ori_index = index[start + j];
-//         in = (float*)(input + size_t(ori_index) * grad_value_size);
-//         merger.merge_basic(out, in, feature_value_accessor);
-//       }
-//     }
-//   }
-// }
+  if (i < n) {
+    size_t value_idx = i / grad_dim;
+    size_t field_idx = i % grad_dim;
+    uint32_t start = offset[value_idx];
+    uint32_t num = fea_num[value_idx];
+    int ori_index = index[start];
+    float* in = (float*)(input + size_t(ori_index) * grad_value_size);
+    float* out = (float*)(output + value_idx * grad_value_size);
+    merger.update_embedx(out, in, field_idx, feature_value_accessor);
+    KeyType key = d_keys[value_idx];
+    if (key != 0) {
+      for (int j = 1; j < num; ++j) {
+        int ori_index = index[start + j];
+        float* in = (float*)(input + size_t(ori_index) * grad_value_size);
+        merger.merge_embedx(out, in, field_idx, feature_value_accessor);
+      }
+    }
+  }
+}
 
-// template <typename KeyType, typename FVAccessor>
-// __global__ void merge_gradients_embedx_kernel(
-//     const KeyType* d_keys, const uint32_t* offset, const uint32_t* fea_num,
-//     const uint32_t* index, const char* input, char* output, int n,
-//     size_t grad_dim, size_t grad_value_size, DynamicGradMerger& merger,
-//     FVAccessor& feature_value_accessor) {
-//   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+__global__ void split_segments_kernel(const uint32_t* d_fea_num_info, size_t n,
+                                      uint32_t* d_segments,
+                                      uint32_t* d_segments_num,
+                                      uint32_t segment_size) {
+  const size_t tx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tx >= n) {
+    return;
+  }
 
-//   if (i < n) {
-//     size_t value_idx = i / grad_dim;
-//     size_t field_idx = i % grad_dim;
-//     uint32_t start = offset[value_idx];
-//     uint32_t num = fea_num[value_idx];
-//     int ori_index = index[start];
-//     float* in = (float*)(input + size_t(ori_index) * grad_value_size);
-//     float* out = (float*)(output + value_idx * grad_value_size);
-//     merger.update_embedx(out, in, field_idx, feature_value_accessor);
-//     KeyType key = d_keys[value_idx];
-//     if (key != 0) {
-//       for (int j = 1; j < num; ++j) {
-//         int ori_index = index[start + j];
-//         float* in = (float*)(input + size_t(ori_index) * grad_value_size);
-//         merger.merge_embedx(out, in, field_idx, feature_value_accessor);
-//       }
-//     }
-//   }
-// }
+  auto fea_num = d_fea_num_info[tx];
+  auto seg_num = (uint32_t)((fea_num - 1) / segment_size + 1);
+  d_segments[tx] = seg_num;
+}
 
-// __global__ void split_segments_kernel(const uint32_t* d_fea_num_info, size_t n,
-//                                       uint32_t* d_segments,
-//                                       uint32_t* d_segments_num,
-//                                       uint32_t segment_size) {
-//   const size_t tx = blockIdx.x * blockDim.x + threadIdx.x;
-//   if (tx >= n) {
-//     return;
-//   }
+__global__ void expand_segments_kernel(const uint32_t* d_fea_num_info,
+                                       const uint32_t* d_segments_offset,
+                                       size_t n,
+                                       uint32_t* d_segments_fea_num_info,
+                                       uint32_t segment_size) {
+  const size_t tx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tx >= n) {
+    return;
+  }
 
-//   auto fea_num = d_fea_num_info[tx];
-//   auto seg_num = (uint32_t)((fea_num - 1) / segment_size + 1);
-//   d_segments[tx] = seg_num;
-// }
+  auto fea_num = d_fea_num_info[tx];
+  auto seg_num = (uint32_t)((fea_num - 1) / segment_size + 1);
+  auto start_pos = d_segments_offset[tx];
+  auto remains = fea_num;
+  int cur_seg_size = 0;
+  for (size_t i = 0; i < seg_num; ++i) {
+    if (remains >= segment_size) {
+      cur_seg_size = segment_size;
+    } else {
+      cur_seg_size = remains;
+    }
+    d_segments_fea_num_info[start_pos + i] = cur_seg_size;
+    remains -= cur_seg_size;
+  }
+}
 
-// __global__ void expand_segments_kernel(const uint32_t* d_fea_num_info,
-//                                        const uint32_t* d_segments_offset,
-//                                        size_t n,
-//                                        uint32_t* d_segments_fea_num_info,
-//                                        uint32_t segment_size) {
-//   const size_t tx = blockIdx.x * blockDim.x + threadIdx.x;
-//   if (tx >= n) {
-//     return;
-//   }
+template <typename KeyType>
+__global__ void shrink_keys_kernel(const KeyType* d_keys,
+                                   const uint32_t* d_segments_offset,
+                                   KeyType* d_segments_keys, size_t n) {
+  const size_t tx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tx >= n) {
+    return;
+  }
 
-//   auto fea_num = d_fea_num_info[tx];
-//   auto seg_num = (uint32_t)((fea_num - 1) / segment_size + 1);
-//   auto start_pos = d_segments_offset[tx];
-//   auto remains = fea_num;
-//   int cur_seg_size = 0;
-//   for (size_t i = 0; i < seg_num; ++i) {
-//     if (remains >= segment_size) {
-//       cur_seg_size = segment_size;
-//     } else {
-//       cur_seg_size = remains;
-//     }
-//     d_segments_fea_num_info[start_pos + i] = cur_seg_size;
-//     remains -= cur_seg_size;
-//   }
-// }
+  d_segments_keys[tx] = d_keys[d_segments_offset[tx]];
+}
 
-// template <typename KeyType>
-// __global__ void shrink_keys_kernel(const KeyType* d_keys,
-//                                    const uint32_t* d_segments_offset,
-//                                    KeyType* d_segments_keys, size_t n) {
-//   const size_t tx = blockIdx.x * blockDim.x + threadIdx.x;
-//   if (tx >= n) {
-//     return;
-//   }
-
-//   d_segments_keys[tx] = d_keys[d_segments_offset[tx]];
-// }
-
-// template <typename T, typename FVAccessor>
-// __global__ void dy_mf_fill_dvals_kernel(float* d_shard_vals, float* d_vals,
-//                                         T* idx, size_t len, size_t val_size,
-//                                         FVAccessor feature_value_accessor) {
-//   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-//   if (i < len) {
-//     uint64_t new_offset = uint64_t(idx[i]) * val_size;
-//     float* cur = (float*)((char*)d_vals + new_offset);
-//     float* shard_val = (float*)((char*)d_shard_vals + uint64_t(i) * val_size);
-//     int mf_dim = int(
-//         shard_val[feature_value_accessor.common_feature_value.MfDimIndex()]);
-
-//     feature_value_accessor.FeatureValueFill(cur, shard_val, mf_dim);
 template<typename KeyType>
 __global__ void unpack_merged_vals_kernel(
         const KeyType* d_keys,
