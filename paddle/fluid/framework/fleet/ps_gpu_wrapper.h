@@ -363,7 +363,7 @@ class PSGPUWrapper {
     config["nodeid_slot"] = sparse_table_accessor.graph_sgd_param().nodeid_slot();
     config["feature_learning_rate"] = sparse_table_accessor.graph_sgd_param().feature_learning_rate();
     
-    if (accessor_class == "CtrDymfAccessor") {
+    if (accessor_class_ == "CtrDymfAccessor") {
       // optimizer config for embed_w and embedx
       add_sparse_optimizer(config, sparse_table_accessor.embed_sgd_param());
       add_sparse_optimizer(config, sparse_table_accessor.embedx_sgd_param(),

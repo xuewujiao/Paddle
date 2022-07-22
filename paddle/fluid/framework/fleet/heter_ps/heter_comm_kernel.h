@@ -95,11 +95,6 @@ class HeterCommKernel {
   HeterCommKernel() {}
   explicit HeterCommKernel(const int block_size) : block_size_(block_size) {}
 
-  // explicit HeterCommKernel(const int block_size,
-  //                          CommonFeatureValueAccessor& feature_value_accessor)
-  //     : block_size_(block_size),
-  //       feature_value_accessor_(feature_value_accessor) {}
-
   template <typename T, typename StreamType>
   void fill_idx(T* idx, long long len, const StreamType& stream);
 
