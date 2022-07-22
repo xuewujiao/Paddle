@@ -148,14 +148,6 @@ class PSGPUWrapper {
   PSGPUWrapper() {
     HeterPs_ = NULL;
     sleep_seconds_before_fail_exit_ = 300;
-    pull_thread_pool_.resize(thread_keys_shard_num_);
-    for (size_t i = 0; i < pull_thread_pool_.size(); i++) {
-      pull_thread_pool_[i].reset(new ::ThreadPool(1));
-    }
-    hbm_thread_pool_.resize(thread_keys_shard_num_);
-    for (size_t i = 0; i < hbm_thread_pool_.size(); i++) {
-      hbm_thread_pool_[i].reset(new ::ThreadPool(1));
-    }
   }
 
   void PullSparse(const paddle::platform::Place& place, const int table_id,
@@ -290,7 +282,7 @@ class PSGPUWrapper {
                     float mf_initial_g2sum, float mf_initial_range,
                     float mf_min_bound, float mf_max_bound,
                     float mf_beta1_decay_rate, float mf_beta2_decay_rate,
-                    float mf_ada_epsilon);
+                    float mf_ada_epsilon, float nodeid_slot, float feature_learning_rate);
 
 #ifdef PADDLE_WITH_PSCORE
   void add_sparse_optimizer(
@@ -342,6 +334,21 @@ class PSGPUWrapper {
   void InitializeGPUServer(paddle::distributed::PSParameter ps_param) {
     auto sparse_table =
         ps_param.server_param().downpour_server_param().downpour_table_param(0);
+    // set build thread_num and shard_num
+    thread_keys_thread_num_ = sparse_table.shard_num();
+    thread_keys_shard_num_ = sparse_table.shard_num();
+    VLOG(1) << "ps_gpu build phase thread_num:" << thread_keys_thread_num_
+            << " shard_num:" << thread_keys_shard_num_;
+
+    pull_thread_pool_.resize(thread_keys_shard_num_);
+    for (size_t i = 0; i < pull_thread_pool_.size(); i++) {
+      pull_thread_pool_[i].reset(new ::ThreadPool(1));
+    }
+    hbm_thread_pool_.resize(thread_keys_shard_num_);
+    for (size_t i = 0; i < hbm_thread_pool_.size(); i++) {
+      hbm_thread_pool_[i].reset(new ::ThreadPool(1));
+    }
+
     auto sparse_table_accessor = sparse_table.accessor();
     auto sparse_table_accessor_parameter =
         sparse_table_accessor.ctr_accessor_param();
@@ -352,8 +359,11 @@ class PSGPUWrapper {
     config["nonclk_coeff"] = sparse_table_accessor_parameter.nonclk_coeff();
     config["clk_coeff"] = sparse_table_accessor_parameter.click_coeff();
     config["mf_create_thresholds"] = sparse_table_accessor.embedx_threshold();
-
-    if (accessor_class_ == "CtrDymfAccessor") {
+    
+    config["nodeid_slot"] = sparse_table_accessor.graph_sgd_param().nodeid_slot();
+    config["feature_learning_rate"] = sparse_table_accessor.graph_sgd_param().feature_learning_rate();
+    
+    if (accessor_class == "CtrDymfAccessor") {
       // optimizer config for embed_w and embedx
       add_sparse_optimizer(config, sparse_table_accessor.embed_sgd_param());
       add_sparse_optimizer(config, sparse_table_accessor.embedx_sgd_param(),
@@ -428,20 +438,30 @@ class PSGPUWrapper {
     float mf_ada_epsilon = (config.find("mf_ada_epsilon") == config.end())
                                ? 1e-8
                                : config["mf_ada_epsilon"];
-
+    
+    float feature_learning_rate = (config.find("feature_learning_rate") == config.end())
+                                 ? 0.05
+                                 : config["feature_learning_rate"];
+    
+    float nodeid_slot = (config.find("nodeid_slot") == config.end())
+                                 ? 9008
+                                 : config["nodeid_slot"];
     this->SetSparseSGD(nonclk_coeff, clk_coeff, min_bound, max_bound,
                        learning_rate, initial_g2sum, initial_range,
                        beta1_decay_rate, beta2_decay_rate, ada_epsilon);
     this->SetEmbedxSGD(mf_create_thresholds, mf_learning_rate, mf_initial_g2sum,
                        mf_initial_range, mf_min_bound, mf_max_bound,
                        mf_beta1_decay_rate, mf_beta2_decay_rate,
-                       mf_ada_epsilon);
+                       mf_ada_epsilon, nodeid_slot, feature_learning_rate);
 
     // set optimizer type(naive,adagrad,std_adagrad,adam,share_adam)
     optimizer_type_ = (config.find("optimizer_type") == config.end())
                           ? 1
                           : int(config["optimizer_type"]);
-   
+
+    VLOG(0) << "InitializeGPUServer optimizer_type_:" << optimizer_type_
+            << " nodeid_slot:" << nodeid_slot
+            << " feature_learning_rate:" << feature_learning_rate;
   }
 
   void SetDate(int year, int month, int day) {
