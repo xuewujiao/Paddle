@@ -51,7 +51,7 @@ HeterPs<GPUAccessor, GPUOptimizer>::HeterPs(
     size_t capacity, std::shared_ptr<HeterPsResource> resource,
     GPUAccessor& gpu_accessor) {
   comm_ = std::make_shared<HeterComm<FeatureKey, float*, float*, GPUAccessor>>(
-      capacity, resource);
+      capacity, resource, gpu_accessor);
   opt_ = GPUOptimizer<GPUAccessor>(gpu_accessor);
 }
 
@@ -115,11 +115,6 @@ void HeterPs<GPUAccessor, GPUOptimizer>::set_nccl_comm_and_size(
 template <typename GPUAccessor, template<typename T> class GPUOptimizer>
 void HeterPs<GPUAccessor, GPUOptimizer>::set_multi_mf_dim(int multi_mf_dim, int max_mf_dim) {
   comm_->set_multi_mf_dim(multi_mf_dim, max_mf_dim);
-}
-
-template <typename GPUAccessor, template<typename T> class GPUOptimizer>
-void HeterPs<GPUAccessor, GPUOptimizer>::set_accessor(GPUAccessor& accessor) {
-  comm_->set_accessor(accessor);
 }
 
 template <typename GPUAccessor, template<typename T> class GPUOptimizer>

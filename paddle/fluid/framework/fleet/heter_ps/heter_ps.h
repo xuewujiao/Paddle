@@ -49,7 +49,6 @@ class HeterPs : public HeterPsBase {
                               int comm_size) override;
   void set_multi_mf_dim(int multi_mf_dim, int max_mf_dim) override;
 
-  void set_accessor(GPUAccessor& accessor);
 #endif
 
   void set_sparse_sgd(const OptimizerConfig& optimizer_config) override;
@@ -76,7 +75,6 @@ class HeterPs : public HeterPsBase {
  private:
   std::shared_ptr<HeterComm<FeatureKey, float*, float*, GPUAccessor>> comm_;
 #if defined(PADDLE_WITH_CUDA)
-  GPUAccessor feature_value_accessor_;
   GPUOptimizer<GPUAccessor> opt_;
 #endif
 };

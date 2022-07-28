@@ -80,12 +80,12 @@ __global__ void search_kernel(Table* table,
   }
 }
 
-template <typename Table, typename FVAccessor>
+template <typename Table, typename GPUAccessor>
 __global__ void dy_mf_search_kernel(Table* table,
                                     const typename Table::key_type* const keys,
                                     char* vals, size_t len,
                                     size_t pull_feature_value_size,
-                                    FVAccessor feature_value_accessor) {
+                                    GPUAccessor gpu_accessor) {
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   // return;
   if (i < len) {
@@ -94,7 +94,7 @@ __global__ void dy_mf_search_kernel(Table* table,
       uint64_t offset = i * pull_feature_value_size;
       float* cur = (float*)(vals + offset);
       float* input = it->second;
-      feature_value_accessor.PullValueFill(cur, input);
+      gpu_accessor.PullValueFill(cur, input);
     }
   }
 }
@@ -180,10 +180,10 @@ void HashTable<KeyType, ValType>::get(const KeyType* d_keys, ValType* d_vals,
 }
 
 template <typename KeyType, typename ValType>
-template <typename StreamType, typename FVAccessor>
+template <typename StreamType, typename GPUAccessor>
 void HashTable<KeyType, ValType>::get(const KeyType* d_keys, char* d_vals,
                                       size_t len, StreamType stream,
-                                      FVAccessor& fv_accessor) {
+                                      GPUAccessor& fv_accessor) {
   if (len == 0) {
     return;
   }
