@@ -197,7 +197,6 @@ class HeterCommKernel {
 
  private:
   int block_size_{256};
-  CommonFeatureValueAccessor feature_value_accessor_;
 };
 
 }  // end namespace framework

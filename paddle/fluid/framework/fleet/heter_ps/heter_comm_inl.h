@@ -56,7 +56,7 @@ HeterComm<KeyType, ValType, GradType, FVAccessor>::HeterComm(
     } else {
       max_mf_dim_ = resource_->max_mf_dim();
       auto accessor_wrapper_ptr =
-          GlobalAccessorTransfor::GetInstance().GetAccessorWrapper();
+          GlobalAccessorFactory::GetInstance().GetAccessorWrapper();
       size_t val_type_size =
           accessor_wrapper_ptr->GetFeatureValueSize(max_mf_dim_);
       size_t grad_type_size =
@@ -770,7 +770,7 @@ void HeterComm<KeyType, ValType, GradType, FVAccessor>::dynamic_merge_grad(
   size_t temp_storage_bytes;
   size_t grad_dim = max_mf_dim_;
   auto accessor_wrapper_ptr =
-      GlobalAccessorTransfor::GetInstance().GetAccessorWrapper();
+      GlobalAccessorFactory::GetInstance().GetAccessorWrapper();
   size_t grad_value_size = accessor_wrapper_ptr->GetPushValueSize(max_mf_dim_);
 
   auto d_merge_keys = memory::Alloc(place, len * sizeof(KeyType));
@@ -925,7 +925,7 @@ void HeterComm<KeyType, ValType, GradType, FVAccessor>::segment_merge_grad(
 
   auto grad_dim = max_mf_dim_;
   auto accessor_wrapper_ptr =
-      GlobalAccessorTransfor::GetInstance().GetAccessorWrapper();
+      GlobalAccessorFactory::GetInstance().GetAccessorWrapper();
   size_t grad_value_size = accessor_wrapper_ptr->GetPushValueSize(max_mf_dim_);
 
   auto d_buffer1 = memory::Alloc(place, sizeof(uint32_t) * len);
@@ -1132,7 +1132,7 @@ void HeterComm<KeyType, ValType, GradType, FVAccessor>::merge_keys(
 
   size_t grad_dim = max_mf_dim_;
   auto accessor_wrapper_ptr =
-      GlobalAccessorTransfor::GetInstance().GetAccessorWrapper();
+      GlobalAccessorFactory::GetInstance().GetAccessorWrapper();
   size_t grad_value_size = accessor_wrapper_ptr->GetPushValueSize(max_mf_dim_);
 
   auto d_fea_num_info = memory::Alloc(place, sizeof(uint32_t) * (len * 4 + 1));
@@ -1278,7 +1278,7 @@ void HeterComm<KeyType, ValType, GradType, FVAccessor>::pull_merge_sparse(
 #endif
 
   auto accessor_wrapper_ptr =
-      GlobalAccessorTransfor::GetInstance().GetAccessorWrapper();
+      GlobalAccessorFactory::GetInstance().GetAccessorWrapper();
   size_t val_type_size = accessor_wrapper_ptr->GetPullValueSize(max_mf_dim_);
   VLOG(3) << "pull_sparse len:" << len << "  val_type_size: " << val_type_size;
   auto d_sorted_keys = memory::Alloc(place, len * sizeof(KeyType));
@@ -1462,7 +1462,7 @@ void HeterComm<KeyType, ValType, GradType, FVAccessor>::pull_normal_sparse(
   int* d_idx_ptr = reinterpret_cast<int*>(d_idx->ptr());
 
   auto accessor_wrapper_ptr =
-      GlobalAccessorTransfor::GetInstance().GetAccessorWrapper();
+      GlobalAccessorFactory::GetInstance().GetAccessorWrapper();
   size_t val_type_size = accessor_wrapper_ptr->GetPullValueSize(max_mf_dim_);
   VLOG(3) << "pull_sparse len:" << len << "  val_type_size: " << val_type_size;
   auto d_shard_keys = memory::Alloc(place, len * sizeof(KeyType));
@@ -1599,7 +1599,7 @@ void HeterComm<KeyType, ValType, GradType, FVAccessor>::push_sparse(
   int dev_id = resource_->dev_id(dev_num);
 
   auto accessor_wrapper_ptr =
-      GlobalAccessorTransfor::GetInstance().GetAccessorWrapper();
+      GlobalAccessorFactory::GetInstance().GetAccessorWrapper();
   size_t grad_value_size = accessor_wrapper_ptr->GetPushValueSize(max_mf_dim_);
   DevPlace place = DevPlace(dev_id);
   AnyDeviceGuard guard(dev_id);
