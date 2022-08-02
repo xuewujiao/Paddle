@@ -84,7 +84,8 @@ template <typename KeyType,
           typename GradType,
           typename GPUAccessor>
 HeterComm<KeyType, ValType, GradType, GPUAccessor>::HeterComm(
-    size_t capacity, std::shared_ptr<HeterPsResource> resource,
+    size_t capacity,
+    std::shared_ptr<HeterPsResource> resource,
     GPUAccessor& gpu_accessor) {
   VLOG(1) << "Construct new HeterComm";
   resource_ = resource;
@@ -565,7 +566,11 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::set_sparse_sgd(
     const OptimizerConfig& optimizer_config) {
   for (int i = 0; i < resource_->total_device(); ++i) {
     AnyDeviceGuard guard(resource_->dev_id(i));
-    ptr_tables_[i]->set_sparse_sgd(optimizer_config);
+    if (!multi_mf_dim_) {
+      tables_[i]->set_sparse_sgd(optimizer_config);
+    } else {
+      ptr_tables_[i]->set_sparse_sgd(optimizer_config);
+    }
   }
 }
 
@@ -577,7 +582,11 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::set_embedx_sgd(
     const OptimizerConfig& optimizer_config) {
   for (int i = 0; i < resource_->total_device(); ++i) {
     AnyDeviceGuard guard(resource_->dev_id(i));
-    ptr_tables_[i]->set_embedx_sgd(optimizer_config);
+    if (!multi_mf_dim_) {
+      tables_[i]->set_embedx_sgd(optimizer_config);
+    } else {
+      ptr_tables_[i]->set_embedx_sgd(optimizer_config);
+    }
   }
 }
 
@@ -1597,10 +1606,11 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_normal_sparse(
       sync_stream(node.out_stream);
     }
   }
-
   heter_comm_kernel_->dy_mf_fill_dvals(
       d_shard_vals_ptr, d_vals, d_idx_ptr, len, val_type_size, stream);
+
   sync_stream(stream);
+
   if (!FLAGS_gpugraph_enable_gpu_direct_access) {
     for (int i = 0; i < total_device; ++i) {
       if (h_left[i] == -1 || h_right[i] == -1) {
