@@ -365,13 +365,17 @@ void BindDataset(py::module *m) {
            py::call_guard<py::gil_scoped_release>())
       .def("enable_pv_merge",
            &framework::Dataset::EnablePvMerge,
+           py::call_guard<py::gil_scoped_release>())
+      .def("set_gpu_graph_mode",
+           &framework::Dataset::SetGpuGraphMode,
            py::call_guard<py::gil_scoped_release>());
 
-  .def(py::init<framework::Dataset *,
-                const std::vector<std::string> &,
-                const std::vector<platform::Place> &,
-                size_t,
-                bool>())
+  py::class_<IterableDatasetWrapper>(*m, "IterableDatasetWrapper")
+      .def(py::init<framework::Dataset *,
+                    const std::vector<std::string> &,
+                    const std::vector<platform::Place> &,
+                    size_t,
+                    bool>())
       .def("_start", &IterableDatasetWrapper::Start)
       .def("_next", &IterableDatasetWrapper::Next);
 }

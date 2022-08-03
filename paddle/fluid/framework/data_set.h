@@ -170,11 +170,6 @@ class Dataset {
   virtual void SetGpuGraphMode(int is_graph_mode) = 0;
   virtual int GetGpuGraphMode() = 0;
 
-  virtual std::vector<std::string> GetSlots() = 0;
-
-  virtual void SetGpuGraphMode(int is_graph_mode) = 0;
-  virtual int GetGpuGraphMode() = 0;
-
  protected:
   virtual int ReceiveFromClient(int msg_type,
                                 int client_id,

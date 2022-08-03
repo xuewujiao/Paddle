@@ -344,6 +344,8 @@ void PSGPUWrapper::BuildPull(std::shared_ptr<HeterContext> gpu_task) {
   auto& local_dim_keys = gpu_task->feature_dim_keys_;
   auto& local_dim_ptr = gpu_task->value_dim_ptr_;
 
+  auto& device_keys = gpu_task->device_keys_;
+  auto& device_vals = gpu_task->device_values_;
   auto& device_dim_keys = gpu_task->device_dim_keys_;
   auto& device_dim_ptr = gpu_task->device_dim_ptr_;
   auto& device_dim_mutex = gpu_task->dim_mutex_;
@@ -662,6 +664,17 @@ void PSGPUWrapper::BuildPull(std::shared_ptr<HeterContext> gpu_task) {
     for (std::thread& t : threads) {
       t.join();
     }
+  } else {
+    for (int i = 0; i < thread_keys_shard_num_; i++) {
+      for (int j = 0; j < device_num; j++) {
+        task_futures.emplace_back(
+            hbm_thread_pool_[i]->enqueue(prepare_dev_value_func, j, i));
+      }
+    }
+    for (auto& f : task_futures) {
+      f.wait();
+    }
+    task_futures.clear();
   }
   timeline.Pause();
   VLOG(0) << "GpuPs prepare for build hbm cost " << timeline.ElapsedSec()
@@ -1118,7 +1131,7 @@ void PSGPUWrapper::PullSparse(const paddle::platform::Place& place,
       VLOG(3) << "[" << device_id << "]Begin copy keys, key_num["
               << total_length << "] dedup mode";
 
-      auto stream = dynamic_cast<platform::CUDADeviceContext*>(
+      auto stream = dynamic_cast<phi::GPUContext*>(
                         platform::DeviceContextPool::Instance().Get(place))
                         ->stream();
 
@@ -1387,7 +1400,7 @@ void PSGPUWrapper::PushSparseGrad(const paddle::platform::Place& place,
       VLOG(3) << "Begin push sparse, key_num[" << total_length
               << "] dedup mode, device:" << device_id << ", index"
               << devid_2_index;
-      auto stream = dynamic_cast<platform::CUDADeviceContext*>(
+      auto stream = dynamic_cast<phi::GPUContext*>(
                         platform::DeviceContextPool::Instance().Get(place))
                         ->stream();
       uint64_t* total_keys = dev.keys_tensor.data<uint64_t>();

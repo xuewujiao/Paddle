@@ -526,10 +526,14 @@ class GraphTable : public Table {
                               std::unique_ptr<char[]> &buffers,
                               int &actual_sizes);
 
-  virtual int32_t get_nodes_ids_by_ranges(int type_id,
-                                          std::vector<uint64_t> &res);
+  virtual int32_t get_nodes_ids_by_ranges(
+      int type_id,
+      int idx,
+      std::vector<std::pair<int, int>> ranges,
+      std::vector<uint64_t> &res);
   virtual int32_t Initialize() { return 0; }
   virtual int32_t Initialize(const TableParameter &config,
+                             const FsClientParameter &fs_config);
   virtual int32_t Initialize(const GraphParameter &config);
   int32_t Load(const std::string &path, const std::string &param);
 
@@ -583,23 +587,18 @@ class GraphTable : public Table {
   Node *find_node(int type_id, int idx, uint64_t id);
   Node *find_node(int type_id, uint64_t id);
 
-  virtual int32_t Pull(TableContext &context) {
-    return 0; }
-  virtual int32_t Push(TableContext &context) {
-    return 0; }
+  virtual int32_t Pull(TableContext &context) { return 0; }
+  virtual int32_t Push(TableContext &context) { return 0; }
 
   virtual int32_t clear_nodes(int type, int idx);
   virtual void Clear() {}
-  virtual int32_t Flush() {
-    return 0; }
-  virtual int32_t Shrink(const std::string &param) {
-    return 0; }
+  virtual int32_t Flush() { return 0; }
+  virtual int32_t Shrink(const std::string &param) { return 0; }
   //指定保存路径
   virtual int32_t Save(const std::string &path, const std::string &converter) {
     return 0;
   }
-  virtual int32_t InitializeShard() {
-    return 0; }
+  virtual int32_t InitializeShard() { return 0; }
   virtual int32_t SetShard(size_t shard_idx, size_t server_num) {
     _shard_idx = shard_idx;
     /*
@@ -629,8 +628,7 @@ class GraphTable : public Table {
       const std::vector<std::string> &feature_names,
       const std::vector<std::vector<std::string>> &res);
 
-  size_t get_server_num() {
-    return server_num; }
+  size_t get_server_num() { return server_num; }
   void clear_graph(int idx);
   virtual int32_t make_neighbor_sample_cache(size_t size_limit, size_t ttl) {
     {
@@ -675,8 +673,7 @@ class GraphTable : public Table {
   int64_t load_graph_to_memory_from_ssd(int idx, std::vector<uint64_t> &ids);
   int32_t make_complementary_graph(int idx, int64_t byte_size);
   int32_t dump_edges_to_ssd(int idx);
-  int32_t get_partition_num(int idx) {
-    return partitions[idx].size(); }
+  int32_t get_partition_num(int idx) { return partitions[idx].size(); }
   std::vector<uint64_t> get_partition(int idx, int index) {
     if (idx >= (int)partitions.size() || index >= (int)partitions[idx].size())
       return std::vector<uint64_t>();
@@ -686,8 +683,7 @@ class GraphTable : public Table {
                             bool reverse_edge,
                             const std::string &edge_type);
   int32_t load_next_partition(int idx);
-  void set_search_level(int search_level) {
-    this->search_level = search_level; }
+  void set_search_level(int search_level) { this->search_level = search_level; }
   int search_level;
   int64_t total_memory_cost;
   std::vector<std::vector<std::vector<uint64_t>>> partitions;

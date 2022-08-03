@@ -32,6 +32,7 @@ limitations under the License. */
 #endif
 
 #include <map>
+#include "paddle/fluid/framework/barrier.h"
 #include "paddle/fluid/framework/data_feed.h"
 #include "paddle/fluid/framework/executor_gc_helper.h"
 #include "paddle/fluid/framework/heter_util.h"

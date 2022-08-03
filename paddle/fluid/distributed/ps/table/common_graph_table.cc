@@ -17,7 +17,6 @@
 #include <time.h>
 
 #include <algorithm>
-#include <boost/algorithm/string.hpp>
 #include <chrono>
 #include <set>
 #include <sstream>
@@ -1483,9 +1482,8 @@ int32_t GraphTable::load_edges(const std::string &path,
       }
     }
   }
-}
 
-return 0;
+  return 0;
 }
 
 Node *GraphTable::find_node(int type_id, uint64_t id) {
@@ -1508,6 +1506,19 @@ Node *GraphTable::find_node(int type_id, uint64_t id) {
   return node;
 }
 
+Node *GraphTable::find_node(int type_id, int idx, uint64_t id) {
+  size_t shard_id = id % shard_num;
+  if (shard_id >= shard_end || shard_id < shard_start) {
+    return nullptr;
+  }
+  size_t index = shard_id - shard_start;
+  auto &search_shards = type_id == 0 ? edge_shards[idx] : feature_shards[idx];
+  PADDLE_ENFORCE_NOT_NULL(search_shards[index],
+                          paddle::platform::errors::InvalidArgument(
+                              "search_shard[%d] should not be null.", index));
+  Node *node = search_shards[index]->find_node(id);
+  return node;
+}
 uint32_t GraphTable::get_thread_pool_index(uint64_t node_id) {
   return node_id % shard_num % shard_num_per_server % task_pool_size_;
 }
@@ -2004,45 +2015,52 @@ int GraphTable::get_all_feature_ids(
 
 int32_t GraphTable::pull_graph_list(int type_id,
                                     int idx,
+                                    int start,
+                                    int total_size,
+                                    std::unique_ptr<char[]> &buffer,
+                                    int &actual_size,
+                                    bool need_feature,
+                                    int step) {
   if (start < 0) start = 0;
   int size = 0, cur_size;
   auto &search_shards = type_id == 0 ? edge_shards[idx] : feature_shards[idx];
+  std::vector<std::future<std::vector<Node *>>> tasks;
   for (size_t i = 0; i < search_shards.size() && total_size > 0; i++) {
-  cur_size = search_shards[i]->get_size();
-  if (size + cur_size <= start) {
+    cur_size = search_shards[i]->get_size();
+    if (size + cur_size <= start) {
+      size += cur_size;
+      continue;
+    }
+    int count = std::min(1 + (size + cur_size - start - 1) / step, total_size);
+    int end = start + (count - 1) * step + 1;
+    tasks.push_back(_shards_task_pool[i % task_pool_size_]->enqueue(
+        [&search_shards, this, i, start, end, step, size]()
+            -> std::vector<Node *> {
+          return search_shards[i]->get_batch(start - size, end - size, step);
+        }));
+    start += count * step;
+    total_size -= count;
     size += cur_size;
-    continue;
-  }
-  int count = std::min(1 + (size + cur_size - start - 1) / step, total_size);
-  int end = start + (count - 1) * step + 1;
-  tasks.push_back(_shards_task_pool[i % task_pool_size_]->enqueue(
-      [&search_shards, this, i, start, end, step, size]()
-          -> std::vector<Node *> {
-        return search_shards[i]->get_batch(start - size, end - size, step);
-      }));
-  start += count * step;
-  total_size -= count;
-  size += cur_size;
   }
   for (size_t i = 0; i < tasks.size(); ++i) {
-  tasks[i].wait();
+    tasks[i].wait();
   }
   size = 0;
   std::vector<std::vector<Node *>> res;
   for (size_t i = 0; i < tasks.size(); i++) {
-  res.push_back(tasks[i].get());
-  for (size_t j = 0; j < res.back().size(); j++) {
-    size += res.back()[j]->get_size(need_feature);
-  }
+    res.push_back(tasks[i].get());
+    for (size_t j = 0; j < res.back().size(); j++) {
+      size += res.back()[j]->get_size(need_feature);
+    }
   }
   char *buffer_addr = new char[size];
   buffer.reset(buffer_addr);
   int index = 0;
   for (size_t i = 0; i < res.size(); i++) {
-  for (size_t j = 0; j < res[i].size(); j++) {
-    res[i][j]->to_buffer(buffer_addr + index, need_feature);
-    index += res[i][j]->get_size(need_feature);
-  }
+    for (size_t j = 0; j < res[i].size(); j++) {
+      res[i][j]->to_buffer(buffer_addr + index, need_feature);
+      index += res[i][j]->get_size(need_feature);
+    }
   }
   actual_size = size;
   return 0;
@@ -2204,5 +2222,4 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
 }
 
 }  // namespace distributed
-}
-;  // namespace paddle
+};  // namespace paddle

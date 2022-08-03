@@ -632,12 +632,6 @@ class PSGPUWrapper {
   }
 #endif
 
-#ifdef PADDLE_WITH_PSCORE
-  void SetTableAccessor(paddle::distributed::ValueAccessor* accessor) {
-    cpu_table_accessor_ = accessor;
-  }
-#endif
-
  private:
   static std::shared_ptr<PSGPUWrapper> s_instance_;
   static std::mutex ins_mutex;

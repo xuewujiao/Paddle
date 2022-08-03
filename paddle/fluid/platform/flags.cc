@@ -68,28 +68,6 @@ PADDLE_DEFINE_EXPORTED_bool(
     "Checking whether operator produce NAN/INF or not. It will be "
     "extremely slow so please use this flag wisely.");
 
-/**
- * Operator related FLAG
- * Name: FLAGS_check_nan_inf
- * Since Version: 0.13.0
- * Value Range: bool, default=false
- * Example:
- * Note: Used to debug. Checking whether operator produce NAN/INF or not.
- */
-PADDLE_DEFINE_EXPORTED_bool(
-    enable_opt_get_features,
-    false,
-    "Checking whether operator produce NAN/INF or not. It will be "
-    "extremely slow so please use this flag wisely.");
-
-/**
- * Operator related FLAG
- * Name: FLAGS_check_nan_inf
- * Since Version: 0.13.0
- * Value Range: bool, default=false
- * Example:
- * Note: Used to debug. Checking whether operator produce NAN/INF or not.
- */
 PADDLE_DEFINE_EXPORTED_bool(
     enable_opt_get_features,
     false,
@@ -840,6 +818,20 @@ PADDLE_DEFINE_EXPORTED_bool(
     graph_get_neighbor_id,
     false,
     "It controls get all neighbor id when running sub part graph.");
+
+/**
+ * Distributed related FLAG
+ * Name: enable_exit_when_partial_worker
+ * Since Version: 2.2.0
+ * Value Range: bool, default=false
+ * Example:
+ * Note: Control  whether exit trainer when an worker has no ins.
+ *       If it is not set, trainer will exit until all worker finish train.
+ */
+PADDLE_DEFINE_EXPORTED_bool(
+    enable_exit_when_partial_worker,
+    false,
+    "It controls whether exit trainer when an worker has no ins.");
 
 /**
  * KP kernel related FLAG
