@@ -263,6 +263,9 @@ void HogwildWorker::TrainFiles() {
   }
   g_barrier.wait();
 
+#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_CUDA)
+  platform::SetDeviceId(thread_id_);
+#endif
   // while ((cur_batch = device_reader_->Next()) > 0) {
   bool train_mode = device_reader_->IsTrainMode();
   while (1) {
