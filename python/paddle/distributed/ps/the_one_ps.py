@@ -804,7 +804,8 @@ class PsDescBuilder(object):
                 self.barrier_table_id = table.idx
         self.service._set(
             self.ps_desc.server_param.downpour_server_param.service_param)
-        return text_format.MessageToString(self.ps_desc)
+        self.fs_client._set(self.ps_desc.fs_client_param)
+	return text_format.MessageToString(self.ps_desc)
 
     def build_server_desc(self):
         self.sparse_table_maps = {}
