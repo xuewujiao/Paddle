@@ -134,13 +134,6 @@ int32_t MemorySparseTable::Load(const std::string& path,
           int parse_size = _value_accesor->ParseFromString(++end, value.data());
           value.resize(parse_size);
 
-#if !defined(PADDLE_WITH_HETERPS)
-          // for debug
-          for (int ii = 0; ii < parse_size; ++ii) {
-            VLOG(2) << "MemorySparseTable::load key: " << key << " value " << ii
-                    << ": " << value.data()[ii] << " local_shard: " << i;
-          }
-#endif
         }
         read_channel->close();
         if (err_no == -1) {
