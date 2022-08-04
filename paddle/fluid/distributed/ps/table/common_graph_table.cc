@@ -2015,15 +2015,14 @@ int GraphTable::get_all_feature_ids(
   return 0;
 }
 
-int GraphTable::get_node_embedding_ids(int slice_num,
-        std::vector<std::vector<uint64_t>> *output) {
-    if (is_load_reverse_edge and !FLAGS_graph_get_neighbor_id) {
-        return get_all_id(0, slice_num, output);
-    }
-    else {
-        get_all_id(0, slice_num, output);
-        return get_all_neighbor_id(0, slice_num, output);
-    }
+int GraphTable::get_node_embedding_ids(
+    int slice_num, std::vector<std::vector<uint64_t>> *output) {
+  if (is_load_reverse_edge and !FLAGS_graph_get_neighbor_id) {
+    return get_all_id(0, slice_num, output);
+  } else {
+    get_all_id(0, slice_num, output);
+    return get_all_neighbor_id(0, slice_num, output);
+  }
 }
 
 int32_t GraphTable::pull_graph_list(int type_id,

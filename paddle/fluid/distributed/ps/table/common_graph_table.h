@@ -569,7 +569,7 @@ class GraphTable : public Table {
                           int slice_num,
                           std::vector<std::vector<uint64_t>> *output);
   int get_node_embedding_ids(int slice_num,
-            std::vector<std::vector<uint64_t>> *output);
+                             std::vector<std::vector<uint64_t>> *output);
   int32_t load_nodes(const std::string &path,
                      std::string node_type = std::string());
   std::pair<uint64_t, uint64_t> parse_edge_file(const std::string &path,

@@ -82,7 +82,7 @@ class GraphGpuWrapper {
                           int slice_num,
                           std::vector<std::vector<uint64_t>>* output);
   int get_node_embedding_ids(int slice_num,
-          std::vector<std::vector<uint64_t>> *output);
+                             std::vector<std::vector<uint64_t>>* output);
   NodeQueryResult query_node_list(int gpu_id,
                                   int idx,
                                   int start,

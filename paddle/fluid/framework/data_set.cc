@@ -475,7 +475,7 @@ void DatasetImpl<T>::LoadIntoMemory() {
     auto edge_to_id = gpu_graph_ptr->edge_to_id;
     graph_all_type_total_keys_.resize(node_to_id.size());
     int cnt = 0;
-    //set sample start node
+    // set sample start node
     for (auto& iter : node_to_id) {
       int node_idx = iter.second;
       std::vector<std::vector<uint64_t>> gpu_graph_device_keys;
@@ -498,7 +498,7 @@ void DatasetImpl<T>::LoadIntoMemory() {
       cnt++;
     }
 
-    //add node embedding id
+    // add node embedding id
     std::vector<std::vector<uint64_t>> gpu_graph_device_keys;
     gpu_graph_ptr->get_node_embedding_ids(thread_num_, &gpu_graph_device_keys);
     for (size_t i = 0; i < gpu_graph_device_keys.size(); i++) {
@@ -507,7 +507,7 @@ void DatasetImpl<T>::LoadIntoMemory() {
       }
     }
 
-    //add feature embedding id
+    // add feature embedding id
     VLOG(2) << "begin add feature_id into gpu_graph_total_keys_ size["
             << gpu_graph_total_keys_.size() << "]";
     for (auto& iter : node_to_id) {
@@ -525,7 +525,8 @@ void DatasetImpl<T>::LoadIntoMemory() {
                 << i << "] = " << gpu_graph_device_keys[i].size();
       }
     }
-    VLOG(2) << "end add feature_id into gpu_graph_total_keys_ size[" << gpu_graph_total_keys_.size() << "]";
+    VLOG(2) << "end add feature_id into gpu_graph_total_keys_ size["
+            << gpu_graph_total_keys_.size() << "]";
 #endif
   } else {
     for (int64_t i = 0; i < thread_num_; ++i) {
