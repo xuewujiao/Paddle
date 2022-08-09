@@ -14,11 +14,10 @@
 
 #pragma once
 
-#include "paddle/phi/kernels/graph_reindex_kernel.h"
-
 #include "paddle/fluid/platform/device/gpu/gpu_primitives.h"
 #include "paddle/phi/backends/gpu/gpu_context.h"
 #include "paddle/phi/core/hostdevice.h"
+#include "paddle/phi/kernels/graph_reindex_kernel.h"
 
 namespace phi {
 
@@ -170,7 +169,7 @@ __global__ void FillUniqueItems(const T* items,
 
 template <typename T>
 __global__ void ReindexSrcOutput(T* src_output,
-                                 int num_items,
+                                 int64_t num_items,
                                  int64_t size,
                                  const T* keys,
                                  const int* values) {

@@ -25,8 +25,12 @@ limitations under the License. */
 #include "paddle/fluid/distributed/ps/service/communicator/communicator.h"
 #endif
 
+DECLARE_bool(enable_exit_when_partial_worker);
 namespace paddle {
 namespace framework {
+
+std::atomic<uint64_t> HogwildWorker::worker_num_stat_(0);
+Barrier g_barrier;
 
 void HogwildWorker::Initialize(const TrainerDesc &desc) {
   fetch_config_ = desc.fetch_config();
@@ -97,7 +101,8 @@ void HogwildWorker::CreateThreadScope(const ProgramDesc &program) {
 }
 
 template <typename T>
-void HogwildWorker::SetZero(LoDTensor *tensor, LoDTensor *root_tensor,
+void HogwildWorker::SetZero(LoDTensor *tensor,
+                            LoDTensor *root_tensor,
                             int tensor_dim) {
   T *ptr = tensor->mutable_data<T>(root_tensor->dims(), platform::CPUPlace());
   memset(ptr, 0, sizeof(T) * tensor_dim);
@@ -118,9 +123,10 @@ void HogwildWorker::CreateDeviceResource(const ProgramDesc &main_prog) {
 
 void HogwildWorker::TrainFilesWithProfiler() {
   platform::SetNumThreads(1);
-#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
+#if defined(PADDLE_WITH_HETERPS) && \
+    (defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL))
   platform::SetDeviceId(thread_id_);
-#elif defined(PADDLE_WITH_XPU_BKCL)
+#elif defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_XPU_BKCL)
   platform::SetXPUDeviceId(thread_id_);
 #endif
   device_reader_->Start();
@@ -138,9 +144,27 @@ void HogwildWorker::TrainFilesWithProfiler() {
   double read_time = 0.0;
   int cur_batch;
   int batch_cnt = 0;
+  if (thread_id_ == 0) {
+    worker_num_stat_.store(0);
+  }
+  g_barrier.wait();
+  bool train_mode = device_reader_->IsTrainMode();
   timeline.Start();
   uint64_t total_inst = 0;
-  while ((cur_batch = device_reader_->Next()) > 0) {
+  while (1) {
+    cur_batch = device_reader_->Next();
+    if (FLAGS_enable_exit_when_partial_worker && train_mode) {
+      if (cur_batch > 0) {
+        worker_num_stat_.fetch_add(1, std::memory_order_relaxed);
+      }
+      g_barrier.wait();
+      if (worker_num_stat_.load(std::memory_order_relaxed) % thread_num_ != 0) {
+        break;
+      }
+    }
+    if (cur_batch <= 0) {
+      break;
+    }
     VLOG(3) << "read a batch in thread " << thread_id_;
     timeline.Pause();
     read_time += timeline.ElapsedSec();
@@ -188,8 +212,11 @@ void HogwildWorker::TrainFilesWithProfiler() {
     if (thread_id_ == 0) {
       if (batch_cnt > 0 && batch_cnt % 100 == 0) {
         for (size_t i = 0; i < ops_.size(); ++i) {
-          fprintf(stderr, "op_name:[%zu][%s], op_mean_time:[%fs]\n", i,
-                  op_name[i].c_str(), op_total_time[i] / batch_cnt);
+          fprintf(stderr,
+                  "op_name:[%zu][%s], op_mean_time:[%fs]\n",
+                  i,
+                  op_name[i].c_str(),
+                  op_total_time[i] / batch_cnt);
         }
         fprintf(stderr, "mean read time: %fs\n", read_time / batch_cnt);
         fprintf(stderr, "IO percent: %f\n", read_time / total_time * 100);
@@ -219,22 +246,42 @@ void HogwildWorker::TrainFiles() {
   platform::SetNumThreads(1);
   platform::Timer timeline;
   timeline.Start();
-#if defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL)
+#if defined(PADDLE_WITH_HETERPS) && \
+    (defined(PADDLE_WITH_NCCL) || defined(PADDLE_WITH_RCCL))
   platform::SetDeviceId(thread_id_);
-#elif defined(PADDLE_WITH_XPU_BKCL)
+#elif defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_XPU_BKCL)
   platform::SetXPUDeviceId(thread_id_);
 #endif
 
-  int total_ins_num = 0;
+  int total_batch_num = 0;
   // how to accumulate fetched values here
   device_reader_->Start();
   int cur_batch;
   int batch_cnt = 0;
+  if (thread_id_ == 0) {
+    worker_num_stat_.store(0);
+  }
+  g_barrier.wait();
 
 #if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_CUDA)
   platform::SetDeviceId(thread_id_);
 #endif
-  while ((cur_batch = device_reader_->Next()) > 0) {
+  // while ((cur_batch = device_reader_->Next()) > 0) {
+  bool train_mode = device_reader_->IsTrainMode();
+  while (1) {
+    cur_batch = device_reader_->Next();
+    if (FLAGS_enable_exit_when_partial_worker && train_mode) {
+      if (cur_batch > 0) {
+        worker_num_stat_.fetch_add(1, std::memory_order_relaxed);
+      }
+      g_barrier.wait();
+      if (worker_num_stat_.load(std::memory_order_relaxed) % thread_num_ != 0) {
+        break;
+      }
+    }
+    if (cur_batch <= 0) {
+      break;
+    }
     for (auto &op : ops_) {
       bool need_skip = false;
       for (auto t = 0u; t < skip_ops_.size(); ++t) {
@@ -255,7 +302,7 @@ void HogwildWorker::TrainFiles() {
       DumpParam(*thread_scope_, batch_cnt);
     }
 
-    total_ins_num += cur_batch;
+    total_batch_num += cur_batch;
     ++batch_cnt;
     PrintFetchVars();
     thread_scope_->DropKids();
@@ -265,7 +312,7 @@ void HogwildWorker::TrainFiles() {
   }
   timeline.Pause();
   VLOG(0) << "worker " << thread_id_ << " train cost " << timeline.ElapsedSec()
-          << " seconds, ins_num: " << total_ins_num;
+          << " seconds, batch_num: " << total_batch_num;
 
   if (need_dump_field_ || need_dump_param_) {
     writer_.Flush();
@@ -292,16 +339,18 @@ void HogwildWorker::PrintFetchVars() {
     time_t curtime;
     time(&curtime);
     char mbstr[80];
-    std::strftime(mbstr, sizeof(mbstr), "%Y-%m-%d %H:%M:%S",
-                  std::localtime(&curtime));
+    std::strftime(
+        mbstr, sizeof(mbstr), "%Y-%m-%d %H:%M:%S", std::localtime(&curtime));
 
     std::stringstream ss;
     ss << "time: [" << mbstr << "], ";
     ss << "batch: [" << batch_num_ << "], ";
 
     for (int i = 0; i < fetch_var_num; ++i) {
-      platform::PrintVar(thread_scope_, fetch_config_.fetch_var_names(i),
-                         fetch_config_.fetch_var_str_format(i), &ss);
+      platform::PrintVar(thread_scope_,
+                         fetch_config_.fetch_var_names(i),
+                         fetch_config_.fetch_var_str_format(i),
+                         &ss);
       if (i < fetch_var_num - 1) {
         ss << ", ";
       }

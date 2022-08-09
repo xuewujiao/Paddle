@@ -12,18 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "paddle/phi/kernels/graph_reindex_kernel.h"
+
 #include <thrust/copy.h>
 #include <thrust/device_vector.h>
 #include <thrust/reduce.h>
 #include <thrust/scan.h>
 #include <thrust/sequence.h>
 
-#include "paddle/phi/kernels/gpu/graph_reindex_funcs.h"
-#include "paddle/phi/kernels/graph_reindex_kernel.h"
-
 #include "paddle/fluid/memory/memory.h"
 #include "paddle/phi/backends/gpu/gpu_context.h"
 #include "paddle/phi/core/kernel_registry.h"
+#include "paddle/phi/kernels/gpu/graph_reindex_funcs.h"
 
 namespace phi {
 
@@ -41,14 +41,10 @@ __global__ void InitializeHashTable(T* tensor, int len) {
 }
 
 template <typename T, typename Context>
-void FillHashTable(const Context& dev_ctx,
-                   const T* input,
-                   int num_input,
-                   int64_t len_hashtable,
-                   thrust::device_vector<T>* unique_items,
-                   T* keys,
-                   int* values,
-                   int* key_index) {
+std::shared_ptr<phi::Allocation> FillHashTable(
+    const Context& dev_ctx, const T* input, int num_input,
+    int64_t len_hashtable, T* keys, int* values, int* key_index,
+    int* final_nodes_len) {
 #ifdef PADDLE_WITH_HIP
   int block = 256;
 #else
@@ -73,19 +69,25 @@ void FillHashTable(const Context& dev_ctx,
 
   thrust::exclusive_scan(
       item_count.begin(), item_count.end(), item_count.begin());
-  size_t total_unique_items = item_count[num_input];
-  unique_items->resize(total_unique_items);
+  int total_unique_items = item_count[num_input];
+
+  const auto place = dev_ctx.GetPlace();
+  auto unique_items =
+      paddle::memory::AllocShared(place, total_unique_items * sizeof(T));
+  T* unique_items_data = reinterpret_cast<T*>(unique_items->ptr());
+  *final_nodes_len = total_unique_items;
 
   // Get unique items
   FillUniqueItems<T><<<grid, block, 0, dev_ctx.stream()>>>(
       input,
       num_input,
       len_hashtable,
-      thrust::raw_pointer_cast(unique_items->data()),
+      unique_items_data,
       thrust::raw_pointer_cast(item_count.data()),
       keys,
       values,
       key_index);
+  return unique_items;
 }
 
 template <typename T, typename Context>
@@ -104,8 +106,8 @@ void FillBufferHashTable(const Context& dev_ctx,
   int grid_tmp = (num_input + block - 1) / block;
   int grid = grid_tmp < max_grid_dimx ? grid_tmp : max_grid_dimx;
   // Insert data.
-  BuildHashTable<T><<<grid, block, 0, dev_ctx.stream()>>>(
-      input, num_input, key_index);
+  BuildHashTable<T>
+      <<<grid, block, 0, dev_ctx.stream()>>>(input, num_input, key_index);
 
   // Get item index count.
   thrust::device_vector<int> item_count(num_input + 1, 0);
@@ -150,6 +152,26 @@ void ResetBufferHashTable(const Context& dev_ctx,
 }
 
 template <typename T, typename Context>
+void ReindexSrc(const Context& dev_ctx, T* edges_src, T* keys,
+                int* values, int64_t num_edges, int64_t table_size) {
+// Fill outputs with reindex result.
+#ifdef PADDLE_WITH_HIP
+  int block = 256;
+#else
+  int block = 1024;
+#endif
+  int max_grid_dimx = dev_ctx.GetCUDAMaxGridDimSize()[0];
+  int grid_tmp = (num_edges + block - 1) / block;
+  int grid = grid_tmp < max_grid_dimx ? grid_tmp : max_grid_dimx;
+  ReindexSrcOutput<T><<<grid, block, 0, dev_ctx.stream()>>>(
+      edges_src,
+      num_edges,
+      table_size,
+      keys,
+      values);
+}
+
+template <typename T, typename Context>
 void Reindex(const Context& dev_ctx,
              const T* inputs,
              thrust::device_ptr<T> src_outputs,
@@ -160,8 +182,6 @@ void Reindex(const Context& dev_ctx,
   thrust::copy(inputs, inputs + num_inputs, out_nodes->begin());
   thrust::copy(
       src_outputs, src_outputs + num_edges, out_nodes->begin() + num_inputs);
-  thrust::device_vector<T> unique_nodes;
-  unique_nodes.clear();
 
   // Fill hash table
   int64_t num = out_nodes->size();
@@ -182,32 +202,24 @@ void Reindex(const Context& dev_ctx,
   InitializeHashTable<int><<<GET_BLOCKS(table_size), CUDA_NUM_THREADS, 0,
                              dev_ctx.stream()>>>(key_index_ptr, table_size);
 
-  FillHashTable<T, Context>(dev_ctx,
-                            thrust::raw_pointer_cast(out_nodes->data()),
-                            out_nodes->size(),
-                            table_size,
-                            &unique_nodes,
-                            keys_ptr,
-                            values_ptr,
-                            key_index_ptr);
-  out_nodes->resize(unique_nodes.size());
-  thrust::copy(unique_nodes.begin(), unique_nodes.end(), out_nodes->begin());
+  int unique_len = 0;
+  std::shared_ptr<phi::Allocation> unique_items =
+      FillHashTable<T, Context>(dev_ctx,
+                                thrust::raw_pointer_cast(out_nodes->data()),
+                                out_nodes->size(),
+                                table_size,
+                                keys_ptr,
+                                values_ptr,
+                                key_index_ptr,
+                                &unique_len);
+  out_nodes->resize(unique_len);
+  T* unique_items_data = reinterpret_cast<T*>(unique_items->ptr());
+  thrust::copy(thrust::device_pointer_cast(unique_items_data),
+               thrust::device_pointer_cast(unique_items_data) + unique_len,
+               out_nodes->begin());
 
-// Fill outputs with reindex result.
-#ifdef PADDLE_WITH_HIP
-  int block = 256;
-#else
-  int block = 1024;
-#endif
-  int max_grid_dimx = dev_ctx.GetCUDAMaxGridDimSize()[0];
-  int grid_tmp = (num_edges + block - 1) / block;
-  int grid = grid_tmp < max_grid_dimx ? grid_tmp : max_grid_dimx;
-  ReindexSrcOutput<T><<<grid, block, 0, dev_ctx.stream()>>>(
-      thrust::raw_pointer_cast(src_outputs),
-      num_edges,
-      table_size,
-      keys_ptr,
-      values_ptr);
+  ReindexSrc<T, Context>(dev_ctx, thrust::raw_pointer_cast(src_outputs),
+                         keys_ptr, values_ptr, num_edges, table_size);
 }
 
 template <typename T, typename Context>
@@ -281,12 +293,42 @@ __global__ void GetDstEdgeCUDAKernel(const int64_t num_rows,
 }
 
 template <typename T, typename Context>
+void ReindexDst(const Context& dev_ctx, T* reindex_dst_data, int* scan_dst_data,
+                const int* count_data, int num_edge_types, int node_len) {
+  constexpr int BLOCK_WARPS = 128 / WARP_SIZE;
+  constexpr int TILE_SIZE = BLOCK_WARPS * 16;
+  const dim3 block(WARP_SIZE, BLOCK_WARPS);
+  const dim3 grid((node_len + TILE_SIZE - 1) / TILE_SIZE);
+
+  int begin = 0;
+  thrust::device_vector<int> dst_ptr(node_len);
+  for (int i = 0; i < num_edge_types; i++) {
+    thrust::exclusive_scan(
+        thrust::device_pointer_cast(count_data) + i * node_len,
+        thrust::device_pointer_cast(count_data) + (i + 1) * node_len,
+        dst_ptr.begin());
+    GetDstEdgeCUDAKernel<T,
+                         BLOCK_WARPS,
+                         TILE_SIZE><<<grid, block, 0, dev_ctx.stream()>>>(
+        node_len,
+        scan_dst_data,
+        count_data + i * node_len,
+        thrust::raw_pointer_cast(dst_ptr.data()),
+        reindex_dst_data + begin);
+    int count_i =
+        thrust::reduce(thrust::device_pointer_cast(count_data) + i * node_len,
+                       thrust::device_pointer_cast(count_data) + (i + 1) * node_len);
+    begin += count_i;
+  }
+}
+
+template <typename T, typename Context>
 void GraphReindexKernel(const Context& dev_ctx,
                         const DenseTensor& x,
                         const DenseTensor& neighbors,
                         const DenseTensor& count,
-                        paddle::optional<const DenseTensor&> hashtable_value,
-                        paddle::optional<const DenseTensor&> hashtable_index,
+                        const paddle::optional<DenseTensor>& hashtable_value,
+                        const paddle::optional<DenseTensor>& hashtable_index,
                         bool flag_buffer_hashtable,
                         DenseTensor* reindex_src,
                         DenseTensor* reindex_dst,
@@ -335,34 +377,12 @@ void GraphReindexKernel(const Context& dev_ctx,
   int num_edge_types = num_ac_count / bs;
   thrust::device_vector<int> unique_dst_reindex(bs);
   thrust::sequence(unique_dst_reindex.begin(), unique_dst_reindex.end());
-  constexpr int BLOCK_WARPS = 128 / WARP_SIZE;
-  constexpr int TILE_SIZE = BLOCK_WARPS * 16;
-  const dim3 block(WARP_SIZE, BLOCK_WARPS);
-  const dim3 grid((bs + TILE_SIZE - 1) / TILE_SIZE);
   reindex_dst->Resize({num_edges});
   T* reindex_dst_data = dev_ctx.template Alloc<T>(reindex_dst);
 
-  int begin = 0;
-  for (int i = 0; i < num_edge_types; i++) {
-    thrust::device_vector<int> dst_ptr(bs);
-    thrust::exclusive_scan(
-        count_data + i * bs, count_data + (i + 1) * bs, dst_ptr.begin());
-
-    GetDstEdgeCUDAKernel<T,
-                         BLOCK_WARPS,
-                         TILE_SIZE><<<grid, block, 0, dev_ctx.stream()>>>(
-        bs,
-        thrust::raw_pointer_cast(unique_dst_reindex.data()),
-        count_data + i * bs,
-        thrust::raw_pointer_cast(dst_ptr.data()),
-        reindex_dst_data + begin);
-
-    int count_i =
-        thrust::reduce(thrust::device_pointer_cast(count_data) + i * bs,
-                       thrust::device_pointer_cast(count_data) + (i + 1) * bs);
-    begin += count_i;
-  }
-
+  ReindexDst<T, Context>(dev_ctx, reindex_dst_data,
+                         thrust::raw_pointer_cast(unique_dst_reindex.data()),
+                         count_data, num_edge_types, bs);
   out_nodes->Resize({static_cast<int>(unique_nodes.size())});
   T* out_nodes_data = dev_ctx.template Alloc<T>(out_nodes);
   thrust::copy(unique_nodes.begin(), unique_nodes.end(), out_nodes_data);
