@@ -300,13 +300,13 @@ void ReindexDst(const Context& dev_ctx, T* reindex_dst_data, int* scan_dst_data,
   const dim3 block(WARP_SIZE, BLOCK_WARPS);
   const dim3 grid((node_len + TILE_SIZE - 1) / TILE_SIZE);
 
-  int begin = 0;
-  thrust::device_vector<int> dst_ptr(node_len);
+  int begin = 0, count_i = 0;
+  thrust::device_vector<int> dst_ptr(node_len + 1, 0);
   for (int i = 0; i < num_edge_types; i++) {
-    thrust::exclusive_scan(
+    thrust::inclusive_scan(
         thrust::device_pointer_cast(count_data) + i * node_len,
         thrust::device_pointer_cast(count_data) + (i + 1) * node_len,
-        dst_ptr.begin());
+        dst_ptr.begin() + 1);
     GetDstEdgeCUDAKernel<T,
                          BLOCK_WARPS,
                          TILE_SIZE><<<grid, block, 0, dev_ctx.stream()>>>(
@@ -315,9 +315,8 @@ void ReindexDst(const Context& dev_ctx, T* reindex_dst_data, int* scan_dst_data,
         count_data + i * node_len,
         thrust::raw_pointer_cast(dst_ptr.data()),
         reindex_dst_data + begin);
-    int count_i =
-        thrust::reduce(thrust::device_pointer_cast(count_data) + i * node_len,
-                       thrust::device_pointer_cast(count_data) + (i + 1) * node_len);
+    cudaMemcpy(&count_i, thrust::raw_pointer_cast(dst_ptr.data()) + node_len, sizeof(int),
+               cudaMemcpyDeviceToHost);
     begin += count_i;
   }
 }

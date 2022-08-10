@@ -741,49 +741,6 @@ int GraphDataGenerator::GenerateBatch() {
                              0,
                              stream_>>>(clk_tensor_ptr_, total_instance);
       } else {
-        /*VLOG(0) << "sage_mode in debug inference";
-        int debug_len = 6;
-        uint64_t node_ids[debug_len] = {3324308, 3324308, 2576999, 2576999, 2640682, 2640682};
-        auto node_buf = memory::AllocShared(place_, debug_len * sizeof(uint64_t));
-        uint64_t* node_buf_ptr = reinterpret_cast<uint64_t* >(node_buf->ptr());
-        cudaMemcpy(node_buf_ptr, node_ids, sizeof(uint64_t) * debug_len,
-                   cudaMemcpyHostToDevice);
-        phi::DenseTensor inverse_;
-        VLOG(0) << "generate sample graph";
-        std::shared_ptr<phi::Allocation> final_infer_nodes =
-            GenerateSampleGraph(node_buf_ptr, debug_len, &uniq_instance_,
-                                &inverse_);
-
-        VLOG(0) << "uniq_instance: " << uniq_instance_;
-        id_tensor_ptr_ =
-            feed_vec_[0]->mutable_data<int64_t>({uniq_instance_, 1}, this->place_);
-        show_tensor_ptr_ =
-            feed_vec_[1]->mutable_data<int64_t>({uniq_instance_}, this->place_);
-        clk_tensor_ptr_ =
-            feed_vec_[2]->mutable_data<int64_t>({uniq_instance_}, this->place_);
-        int index_offset = 3 + slot_num_ * 2 + 5 * samples_.size();
-        index_tensor_ptr_ =
-            feed_vec_[index_offset]->mutable_data<int>({debug_len}, this->place_);
-        VLOG(0) << "copy id and index";
-
-        int64_t h_final_infer_nodes[uniq_instance_];
-        cudaMemcpy(h_final_infer_nodes, final_infer_nodes->ptr(),
-                   sizeof(int64_t) * uniq_instance_,
-                   cudaMemcpyDeviceToHost);
-        for (int i = 0; i < uniq_instance_; i++) {
-          std::cout << h_final_infer_nodes[i] << " ";
-        }
-        std::cout << "\n\n";
-        cudaMemcpy(id_tensor_ptr_, final_infer_nodes->ptr(),
-                   sizeof(int64_t) * uniq_instance_,
-                   cudaMemcpyDeviceToDevice);
-        cudaMemcpy(index_tensor_ptr_, inverse_.data<int>(), sizeof(int) * debug_len,
-                   cudaMemcpyDeviceToDevice);
-        GraphFillCVMKernel<<<GET_BLOCKS(uniq_instance_), CUDA_NUM_THREADS, 0,
-                             stream_>>>(show_tensor_ptr_, uniq_instance_);
-        GraphFillCVMKernel<<<GET_BLOCKS(uniq_instance_), CUDA_NUM_THREADS, 0,
-                             stream_>>>(clk_tensor_ptr_, uniq_instance_);*/
-
         auto node_buf = memory::AllocShared(
             place_, total_instance * sizeof(uint64_t));
         int64_t* node_buf_ptr = reinterpret_cast<int64_t* >(node_buf->ptr());
