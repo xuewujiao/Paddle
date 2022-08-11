@@ -490,11 +490,6 @@ void DatasetImpl<T>::LoadIntoMemory() {
           type_total_key[i].push_back(gpu_graph_device_keys[i][j]);
         }
       }
-
-      for (size_t i = 0; i < readers_.size(); i++) {
-        readers_[i]->SetDeviceKeys(&type_total_key[i], node_idx);
-        readers_[i]->SetGpuGraphMode(gpu_graph_mode_);
-      }
       cnt++;
     }
 

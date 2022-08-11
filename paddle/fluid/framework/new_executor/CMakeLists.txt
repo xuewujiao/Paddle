@@ -100,15 +100,15 @@ if(WITH_GPU
   set(OP_DEPS generator softmax selected_rows_functor jit_kernel_helper
               concat_and_split cross_entropy)
 
-  cc_test(
-    standalone_executor_test
-    SRCS standalone_executor_test.cc
-    DEPS standalone_executor operator op_registry executor ${OPS} ${OP_DEPS})
-  set_tests_properties(standalone_executor_test PROPERTIES TIMEOUT 100)
+  # cc_test(
+  #   standalone_executor_test
+  #   SRCS standalone_executor_test.cc
+  #   DEPS standalone_executor operator op_registry executor ${OPS} ${OP_DEPS})
+  # set_tests_properties(standalone_executor_test PROPERTIES TIMEOUT 100)
 
-  add_dependencies(standalone_executor_test download_program)
-  if(WITH_PROFILER)
-    target_link_libraries(standalone_executor_test profiler)
-    add_dependencies(standalone_executor_test profiler)
-  endif()
+  # add_dependencies(standalone_executor_test download_program)
+  # if(WITH_PROFILER)
+  #   target_link_libraries(standalone_executor_test profiler)
+  #   add_dependencies(standalone_executor_test profiler)
+  # endif()
 endif()
