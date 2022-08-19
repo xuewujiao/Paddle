@@ -25,6 +25,8 @@ limitations under the License. */
 namespace paddle {
 namespace framework {
 
+extern Barrier g_barrier;
+
 void MultiTrainer::Initialize(const TrainerDesc& trainer_desc,
                               Dataset* dataset) {
   thread_num_ = trainer_desc.thread_num();
@@ -61,7 +63,7 @@ void MultiTrainer::Initialize(const TrainerDesc& trainer_desc,
         thread_num_);
   }
 #endif
-
+  g_barrier.reset(thread_num_);
   for (int i = 0; i < thread_num_; ++i) {
     workers_[i] = DeviceWorkerFactory::CreateDeviceWorker(
         trainer_desc.device_worker_name());
@@ -73,6 +75,7 @@ void MultiTrainer::Initialize(const TrainerDesc& trainer_desc,
     workers_[i]->Initialize(trainer_desc);
     workers_[i]->SetDeviceIndex(i);
     workers_[i]->SetDataFeed(readers[i]);
+    workers_[i]->SetThreadNum(thread_num_);
   }
 
   // set debug here
@@ -81,11 +84,13 @@ void MultiTrainer::Initialize(const TrainerDesc& trainer_desc,
 
 std::string MultiTrainer::GetDumpPath(int tid) {
   if (user_define_dump_filename_ != "") {
-    return string::format_string("%s/part-%s-%05d", dump_fields_path_.c_str(),
-                                 user_define_dump_filename_.c_str(), tid);
+    return string::format_string("%s/part-%s-%05d",
+                                 dump_fields_path_.c_str(),
+                                 user_define_dump_filename_.c_str(),
+                                 tid);
   }
-  return string::format_string("%s/part-%03d-%05d", dump_fields_path_.c_str(),
-                               mpi_rank_, tid);
+  return string::format_string(
+      "%s/part-%03d-%05d", dump_fields_path_.c_str(), mpi_rank_, tid);
 }
 
 void MultiTrainer::InitDumpEnv() {
@@ -151,7 +156,8 @@ void MultiTrainer::InitTrainerEnv(const ProgramDesc& main_program,
   for (auto& var : main_program.Block(0).AllVars()) {
     if (var->Persistable()) {
       auto it = std::find(need_merge_var_names_.begin(),
-                          need_merge_var_names_.end(), var->Name());
+                          need_merge_var_names_.end(),
+                          var->Name());
       if (it == need_merge_var_names_.end() &&
           var->GetType() != proto::VarType::SELECTED_ROWS) {
         VLOG(2) << "train param: " << var->Name();
@@ -251,7 +257,6 @@ void MultiTrainer::Finalize() {
   if (need_dump_field_ || need_dump_param_) {
     FinalizeDumpEnv();
   }
-
   for (size_t i = 0; i < need_merge_var_names_.size(); i++) {
     Variable* root_var = root_scope_->FindVar(need_merge_var_names_[i]);
     if (root_var == nullptr) {
@@ -259,7 +264,11 @@ void MultiTrainer::Finalize() {
     }
     LoDTensor* root_tensor = root_var->GetMutable<LoDTensor>();
 
+#ifdef PADDLE_WITH_HETERPS
+    for (int j = 0; j < thread_num_; j++) {
+#else
     for (int j = 1; j < thread_num_; j++) {
+#endif
       Scope* cur_thread_scope = workers_[j]->GetThreadScope();
       Variable* thread_var =
           cur_thread_scope->FindVar(need_merge_var_names_[i]);
@@ -294,8 +303,12 @@ void MultiTrainer::Finalize() {
   if (communicator == nullptr) {
     VLOG(0) << "MultiTrainer::Finalize communicator is null!";
   } else {
-    communicator->_worker_ptr->Flush();
-    VLOG(1) << "MultiTrainer::Finalize ps client flush done";
+    if (communicator->_worker_ptr != nullptr) {
+      communicator->_worker_ptr->Flush();
+      VLOG(1) << "MultiTrainer::Finalize ps client flush done";
+    } else {
+      VLOG(0) << "communicator->_worker_ptr is null";
+    }
   }
 #endif
   root_scope_->DropKids();
