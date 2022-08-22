@@ -537,13 +537,10 @@ int GraphDataGenerator::GenerateBatch() {
             << " feed_vec: " << feed_vec_[0];
     id_tensor_ptr_ =
         feed_vec_[0]->mutable_data<int64_t>({total_instance, 1}, this->place_);
-    VLOG(2) << "alloc id gpuid: " << gpuid_;
     show_tensor_ptr_ =
         feed_vec_[1]->mutable_data<int64_t>({total_instance}, this->place_);
-    VLOG(2) << "alloc show gpuid: " << gpuid_;
     clk_tensor_ptr_ =
         feed_vec_[2]->mutable_data<int64_t>({total_instance}, this->place_);
-    VLOG(2) << "alloc clk gpuid: " << gpuid_;
   }
 
   int64_t *slot_tensor_ptr_[slot_num_];
