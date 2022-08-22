@@ -28,6 +28,72 @@ void GraphGpuWrapper::set_device(std::vector<int> ids) {
   }
 }
 
+void GraphGpuWrapper::init_conf(const std::string &first_node_type,
+                                const std::string &meta_path) {
+  static std::mutex mutex;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (conf_initialized_) {
+      return;
+    }
+    VLOG(2) << "init path config";
+    conf_initialized_ = true;
+    auto node_types =
+        paddle::string::split_string<std::string>(first_node_type, ";");
+    VLOG(2) << "node_types: " << first_node_type;
+    for (auto &type : node_types) {
+      auto iter = feature_to_id.find(type);
+      PADDLE_ENFORCE_NE(iter,
+                        feature_to_id.end(),
+                        platform::errors::NotFound(
+                            "(%s) is not found in feature_to_id.", type));
+      VLOG(2) << "feature_to_id[" << type << "] = " << iter->second;
+      first_node_type_.push_back(iter->second);
+    }
+    meta_path_.resize(first_node_type_.size());
+    auto meta_paths = paddle::string::split_string<std::string>(meta_path, ";");
+
+    for (size_t i = 0; i < meta_paths.size(); i++) {
+      auto path = meta_paths[i];
+      auto nodes = paddle::string::split_string<std::string>(path, "-");
+      for (auto &node : nodes) {
+        auto iter = edge_to_id.find(node);
+        PADDLE_ENFORCE_NE(iter,
+                          edge_to_id.end(),
+                          platform::errors::NotFound(
+                              "(%s) is not found in edge_to_id.", node));
+        VLOG(2) << "edge_to_id[" << node << "] = " << iter->second;
+        meta_path_[i].push_back(iter->second);
+      }
+    }
+    int max_dev_id = 0;
+    for (size_t i = 0; i < device_id_mapping.size(); i++) {
+      if (device_id_mapping[i] > max_dev_id) {
+        max_dev_id = device_id_mapping[i];
+      }
+    }
+    finish_node_type_.resize(max_dev_id + 1);
+    node_type_start_.resize(max_dev_id + 1);
+    infer_node_type_start_.resize(max_dev_id + 1);
+    for (size_t i = 0; i < device_id_mapping.size(); i++) {
+      int dev_id = device_id_mapping[i];
+      auto &node_type_start = node_type_start_[i];
+      auto &infer_node_type_start = infer_node_type_start_[i];
+      auto &finish_node_type = finish_node_type_[i];
+      finish_node_type.clear();
+      // for (auto& kv : feature_to_id) {
+      //   node_type_start[kv.second] = 0;
+      //   infer_node_type_start[kv.second] = 0;
+      // }
+      for (auto &type : node_types) {
+        auto iter = feature_to_id.find(type);
+        node_type_start[iter->second] = 0;
+        infer_node_type_start[iter->second] = 0;
+      }
+    }
+  }
+}
+
 int GraphGpuWrapper::get_all_id(int type,
                                 int slice_num,
                                 std::vector<std::vector<uint64_t>> *output) {
@@ -160,9 +226,9 @@ void GraphGpuWrapper::load_node_and_edge(std::string etype2files,
                                          std::string graph_data_local_path,
                                          int part_num,
                                          bool reverse) {
-    ((GpuPsGraphTable *)graph_table)
-        ->cpu_graph_table_->load_node_and_edge_file(
-            etype2files, ntype2files, graph_data_local_path, part_num, reverse);
+  ((GpuPsGraphTable *)graph_table)
+      ->cpu_graph_table_->load_node_and_edge_file(
+          etype2files, ntype2files, graph_data_local_path, part_num, reverse);
 }
 
 void GraphGpuWrapper::add_table_feat_conf(std::string table_name,

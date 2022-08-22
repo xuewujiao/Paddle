@@ -893,10 +893,10 @@ struct BufState {
 class GraphDataGenerator {
  public:
   GraphDataGenerator(){};
-  virtual ~GraphDataGenerator(){};
+  virtual ~GraphDataGenerator();
   void SetConfig(const paddle::framework::DataFeedDesc& data_feed_desc);
-  void AllocResource(const paddle::platform::Place& place,
-                     std::vector<LoDTensor*> feed_vec);
+  void AllocResource(int thread_id, std::vector<LoDTensor*> feed_vec);
+  void SetFeedVec(std::vector<LoDTensor*> feed_vec);
   int AcquireInstance(BufState* state);
   int GenerateBatch();
   int FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk);
@@ -933,7 +933,8 @@ class GraphDataGenerator {
   int64_t* id_tensor_ptr_;
   int64_t* show_tensor_ptr_;
   int64_t* clk_tensor_ptr_;
-  cudaStream_t stream_;
+  cudaStream_t train_stream_;
+  cudaStream_t sample_stream_;
   paddle::platform::Place place_;
   std::vector<LoDTensor*> feed_vec_;
   std::vector<size_t> offset_;
@@ -951,10 +952,6 @@ class GraphDataGenerator {
   std::shared_ptr<phi::Allocation> d_sample_keys_;
   int sample_keys_len_;
 
-  std::set<int> finish_node_type_;
-  std::unordered_map<int, size_t> node_type_start_;
-  std::vector<int> infer_node_type_start_;
-
   std::shared_ptr<phi::Allocation> d_ins_buf_;
   std::shared_ptr<phi::Allocation> d_feature_buf_;
   std::shared_ptr<phi::Allocation> d_pair_num_;
@@ -970,8 +967,6 @@ class GraphDataGenerator {
   int slot_num_;
   int shuffle_seed_;
   int debug_mode_;
-  std::vector<int> first_node_type_;
-  std::vector<std::vector<int>> meta_path_;
   bool gpu_graph_training_;
 };
 
@@ -1037,6 +1032,7 @@ class DataFeed {
   virtual void SetParseLogKey(bool parse_logkey) {}
   virtual void SetEnablePvMerge(bool enable_pv_merge) {}
   virtual void SetCurrentPhase(int current_phase) {}
+  virtual void InitGraphResource() {}
   virtual void SetDeviceKeys(std::vector<uint64_t>* device_keys, int type) {
 #if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
     gpu_graph_data_generator_.SetDeviceKeys(device_keys, type);
@@ -1637,6 +1633,7 @@ class SlotRecordInMemoryDataFeed : public InMemoryDataFeed<SlotRecord> {
   //                                    CustomParser* parser) {}
   virtual void PutToFeedVec(const std::vector<SlotRecord>& ins_vec) {}
 
+  virtual void InitGraphResource(void);
   virtual void LoadIntoMemoryByCommand(void);
   virtual void LoadIntoMemoryByLib(void);
   virtual void LoadIntoMemoryByLine(void);

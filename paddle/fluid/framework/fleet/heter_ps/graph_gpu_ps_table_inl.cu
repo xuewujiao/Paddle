@@ -698,8 +698,14 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
   int h_left[total_gpu];   // NOLINT
   int h_right[total_gpu];  // NOLINT
 
-  auto d_left = memory::Alloc(place, total_gpu * sizeof(int));
-  auto d_right = memory::Alloc(place, total_gpu * sizeof(int));
+  auto d_left =
+      memory::Alloc(place,
+                    total_gpu * sizeof(int),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  auto d_right =
+      memory::Alloc(place,
+                    total_gpu * sizeof(int),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   int* d_left_ptr = reinterpret_cast<int*>(d_left->ptr());
   int* d_right_ptr = reinterpret_cast<int*>(d_right->ptr());
   int default_value = 0;
@@ -710,15 +716,26 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
   CUDA_CHECK(cudaMemsetAsync(d_left_ptr, -1, total_gpu * sizeof(int), stream));
   CUDA_CHECK(cudaMemsetAsync(d_right_ptr, -1, total_gpu * sizeof(int), stream));
   //
-  auto d_idx = memory::Alloc(place, len * sizeof(int));
+  auto d_idx =
+      memory::Alloc(place,
+                    len * sizeof(int),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   int* d_idx_ptr = reinterpret_cast<int*>(d_idx->ptr());
 
-  auto d_shard_keys = memory::Alloc(place, len * sizeof(uint64_t));
+  auto d_shard_keys =
+      memory::Alloc(place,
+                    len * sizeof(uint64_t),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   uint64_t* d_shard_keys_ptr = reinterpret_cast<uint64_t*>(d_shard_keys->ptr());
   auto d_shard_vals =
-      memory::Alloc(place, sample_size * len * sizeof(uint64_t));
+      memory::Alloc(place,
+                    sample_size * len * sizeof(uint64_t),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   uint64_t* d_shard_vals_ptr = reinterpret_cast<uint64_t*>(d_shard_vals->ptr());
-  auto d_shard_actual_sample_size = memory::Alloc(place, len * sizeof(int));
+  auto d_shard_actual_sample_size =
+      memory::Alloc(place,
+                    len * sizeof(int),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   int* d_shard_actual_sample_size_ptr =
       reinterpret_cast<int*>(d_shard_actual_sample_size->ptr());
 
@@ -919,8 +936,10 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
     int total_sample_size = thrust::reduce(t_actual_sample_size.begin(),
                                            t_actual_sample_size.end());
 
-    result.actual_val_mem =
-        memory::AllocShared(place, total_sample_size * sizeof(uint64_t));
+    result.actual_val_mem = memory::AllocShared(
+        place,
+        total_sample_size * sizeof(uint64_t),
+        phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
     result.actual_val = (uint64_t*)(result.actual_val_mem)->ptr();
 
     result.set_total_sample_size(total_sample_size);
@@ -1011,23 +1030,40 @@ int GpuPsGraphTable::get_feature_of_nodes(int gpu_id,
   int total_gpu = resource_->total_device();
   auto stream = resource_->local_stream(gpu_id, 0);
 
-  auto d_left = memory::Alloc(place, total_gpu * sizeof(int));
-  auto d_right = memory::Alloc(place, total_gpu * sizeof(int));
+  auto d_left =
+      memory::Alloc(place,
+                    total_gpu * sizeof(int),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  auto d_right =
+      memory::Alloc(place,
+                    total_gpu * sizeof(int),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   int* d_left_ptr = reinterpret_cast<int*>(d_left->ptr());
   int* d_right_ptr = reinterpret_cast<int*>(d_right->ptr());
 
   CUDA_CHECK(cudaMemsetAsync(d_left_ptr, -1, total_gpu * sizeof(int), stream));
   CUDA_CHECK(cudaMemsetAsync(d_right_ptr, -1, total_gpu * sizeof(int), stream));
   //
-  auto d_idx = memory::Alloc(place, node_num * sizeof(int));
+  auto d_idx =
+      memory::Alloc(place,
+                    node_num * sizeof(int),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   int* d_idx_ptr = reinterpret_cast<int*>(d_idx->ptr());
 
-  auto d_shard_keys = memory::Alloc(place, node_num * sizeof(uint64_t));
+  auto d_shard_keys =
+      memory::Alloc(place,
+                    node_num * sizeof(uint64_t),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   uint64_t* d_shard_keys_ptr = reinterpret_cast<uint64_t*>(d_shard_keys->ptr());
   auto d_shard_vals =
-      memory::Alloc(place, slot_num * node_num * sizeof(uint64_t));
+      memory::Alloc(place,
+                    slot_num * node_num * sizeof(uint64_t),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   uint64_t* d_shard_vals_ptr = reinterpret_cast<uint64_t*>(d_shard_vals->ptr());
-  auto d_shard_actual_size = memory::Alloc(place, node_num * sizeof(int));
+  auto d_shard_actual_size =
+      memory::Alloc(place,
+                    node_num * sizeof(int),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   int* d_shard_actual_size_ptr =
       reinterpret_cast<int*>(d_shard_actual_size->ptr());
 
