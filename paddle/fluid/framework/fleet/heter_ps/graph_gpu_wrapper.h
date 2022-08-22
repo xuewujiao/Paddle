@@ -22,6 +22,9 @@
 namespace paddle {
 namespace framework {
 #ifdef PADDLE_WITH_HETERPS
+
+enum GpuGraphStorageMode { HBM = 1, CPU, MULTINODE };
+
 class GraphGpuWrapper {
  public:
   static std::shared_ptr<GraphGpuWrapper> GetInstance() {
@@ -31,6 +34,8 @@ class GraphGpuWrapper {
     return s_instance_;
   }
   static std::shared_ptr<GraphGpuWrapper> s_instance_;
+  void init_conf(const std::string& first_node_type,
+                 const std::string& meta_path);
   void initialize();
   void finalize();
   void set_device(std::vector<int> ids);
@@ -116,6 +121,14 @@ class GraphGpuWrapper {
   int upload_num = 8;
   std::shared_ptr<::ThreadPool> upload_task_pool;
   std::string feature_separator_ = std::string(" ");
+  //
+  bool conf_initialized_ = false;
+  std::vector<int> first_node_type_;
+  std::vector<std::vector<int>> meta_path_;
+
+  std::vector<std::set<int>> finish_node_type_;
+  std::vector<std::unordered_map<int, size_t>> node_type_start_;
+  std::vector<std::unordered_map<int, size_t>> infer_node_type_start_;
 };
 #endif
 }  // namespace framework

@@ -834,6 +834,18 @@ PADDLE_DEFINE_EXPORTED_bool(
     "It controls whether exit trainer when an worker has no ins.");
 
 /**
+ * Distributed related FLAG
+ * Name: enable_exit_when_partial_worker
+ * Since Version: 2.2.0
+ * Value Range: bool, default=false
+ * Example:
+ * Note: represent gpugraph storage mode, 1 for full hbm, 2 for hbm + mem + ssd.
+ */
+PADDLE_DEFINE_EXPORTED_int32(gpugraph_storage_mode,
+                             1,
+                             "gpugraph storage mode, default 1");
+
+/**
  * KP kernel related FLAG
  * Name: FLAGS_run_kp_kernel
  * Since Version: 2.3.0
