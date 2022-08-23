@@ -261,6 +261,10 @@ void GraphGpuWrapper::add_table_feat_conf(std::string table_name,
 }
 void GraphGpuWrapper::init_search_level(int level) { search_level = level; }
 
+gpuStream_t GraphGpuWrapper::get_local_stream(int gpuid) {
+  return ((GpuPsGraphTable *)graph_table)->get_local_stream(gpuid);
+}
+
 void GraphGpuWrapper::init_service() {
   table_proto.set_task_pool_size(24);
   table_proto.set_shard_num(1000);

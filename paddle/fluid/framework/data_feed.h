@@ -60,6 +60,8 @@ class Scope;
 class Variable;
 class NeighborSampleResult;
 class NodeQueryResult;
+template <typename KeyType, typename ValType>
+class HashTable;
 }  // namespace framework
 }  // namespace paddle
 
@@ -899,7 +901,7 @@ class GraphDataGenerator {
   void SetFeedVec(std::vector<LoDTensor*> feed_vec);
   int AcquireInstance(BufState* state);
   int GenerateBatch();
-  int FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk);
+  int FillWalkBuf();
   int FillFeatureBuf(uint64_t* d_walk, uint64_t* d_feature, size_t key_num);
   int FillFeatureBuf(std::shared_ptr<phi::Allocation> d_walk,
                      std::shared_ptr<phi::Allocation> d_feature);
@@ -911,12 +913,16 @@ class GraphDataGenerator {
                    int step,
                    int* len_per_row);
   int FillInsBuf();
+  int GetPathNum() { return total_row_; }
   void SetDeviceKeys(std::vector<uint64_t>* device_keys, int type) {
     type_to_index_[type] = h_device_keys_.size();
     h_device_keys_.push_back(device_keys);
   }
+  int InsertTable(const unsigned long* d_keys, unsigned long len);
+  std::vector<uint64_t>& GetHostVec() { return host_vec_; }
 
  protected:
+  HashTable<uint64_t, uint64_t>* table_;
   int walk_degree_;
   int walk_len_;
   int window_;
@@ -945,6 +951,7 @@ class GraphDataGenerator {
   std::shared_ptr<phi::Allocation> d_feature_;
   std::shared_ptr<phi::Allocation> d_len_per_row_;
   std::shared_ptr<phi::Allocation> d_random_row_;
+  std::shared_ptr<phi::Allocation> d_uniq_node_num_;
   //
   std::vector<std::shared_ptr<phi::Allocation>> d_sampleidx2rows_;
   int cur_sampleidx2row_;
@@ -968,6 +975,9 @@ class GraphDataGenerator {
   int shuffle_seed_;
   int debug_mode_;
   bool gpu_graph_training_;
+  std::vector<uint64_t> host_vec_;
+  uint64_t table_capcity_;
+  int total_row_;
 };
 
 class DataFeed {
@@ -1038,6 +1048,11 @@ class DataFeed {
     gpu_graph_data_generator_.SetDeviceKeys(device_keys, type);
 #endif
   }
+#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
+  virtual const std::vector<uint64_t>& GetHostVec() {
+    return gpu_graph_data_generator_.GetHostVec();
+  }
+#endif
   virtual void SetGpuGraphMode(int gpu_graph_mode) {
     gpu_graph_mode_ = gpu_graph_mode;
   }
@@ -1054,10 +1069,21 @@ class DataFeed {
     return ins_content_vec_;
   }
   virtual int GetCurBatchSize() { return batch_size_; }
+  virtual int GetGraphPathNum() {
+#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
+    return gpu_graph_data_generator_.GetPathNum();
+#else
+    return 0;
+#endif
+  }
   virtual bool IsTrainMode() { return train_mode_; }
   virtual void LoadIntoMemory() {
     PADDLE_THROW(platform::errors::Unimplemented(
         "This function(LoadIntoMemory) is not implemented."));
+  }
+  virtual void DoWalk() {
+    PADDLE_THROW(platform::errors::Unimplemented(
+        "This function(DoWalk) is not implemented."));
   }
   virtual void SetPlace(const paddle::platform::Place& place) {
     place_ = place;
@@ -1668,6 +1694,8 @@ class SlotRecordInMemoryDataFeed : public InMemoryDataFeed<SlotRecord> {
                      const int float_slot_size,
                      const UsedSlotGpuType* used_slots);
 #endif
+  virtual void DoWalk();
+
   float sample_rate_ = 1.0f;
   int use_slot_size_ = 0;
   int float_use_slot_size_ = 0;

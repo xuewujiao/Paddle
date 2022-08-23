@@ -154,7 +154,9 @@ class GpuPsGraphTable
                                  uint64_t *src_sample_res,
                                  int *actual_sample_size);
   int init_cpu_table(const paddle::distributed::GraphParameter &graph);
-
+  gpuStream_t get_local_stream(int gpu_id) {
+    return resource_->local_stream(gpu_id, 0);
+  }
   int gpu_num;
   int graph_table_num_, feature_table_num_;
   std::vector<GpuPsCommGraph> gpu_graph_list_;

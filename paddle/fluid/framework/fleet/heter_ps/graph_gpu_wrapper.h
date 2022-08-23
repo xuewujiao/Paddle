@@ -97,6 +97,7 @@ class GraphGpuWrapper {
                                              uint64_t* device_keys,
                                              int walk_degree,
                                              int len);
+  gpuStream_t get_local_stream(int gpuid);
   std::vector<uint64_t> graph_neighbor_sample(int gpu_id,
                                               int idx,
                                               std::vector<uint64_t>& key,

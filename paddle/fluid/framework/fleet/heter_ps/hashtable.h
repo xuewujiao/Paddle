@@ -127,6 +127,12 @@ class HashTable {
   template <typename StreamType>
   void insert(const KeyType* d_keys,
               size_t len,
+              uint64_t* global_num,
+              StreamType stream);
+
+  template <typename StreamType>
+  void insert(const KeyType* d_keys,
+              size_t len,
               char* pool,
               size_t feature_value_size,
               size_t start_index,
@@ -185,13 +191,17 @@ class HashTable {
 #endif
 
   int size() { return container_->size(); }
-
+  thrust::pair<KeyType, ValType>* data() { return container_->data(); }
   void set_feature_value_size(size_t pull_feature_value_size,
                               size_t push_grad_value_size) {
     pull_feature_value_size_ = pull_feature_value_size;
     push_grad_value_size_ = push_grad_value_size;
     VLOG(3) << "hashtable set pull value size: " << pull_feature_value_size_
             << " push value size: " << push_grad_value_size_;
+  }
+
+  int prefetch(const int dev_id, cudaStream_t stream = 0) {
+    return container_->prefetch(dev_id, stream);
   }
 
   void show_collision(int id) { return container_->print_collision(id); }

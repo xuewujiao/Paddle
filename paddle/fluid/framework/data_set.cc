@@ -468,8 +468,30 @@ void DatasetImpl<T>::LoadIntoMemory() {
     for (size_t i = 0; i < readers_.size(); i++) {
       readers_[i]->SetGpuGraphMode(gpu_graph_mode_);
     }
+
     if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::HBM) {
     } else if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::CPU) {
+      for (int64_t i = 0; i < thread_num_; ++i) {
+        load_threads.push_back(std::thread(&paddle::framework::DataFeed::DoWalk,
+                                           readers_[i].get()));
+      }
+      for (std::thread& t : load_threads) {
+        t.join();
+      }
+      uint64_t node_num = 0;
+      for (int i = 0; i < thread_num_; i++) {
+        auto& host_vec = readers_[i]->GetHostVec();
+        node_num += host_vec.size();
+      }
+      gpu_graph_total_keys_.reserve(node_num);
+      for (int i = 0; i < thread_num_; i++) {
+        auto& host_vec = readers_[i]->GetHostVec();
+        for (size_t j = 0; j < host_vec.size(); j++) {
+          gpu_graph_total_keys_.push_back(host_vec[j]);
+        }
+      }
+      VLOG(2) << "end add edge into gpu_graph_total_keys_ size["
+              << gpu_graph_total_keys_.size() << "]";
     }
 #endif
   } else {
@@ -1067,7 +1089,15 @@ void DatasetImpl<T>::DestroyPreLoadReaders() {
 
 template <typename T>
 int64_t DatasetImpl<T>::GetMemoryDataSize() {
-  return input_channel_->Size();
+  if (gpu_graph_mode_) {
+    int64_t total_path_num = 0;
+    for (int i = 0; i < thread_num_; i++) {
+      total_path_num += readers_[i]->GetGraphPathNum();
+    }
+    return total_path_num;
+  } else {
+    return input_channel_->Size();
+  }
 }
 
 template <typename T>
