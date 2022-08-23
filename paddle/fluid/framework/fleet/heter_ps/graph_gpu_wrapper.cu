@@ -422,9 +422,6 @@ std::vector<uint64_t> GraphGpuWrapper::graph_neighbor_sample(
       res.push_back(cpu_key[i * sample_size + j]);
     }
   }
-  /* for(int i = 0;i < res.size();i ++) { */
-  /*     VLOG(0) << i << " " << res[i]; */
-  /* } */
   delete[] actual_sample_size;
   cudaFree(cuda_key);
   return res;
@@ -451,6 +448,22 @@ void GraphGpuWrapper::export_partition_files(int idx, std::string file_path) {
   return ((GpuPsGraphTable *)graph_table)
       ->cpu_graph_table_->export_partition_files(idx, file_path);
 }
+
+void GraphGpuWrapper::release_graph() {
+  return ((GpuPsGraphTable *)graph_table)
+      ->cpu_graph_table_->release_graph();
+}
+
+std::vector<uint64_t> & GraphGpuWrapper::get_graph_total_keys() {
+  return ((GpuPsGraphTable *)graph_table)
+      ->cpu_graph_table_->graph_total_keys_;
+}
+
+std::vector<std::vector<uint64_t>> & GraphGpuWrapper::get_graph_type_keys() {
+  return ((GpuPsGraphTable *)graph_table)
+      ->cpu_graph_table_->graph_type_keys_;
+}
+
 #endif
 }  // namespace framework
 };  // namespace paddle

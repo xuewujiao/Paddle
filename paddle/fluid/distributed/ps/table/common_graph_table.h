@@ -271,7 +271,6 @@ class RandomSampleLRU {
       remove(node_head);
       remove_count--;
     }
-    // std::cerr<<"after remove_count = "<<remove_count<<std::endl;
   }
 
   void move_to_tail(LRUNode<K, V> *node) {
@@ -635,7 +634,9 @@ class GraphTable : public Table {
       const std::vector<std::vector<std::string>> &res);
 
   size_t get_server_num() { return server_num; }
+  void clear_graph();
   void clear_graph(int idx);
+  void release_graph();
   virtual int32_t make_neighbor_sample_cache(size_t size_limit, size_t ttl) {
     {
       std::unique_lock<std::mutex> lock(mutex_);
@@ -698,6 +699,13 @@ class GraphTable : public Table {
   virtual int32_t add_comm_edge(int idx, uint64_t src_id, uint64_t dst_id);
   virtual int32_t build_sampler(int idx, std::string sample_type = "random");
   void set_feature_separator(const std::string &ch);
+
+  void build_graph_total_keys();
+  void build_graph_type_keys();
+
+  std::vector<uint64_t> graph_total_keys_;
+  std::vector<std::vector<uint64_t>> graph_type_keys_;
+
   std::vector<std::vector<GraphShard *>> edge_shards, feature_shards;
   size_t shard_start, shard_end, server_num, shard_num_per_server, shard_num;
   int task_pool_size_ = 24;
