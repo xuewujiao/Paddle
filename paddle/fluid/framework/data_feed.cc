@@ -2700,6 +2700,12 @@ int SlotRecordInMemoryDataFeed::Next() {
 #endif
 }
 
+#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
+void SlotRecordInMemoryDataFeed::DoWalk() {
+  gpu_graph_data_generator_.FillWalkBuf();
+}
+#endif
+
 #if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_HETERPS)
 void SlotRecordInMemoryDataFeed::BuildSlotBatchGPU(const int ins_num) {
   int offset_cols_size = (ins_num + 1);

@@ -25,10 +25,12 @@ limitations under the License. */
 #include "cub/cub.cuh"
 #include "paddle/fluid/framework/fleet/heter_ps/gpu_graph_node.h"
 #include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_wrapper.h"
+#include "paddle/fluid/framework/fleet/heter_ps/hashtable.h"
 #include "paddle/fluid/framework/fleet/ps_gpu_wrapper.h"
 
 DECLARE_bool(enable_opt_get_features);
 DECLARE_int32(gpugraph_storage_mode);
+DECLARE_double(gpugraph_hbm_table_load_factor);
 
 namespace paddle {
 namespace framework {
@@ -353,7 +355,7 @@ int GraphDataGenerator::FillInsBuf() {
     if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::CPU) {
       return -1;
     }
-    int res = FillWalkBuf(d_walk_);
+    int res = FillWalkBuf();
     if (!res) {
       // graph iterate complete
       return -1;
@@ -899,7 +901,30 @@ int GraphDataGenerator::FillFeatureBuf(
   return ret;
 }
 
-int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
+// 尝试插入table, 0表示插入成功
+int GraphDataGenerator::InsertTable(const unsigned long *d_keys,
+                                    unsigned long len) {
+  uint64_t h_uniq_node_num = 0;
+  uint64_t *d_uniq_node_num =
+      reinterpret_cast<uint64_t *>(d_uniq_node_num_->ptr());
+  cudaMemcpyAsync(&h_uniq_node_num,
+                  d_uniq_node_num,
+                  sizeof(uint64_t),
+                  cudaMemcpyDeviceToHost,
+                  sample_stream_);
+  cudaStreamSynchronize(sample_stream_);
+  // 产生了足够多的node，采样结束
+  VLOG(2) << "table capcity: " << table_capcity_ << ", " << h_uniq_node_num
+          << " used";
+  if (h_uniq_node_num + len >= table_capcity_) {
+    return 1;
+  }
+  table_->insert(d_keys, len, d_uniq_node_num, sample_stream_);
+  CUDA_CHECK(cudaStreamSynchronize(sample_stream_));
+  return 0;
+}
+
+int GraphDataGenerator::FillWalkBuf() {
   platform::CUDADeviceGuard guard(gpuid_);
   size_t once_max_sample_keynum = walk_degree_ * once_sample_startid_len_;
   ////////
@@ -917,15 +942,14 @@ int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
   }
   ///////
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
-  uint64_t *walk = reinterpret_cast<uint64_t *>(d_walk->ptr());
+  uint64_t *walk = reinterpret_cast<uint64_t *>(d_walk_->ptr());
   int *len_per_row = reinterpret_cast<int *>(d_len_per_row_->ptr());
   uint64_t *d_sample_keys = reinterpret_cast<uint64_t *>(d_sample_keys_->ptr());
   cudaMemsetAsync(walk, 0, buf_size_ * sizeof(uint64_t), sample_stream_);
-  VLOG(2) << "wxx aaa";
   // cudaMemsetAsync(
   //     len_per_row, 0, once_max_sample_keynum * sizeof(int), sample_stream_);
   int i = 0;
-  int total_row = 0;
+  total_row_ = 0;
 
   // 获取全局采样状态
   auto &first_node_type = gpu_graph_ptr->first_node_type_;
@@ -959,7 +983,6 @@ int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
     // int tmp_len = start + once_sample_startid_len_ > device_key_size
     //                   ? device_key_size - start
     //                   : once_sample_startid_len_;
-    node_type_start[node_type] = tmp_len + start;
     if (tmp_len == 0) {
       finish_node_type.insert(node_type);
       VLOG(2) << "finish_node_type size: " << finish_node_type.size()
@@ -970,9 +993,7 @@ int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
       cursor_ += 1;
       continue;
     }
-    // if (tmp_len == 0) {
-    //  break;
-    //}
+
     VLOG(2) << "i = " << i << " buf_size_ = " << buf_size_
             << " tmp_len = " << tmp_len << " cursor = " << cursor_
             << " once_max_sample_keynum = " << once_max_sample_keynum;
@@ -982,16 +1003,28 @@ int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
     NeighborSampleQuery q;
     q.initialize(
         gpuid_, path[0], (uint64_t)(d_type_keys), walk_degree_, tmp_len);
-    VLOG(2) << "tag aaa";
     auto sample_res = gpu_graph_ptr->graph_neighbor_sample_v3(q, false);
-    VLOG(2) << "tag bbb";
 
     int step = 1;
     VLOG(2) << "sample edge type: " << path[0] << " step: " << 1;
     jump_rows_ = sample_res.total_sample_size;
+    VLOG(2) << "jump_row: " << jump_rows_;
     if (jump_rows_ == 0) {
+      node_type_start[node_type] = tmp_len + start;
       cursor_ += 1;
       continue;
+    }
+
+    if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::CPU) {
+      if (InsertTable(d_type_keys, tmp_len) != 0) {
+        VLOG(2) << "table is full";
+        break;
+      }
+      if (InsertTable(sample_res.actual_val, sample_res.total_sample_size) !=
+          0) {
+        VLOG(2) << "table is full";
+        break;
+      }
     }
     FillOneStep(d_type_keys,
                 cur_walk,
@@ -1000,7 +1033,6 @@ int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
                 walk_degree_,
                 step,
                 len_per_row);
-    VLOG(2) << "jump_row: " << jump_rows_;
     /////////
     if (debug_mode_) {
       cudaMemcpy(
@@ -1028,6 +1060,15 @@ int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
                    sample_res.total_sample_size);
       sample_res = gpu_graph_ptr->graph_neighbor_sample_v3(q, false);
 
+      if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::CPU) {
+        // table_->insert(sample_res.actual_val, sample_res.total_sample_size,
+        // d_uniq_node_num, sample_stream_);
+        if (InsertTable(sample_res.actual_val, sample_res.total_sample_size) !=
+            0) {
+          VLOG(2) << "table is full";
+          break;
+        }
+      }
       FillOneStep(d_type_keys,
                   cur_walk,
                   sample_res.total_sample_size,
@@ -1043,12 +1084,13 @@ int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
         }
       }
     }
-    // cursor_ += tmp_len;
+    // 此时更新全局采样状态
+    node_type_start[node_type] = tmp_len + start;
     i += jump_rows_ * walk_len_;
-    total_row += jump_rows_;
+    total_row_ += jump_rows_;
     cursor_ += 1;
   }
-  buf_state_.Reset(total_row);
+  buf_state_.Reset(total_row_);
   int *d_random_row = reinterpret_cast<int *>(d_random_row_->ptr());
 
   thrust::random::default_random_engine engine(shuffle_seed_);
@@ -1056,7 +1098,7 @@ int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
   thrust::counting_iterator<int> cnt_iter(0);
   thrust::shuffle_copy(exec_policy,
                        cnt_iter,
-                       cnt_iter + total_row,
+                       cnt_iter + total_row_,
                        thrust::device_pointer_cast(d_random_row),
                        engine);
 
@@ -1064,12 +1106,12 @@ int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
   shuffle_seed_ = engine();
 
   if (debug_mode_) {
-    int *h_random_row = new int[total_row + 10];
+    int *h_random_row = new int[total_row_ + 10];
     cudaMemcpy(h_random_row,
                d_random_row,
-               total_row * sizeof(int),
+               total_row_ * sizeof(int),
                cudaMemcpyDeviceToHost);
-    for (int xx = 0; xx < total_row; xx++) {
+    for (int xx = 0; xx < total_row_; xx++) {
       VLOG(2) << "h_random_row[" << xx << "]: " << h_random_row[xx];
     }
     delete[] h_random_row;
@@ -1079,11 +1121,25 @@ int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
     delete[] h_len_per_row;
     delete[] h_prefix_sum;
   }
-  return total_row != 0;
+  if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::CPU) {
+    table_->prefetch(cudaCpuDeviceId, sample_stream_);
+    thrust::pair<uint64_t, uint64_t> *kv = table_->data();
+    size_t size = table_->size();
+    uint64_t unused_key = std::numeric_limits<uint64_t>::max();
+    for (size_t i = 0; i < size; i++) {
+      if (kv[i].first == unused_key) {
+        continue;
+      }
+      host_vec_.push_back(kv[i].first);
+    }
+  }
+  return total_row_ != 0;
 }
 
 GraphDataGenerator::~GraphDataGenerator() {
-  CUDA_CHECK(cudaStreamDestroy(sample_stream_));
+  if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::CPU) {
+    delete table_;
+  }
 }
 
 void GraphDataGenerator::SetFeedVec(std::vector<LoDTensor *> feed_vec) {
@@ -1096,12 +1152,16 @@ void GraphDataGenerator::AllocResource(int thread_id,
   place_ = platform::CUDAPlace(gpuid_);
 
   platform::CUDADeviceGuard guard(gpuid_);
-
-  VLOG(3) << "AllocResource gpuid " << gpuid_;
+  if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::CPU) {
+    table_capcity_ = once_sample_startid_len_ * repeat_time_ * 10;
+    table_ = new HashTable<uint64_t, uint64_t>(
+        table_capcity_ / FLAGS_gpugraph_hbm_table_load_factor);
+  }
+  VLOG(2) << "AllocResource gpuid " << gpuid_;
+  sample_stream_ = gpu_graph_ptr->get_local_stream(gpuid_);
   train_stream_ = dynamic_cast<phi::GPUContext *>(
                       platform::DeviceContextPool::Instance().Get(place_))
                       ->stream();
-  CUDA_CHECK(cudaStreamCreateWithFlags(&sample_stream_, cudaStreamNonBlocking));
   // feed_vec_ = feed_vec;
   slot_num_ = (feed_vec_.size() - 3) / 2;
 
@@ -1133,6 +1193,12 @@ void GraphDataGenerator::AllocResource(int thread_id,
                   sample_stream_);
   cursor_ = 0;
   jump_rows_ = 0;
+  d_uniq_node_num_ = memory::AllocShared(
+      place_,
+      sizeof(uint64_t),
+      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+  cudaMemsetAsync(d_uniq_node_num_->ptr(), 0, sizeof(uint64_t), sample_stream_);
+
   d_walk_ = memory::AllocShared(
       place_,
       buf_size_ * sizeof(uint64_t),
