@@ -253,7 +253,7 @@ class DatasetImpl : public Dataset {
                                          int read_thread_num,
                                          int consume_thread_num,
                                          int shard_num) {}
-  virtual void SetGraphDeviceKeys(const std::vector<uint64_t>& h_device_keys);
+  virtual void SetGraphDeviceKeys(const std::vector<uint64_t>& h_device_keys) {}
   virtual void ClearLocalTables() {}
   virtual void CreatePreLoadReaders();
   virtual void DestroyPreLoadReaders();
@@ -263,11 +263,6 @@ class DatasetImpl : public Dataset {
   virtual void DynamicAdjustReadersNum(int thread_num);
   virtual void SetFleetSendSleepSeconds(int seconds);
   virtual std::vector<std::string> GetSlots();
-  /* for enable_heterps_
-  virtual void EnableHeterps(bool enable_heterps) {
-    enable_heterps_ = enable_heterps;
-  }
-  */
 
   std::vector<paddle::framework::Channel<T>>& GetMultiOutputChannel() {
     return multi_output_channel_;
@@ -344,8 +339,7 @@ class DatasetImpl : public Dataset {
   std::vector<std::string> use_slots_;
   bool enable_heterps_ = false;
   int gpu_graph_mode_ = 0;
-  // std::vector<std::vector<int64_t>> gpu_graph_device_keys_;
-  std::vector<std::vector<std::vector<uint64_t>>> graph_all_type_total_keys_;
+  std::vector<std::vector<std::vector<uint64_t>>> gpu_graph_type_keys_;
   std::vector<uint64_t> gpu_graph_total_keys_;
 };
 

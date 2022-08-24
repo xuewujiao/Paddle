@@ -447,18 +447,7 @@ void MultiSlotDataset::PrepareTrain() {
   return;
 }
 
-template <typename T>
-void DatasetImpl<T>::SetGraphDeviceKeys(
-    const std::vector<uint64_t>& h_device_keys) {
-  //  for (size_t i = 0; i < gpu_graph_device_keys_.size(); i++) {
-  //    gpu_graph_device_keys_[i].clear();
-  //  }
-  //  size_t device_num = gpu_graph_device_keys_.size();
-  //  for (size_t i = 0; i < h_device_keys.size(); i++) {
-  //    int shard = h_device_keys[i] % device_num;
-  //    gpu_graph_device_keys_[shard].push_back(h_device_keys[i]);
-  //  }
-}
+
 // load data into memory, Dataset hold this memory,
 // which will later be fed into readers' channel
 template <typename T>
@@ -470,46 +459,32 @@ void DatasetImpl<T>::LoadIntoMemory() {
   if (gpu_graph_mode_) {
     VLOG(0) << "in gpu_graph_mode";
 #ifdef PADDLE_WITH_HETERPS
-    graph_all_type_total_keys_.clear();
-    auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
-    auto node_to_id = gpu_graph_ptr->feature_to_id;
-    auto edge_to_id = gpu_graph_ptr->edge_to_id;
-
     for (size_t i = 0; i < readers_.size(); i++) {
       readers_[i]->SetGpuGraphMode(gpu_graph_mode_);
     }
 
     if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::HBM) {
-      // add node embedding id
-      std::vector<std::vector<uint64_t>> gpu_graph_device_keys;
-      gpu_graph_ptr->get_node_embedding_ids(thread_num_,
-                                            &gpu_graph_device_keys);
-      for (size_t i = 0; i < gpu_graph_device_keys.size(); i++) {
-        for (size_t j = 0; j < gpu_graph_device_keys[i].size(); j++) {
-          gpu_graph_total_keys_.push_back(gpu_graph_device_keys[i][j]);
+    } else if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::CPU) {
+      for (int64_t i = 0; i < thread_num_; ++i) {
+        load_threads.push_back(std::thread(&paddle::framework::DataFeed::DoWalk,
+                                           readers_[i].get()));
+      }
+      for (std::thread& t : load_threads) {
+        t.join();
+      }
+      uint64_t node_num = 0;
+      for (int i = 0; i < thread_num_; i++) {
+        auto& host_vec = readers_[i]->GetHostVec();
+        node_num += host_vec.size();
+      }
+      gpu_graph_total_keys_.reserve(node_num);
+      for (int i = 0; i < thread_num_; i++) {
+        auto& host_vec = readers_[i]->GetHostVec();
+        for (size_t j = 0; j < host_vec.size(); j++) {
+          gpu_graph_total_keys_.push_back(host_vec[j]);
         }
       }
-
-      // add feature embedding id
-      VLOG(2) << "begin add feature_id into gpu_graph_total_keys_ size["
-              << gpu_graph_total_keys_.size() << "]";
-      for (auto& iter : node_to_id) {
-        std::vector<std::vector<uint64_t>> gpu_graph_device_keys;
-        int node_idx = iter.second;
-        gpu_graph_ptr->get_all_feature_ids(
-            1, node_idx, thread_num_, &gpu_graph_device_keys);
-        for (size_t i = 0; i < gpu_graph_device_keys.size(); i++) {
-          VLOG(2) << "begin node type: " << node_idx
-                  << ", gpu_graph_device_keys[" << i
-                  << "] = " << gpu_graph_device_keys[i].size();
-          for (size_t j = 0; j < gpu_graph_device_keys[i].size(); j++) {
-            gpu_graph_total_keys_.push_back(gpu_graph_device_keys[i][j]);
-          }
-          VLOG(2) << "end node type: " << node_idx << ", gpu_graph_device_keys["
-                  << i << "] = " << gpu_graph_device_keys[i].size();
-        }
-      }
-      VLOG(2) << "end add feature_id into gpu_graph_total_keys_ size["
+      VLOG(2) << "end add edge into gpu_graph_total_keys_ size["
               << gpu_graph_total_keys_.size() << "]";
     } else if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::CPU) {
       for (int64_t i = 0; i < thread_num_; ++i) {
