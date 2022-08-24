@@ -321,7 +321,16 @@ __global__ void fill_dvalues(uint64_t* d_shard_vals,
   assert(blockDim.y == BLOCK_WARPS);
 
   int i = blockIdx.x * TILE_SIZE + threadIdx.y;
-  const int last_idx = min(static_cast<int>(blockIdex.x + 1) * TILE_SIZE, len);
+  const int last_idx = min(static_cast<int>(blockIdx.x + 1) * TILE_SIZE, len);
+  while (i < last_idx) {
+    size_t offset1 = idx[i] * sample_size;
+    size_t offset2 = i * sample_size;
+    d_actual_sample_size[idx[i]] = d_shard_actual_sample_size[i];
+    for (int j = threadIdx.x; j < sample_size; j += WARP_SIZE) {
+      d_vals[offset1 + j] = d_shard_vals[offset2 + j]; 
+    }
+    i += BLOCK_WARPS;
+  }
 }
 
 __global__ void fill_dvalues(uint64_t* d_shard_vals,
@@ -832,14 +841,28 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
                             h_right,
                             d_shard_vals_ptr,
                             d_shard_actual_sample_size_ptr);
-  fill_dvalues<<<grid_size, block_size_, 0, stream>>>(
+  /*fill_dvalues<<<grid_size, block_size_, 0, stream>>>(
       d_shard_vals_ptr,
       val,
       d_shard_actual_sample_size_ptr,
       actual_sample_size,
       d_idx_ptr,
       sample_size,
-      len);
+      len);*/
+  constexpr int WARP_SIZE_2 = 32;
+  constexpr int BLOCK_WARPS_2 = 128 / WARP_SIZE_2;
+  constexpr int TILE_SIZE_2 = BLOCK_WARPS_2 * 16;
+  const dim3 block3(WARP_SIZE_2, BLOCK_WARPS_2);
+  const dim3 grid3((len + TILE_SIZE_2 - 1) / TILE_SIZE_2);
+  fill_dvalues<WARP_SIZE_2, BLOCK_WARPS_2, TILE_SIZE_2>
+      <<<grid3, block3, 0, stream>>>(
+          d_shard_vals_ptr,
+          val,
+          d_shard_actual_sample_size_ptr,
+          actual_sample_size,
+          d_idx_ptr,
+          sample_size,
+          len);
 
   CUDA_CHECK(cudaStreamSynchronize(stream));
 
