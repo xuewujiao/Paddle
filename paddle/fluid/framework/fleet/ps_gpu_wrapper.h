@@ -63,6 +63,7 @@ limitations under the License. */
 #include "downpour_accessor.h"  // NOLINT
 #endif
 #include "paddle/fluid/framework/fleet/heter_ps/log_patch.h"
+DECLARE_int32(gpugraph_sparse_table_storage_mode);
 
 namespace paddle {
 namespace framework {
@@ -195,16 +196,25 @@ class PSGPUWrapper {
   void LoadIntoMemory(bool is_shuffle);
   void BeginPass();
   void EndPass();
+  void add_key_to_local(const std::vector<uint64_t> & keys);
+  void add_key_to_gputask(std::shared_ptr<HeterContext> gpu_task);
+  void SparseTableToHbm();
+  void HbmToSparseTable();
   void start_build_thread();
   void pre_build_thread();
   void build_pull_thread();
   void build_task();
+  void DumpToMem();
 
   void Finalize() {
     VLOG(3) << "PSGPUWrapper Begin Finalize.";
     if (s_instance_ == nullptr) {
       return;
     }
+    if (FLAGS_gpugraph_sparse_table_storage_mode == 0) {
+        this->EndPass();
+    }
+
     data_ready_channel_->Close();
     buildcpu_ready_channel_->Close();
     buildpull_ready_channel_->Close();
@@ -693,6 +703,7 @@ class PSGPUWrapper {
   int month_;
   int day_;
   bool slot_info_initialized_ = false;
+  bool hbm_sparse_table_initialized_ = false;
   int use_afs_api_ = 0;
   int optimizer_type_ = 1;
   std::string accessor_class_;
