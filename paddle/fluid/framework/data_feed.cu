@@ -107,6 +107,22 @@ __global__ void fill_actual_neighbors(int64_t* vals,
   }
 }
 
+__global__ void fill_actual_neighbors(int64_t* vals,
+                                      int64_t* actual_vals,
+                                      int* actual_sample_size,
+                                      int* cumsum_actual_sample_size,
+                                      int sample_size,
+                                      int len) {
+  const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < len) {
+    int offset1 = cumsum_actual_sample_size[i];
+    int offset2 = sample_size * i;
+    for (int j = 0; j < actual_sample_size[i]; j++) {
+      actual_vals[offset1 + j] = vals[offset2 + j];
+    }
+  }
+}
+
 void SlotRecordInMemoryDataFeed::FillSlotValueOffset(
     const int ins_num,
     const int used_slot_num,
@@ -544,13 +560,15 @@ std::vector<std::shared_ptr<phi::Allocation>> GraphDataGenerator::SampleNeighbor
                     sizeof(int) * len, cudaMemcpyDeviceToDevice, stream_);
   }
 
+  cudaStreamSynchronize(stream_);
+
   thrust::device_vector<int> cumsum_actual_sample_size(len * edge_to_id_len_);
   thrust::exclusive_scan(thrust::device_pointer_cast(all_sample_count_ptr),
                          thrust::device_pointer_cast(all_sample_count_ptr) + len * edge_to_id_len_,
                          cumsum_actual_sample_size.begin(),
                          0);
 
-  constexpr int WARP_SIZE = 32;
+  /*constexpr int WARP_SIZE = 32;
   constexpr int BLOCK_WARPS = 128 / WARP_SIZE;
   constexpr int TILE_SIZE = BLOCK_WARPS * 16;
   const dim3 block(WARP_SIZE, BLOCK_WARPS);
@@ -562,7 +580,17 @@ std::vector<std::shared_ptr<phi::Allocation>> GraphDataGenerator::SampleNeighbor
           all_sample_count_ptr,
           thrust::raw_pointer_cast(cumsum_actual_sample_size.data()),
           sample_size,
-          len * edge_to_id_len_);
+          len * edge_to_id_len_);*/
+
+  fill_actual_neighbors<<<GET_BLOCKS(len * edge_to_id_len_),
+                          CUDA_NUM_THREADS,
+                          0,
+                          stream_>>>(all_sample_val_ptr,
+                                     final_sample_val_ptr,
+                                     all_sample_count_ptr,
+                                     thrust::raw_pointer_cast(cumsum_actual_sample_size.data()),
+                                     sample_size,
+                                     len * edge_to_id_len_);
 
   *neighbor_len = all_sample_size;
   cudaStreamSynchronize(stream_);

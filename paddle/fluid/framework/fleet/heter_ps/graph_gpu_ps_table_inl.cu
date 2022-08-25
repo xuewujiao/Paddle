@@ -50,14 +50,6 @@ __global__ void get_cpu_id_index(uint64_t* key,
   }
 }
 
-__global__ void get_reduce_sum(int* actual_sample_size,
-                               int* sum,
-                               int len) {
-  CUDA_KERNEL_LOOP(i, len) {
-    atomicAdd(sum, actual_sample_size[i]);
-  }
-}
-
 __global__ void get_actual_gpu_ac(int* gpu_ac, int number_on_cpu) {
   CUDA_KERNEL_LOOP(i, number_on_cpu) { gpu_ac[i] /= sizeof(uint64_t); }
 }
@@ -303,8 +295,10 @@ __global__ void fill_dvalues(uint64_t* d_shard_vals,
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < len) {
     d_actual_sample_size[idx[i]] = d_shard_actual_sample_size[i];
+    size_t offset1 = idx[i] * sample_size;
+    size_t offset2 = i * sample_size;
     for (int j = 0; j < sample_size; j++) {
-      d_vals[idx[i] * sample_size + j] = d_shard_vals[i * sample_size + j];
+      d_vals[offset1 + j] = d_shard_vals[offset2 + j];
     }
   }
 }
@@ -706,6 +700,50 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample(int gpu_id,
   return graph_neighbor_sample_v2(gpu_id, 0, key, sample_size, len, false, true);
 }
 
+/*NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
+    int gpu_id,
+    int edge_to_id_len,
+    uint64_t* key,
+    int sample_size,
+    int len,
+    bool cpu_query_switch,
+    bool compress) {
+ 
+  NeighborSampleResultV2 result;
+  result.initialize(sample_size, len, edge_to_id_len, resouce_->dev_id(gpu_id)); 
+
+  if (len == 0) {
+    return result;
+  }
+
+  platform::CUDAPlace place = platform::CUDAPlace(resource_->dev_id(gpu_id));
+  platform::CUDADeviceGuard guard(resource_->dev_id(gpu_id));
+  int* actual_sample_size = result.actual_sample_size;
+  uint64_t* val = result.val;
+  int total_gpu = resource_->total_device();
+  auto stream = resource_->local_stream(gpu_id, 0);
+  
+  int grid_size = (len - 1) / block_size_ + 1;
+  int h_left[total_gpu];   // NOLINT
+  int h_right[total_gpu];  // NOLINT
+  auto d_left = memory::Alloc(place, total_gpu * sizeof(int));
+  auto d_right = memory::Alloc(place, total_gpu * sizeof(int));
+  int* d_left_ptr = reinterpret_cast<int*>(d_left->ptr());
+  int* d_right_ptr = reinterpret_cast<int*>(d_right->ptr());
+  int default_value = 0;
+  if (cpu_query_switch) {
+    default_value = -1;
+  }
+
+  CUDA_CHECK(cudaMemsetAsync(d_left_ptr, -1, total_gpu * sizeof(int), stream));
+  CUDA_CHECK(cudaMemsetAsync(d_right_ptr, -1, total_gpu * sizeof(int), stream));
+
+  auto d_idx = memory::Alloc(place, len * sizeof(int));
+  int* d_idx_ptr = reinterpret_cast<int*>(d_idx->ptr());
+  auto d_shard_keys = memory::Alloc(place, len * sizeof(uint64_t));
+  
+}*/
+
 NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
     int gpu_id,
     int idx,
@@ -841,14 +879,15 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
                             h_right,
                             d_shard_vals_ptr,
                             d_shard_actual_sample_size_ptr);
-  /*fill_dvalues<<<grid_size, block_size_, 0, stream>>>(
+  fill_dvalues<<<grid_size, block_size_, 0, stream>>>(
       d_shard_vals_ptr,
       val,
       d_shard_actual_sample_size_ptr,
       actual_sample_size,
       d_idx_ptr,
       sample_size,
-      len);*/
+      len);
+  /*
   constexpr int WARP_SIZE_2 = 32;
   constexpr int BLOCK_WARPS_2 = 128 / WARP_SIZE_2;
   constexpr int TILE_SIZE_2 = BLOCK_WARPS_2 * 16;
@@ -862,7 +901,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
           actual_sample_size,
           d_idx_ptr,
           sample_size,
-          len);
+          len);*/
 
   CUDA_CHECK(cudaStreamSynchronize(stream));
 
@@ -963,22 +1002,9 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
     platform::CUDAPlace place = platform::CUDAPlace(resource_->dev_id(gpu_id));
     platform::CUDADeviceGuard guard(resource_->dev_id(gpu_id));
 
-    //auto reduce_sum = memory::AllocShared(place, sizeof(int));
-    //int* reduce_sum_ptr = reinterpret_cast<int*>(reduce_sum->ptr());
-    //cudaMemset(reduce_sum_ptr, 0, sizeof(int));
-    thrust::device_vector<int> reduce_sum(5, 0); // can not set (1, 0), will raise error
-    get_reduce_sum<<<grid_size, block_size_, 0, stream>>>(
-        actual_sample_size, 
-        thrust::raw_pointer_cast(reduce_sum.data()), 
-        len);
-
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-
-    int total_sample_size = 0;
-    CUDA_CHECK(cudaMemcpy(&total_sample_size,
-                          thrust::raw_pointer_cast(reduce_sum.data()),
-                          sizeof(int),
-                          cudaMemcpyDeviceToHost));
+    int total_sample_size = thrust::reduce(
+        thrust::device_pointer_cast(actual_sample_size),
+        thrust::device_pointer_cast(actual_sample_size) + len);
     result.set_total_sample_size(total_sample_size);
 
     if (compress) {
