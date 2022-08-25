@@ -701,9 +701,6 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
   std::vector<int64_t> final_nodes_len_vec;
   for (int i = 0; i < len_samples; i++) {
 
-    // clock_t start_time, end_time;
-    // start_time = clock();
-
     edges_split_num.clear();
     std::shared_ptr<phi::Allocation> neighbors, count;
     int64_t neighbors_len = 0;
@@ -725,11 +722,6 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
       edges_split_num.push_back(final_nodes_len_vec[i - 1]);
     }
 
-    // cudaStreamSynchronize(stream_);
-    // end_time = clock();
-    // VLOG(0) << gpuid_ << " samples spend time: " << (double)(end_time - start_time) / CLOCKS_PER_SEC << "s";
-
-    // start_time = clock();
     auto reindex_dst =
         memory::AllocShared(place_, sizeof(int64_t) * neighbors_len);
     int64_t* reindex_src_data = reinterpret_cast<int64_t* >(neighbors->ptr());
@@ -753,9 +745,6 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
       final_nodes_vec.emplace_back(tmp_final_nodes);
       final_nodes_len_vec.emplace_back(final_nodes_len);
     }
-    // cudaStreamSynchronize(stream_);
-    // end_time = clock();
-    // VLOG(0) << gpuid_ << " graph reindex spend time: " << (double)(end_time - start_time) / CLOCKS_PER_SEC << " s"; 
 
     int offset = 3 + 2 * slot_num_ + 5 * i;
     num_nodes_tensor_ptr_[i] =
@@ -925,9 +914,7 @@ int GraphDataGenerator::GenerateBatch() {
             << ", ins_buf_pair_len = " << ins_buf_pair_len_;
     ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_->ptr());
     ins_cursor = ins_buf + ins_buf_pair_len_ * 2 - total_instance;
-    // clock_t start_time, end_time;
     if (!sage_mode_) {
-      // start_time = clock();
       id_tensor_ptr_ =
           feed_vec_[0]->mutable_data<int64_t>({total_instance, 1}, this->place_);
       show_tensor_ptr_ =
@@ -947,11 +934,8 @@ int GraphDataGenerator::GenerateBatch() {
                            CUDA_NUM_THREADS,
                            0,
                            stream_>>>(clk_tensor_ptr_, total_instance);
-      // end_time = clock();
-      // VLOG(0) << gpuid_ << " batch cost " << (double)(end_time - start_time) << " ms";
     } else {
       VLOG(2) << gpuid_ << " " << "Ready to enter GenerateSampleGraph";
-      // start_time = clock();
       final_nodes = GenerateSampleGraph(ins_cursor, total_instance, &uniq_instance_,
                                         &inverse);
       VLOG(2) << "Copy Final Results";
@@ -983,9 +967,6 @@ int GraphDataGenerator::GenerateBatch() {
                            CUDA_NUM_THREADS,
                            0,
                            stream_>>>(clk_tensor_ptr_, uniq_instance_);
-      // end_time = clock();
-      // VLOG(0) << gpuid_ << " batch cost " << (double)(end_time - start_time) / CLOCKS_PER_SEC << " s";
-      // VLOG(0) << gpuid_ << " " << total_instance << " " << uniq_instance_;
     }
   } else {
     ins_cursor = (uint64_t *)id_tensor_ptr_;
