@@ -352,7 +352,7 @@ int GraphDataGenerator::FillInsBuf() {
   buf_state_.Debug();
 
   if (total_instance == 0) {
-    if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::CPU) {
+    if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::whole_hbm) {
       return -1;
     }
     int res = FillWalkBuf();
@@ -1015,7 +1015,7 @@ int GraphDataGenerator::FillWalkBuf() {
       continue;
     }
 
-    if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::CPU) {
+    if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::whole_hbm) {
       if (InsertTable(d_type_keys, tmp_len) != 0) {
         VLOG(2) << "table is full";
         break;
@@ -1060,7 +1060,7 @@ int GraphDataGenerator::FillWalkBuf() {
                    sample_res.total_sample_size);
       sample_res = gpu_graph_ptr->graph_neighbor_sample_v3(q, false);
 
-      if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::CPU) {
+      if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::whole_hbm) {
         // table_->insert(sample_res.actual_val, sample_res.total_sample_size,
         // d_uniq_node_num, sample_stream_);
         if (InsertTable(sample_res.actual_val, sample_res.total_sample_size) !=
@@ -1121,7 +1121,7 @@ int GraphDataGenerator::FillWalkBuf() {
     delete[] h_len_per_row;
     delete[] h_prefix_sum;
   }
-  if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::CPU) {
+  if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::whole_hbm) {
     table_->prefetch(cudaCpuDeviceId, sample_stream_);
     thrust::pair<uint64_t, uint64_t> *kv = table_->data();
     size_t size = table_->size();
@@ -1137,7 +1137,7 @@ int GraphDataGenerator::FillWalkBuf() {
 }
 
 GraphDataGenerator::~GraphDataGenerator() {
-  if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::CPU) {
+  if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::whole_hbm) {
     delete table_;
   }
 }
@@ -1152,7 +1152,7 @@ void GraphDataGenerator::AllocResource(int thread_id,
   place_ = platform::CUDAPlace(gpuid_);
 
   platform::CUDADeviceGuard guard(gpuid_);
-  if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::CPU) {
+  if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::whole_hbm) {
     table_capcity_ = once_sample_startid_len_ * repeat_time_ * 10;
     table_ = new HashTable<uint64_t, uint64_t>(
         table_capcity_ / FLAGS_gpugraph_hbm_table_load_factor);
