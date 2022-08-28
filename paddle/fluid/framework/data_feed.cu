@@ -85,28 +85,6 @@ __global__ void FillSlotValueOffsetKernel(const int ins_num,
   }
 }
 
-template <int WARP_SIZE, int BLOCK_WARPS, int TILE_SIZE>
-__global__ void fill_actual_neighbors(int64_t* vals,
-                                      int64_t* actual_vals,
-                                      int* actual_sample_size,
-                                      int* cumsum_actual_sample_size,
-                                      int sample_size,
-                                      int len) {
-  assert(blockDim.x == WARP_SIZE);
-  assert(blockDim.y == BLOCK_WARPS);
-
-  int i = blockIdx.x * TILE_SIZE + threadIdx.y;
-  const int last_idx = min(static_cast<int>(blockIdx.x + 1) * TILE_SIZE, len);
-  while (i < last_idx) {
-    int offset1 = cumsum_actual_sample_size[i];
-    int offset2 = sample_size * i;
-    for (int j = threadIdx.x; j < actual_sample_size[i]; j += WARP_SIZE) {
-      actual_vals[offset1 + j] = vals[offset2 + j]; 
-    }
-    i += BLOCK_WARPS;
-  }
-}
-
 __global__ void fill_actual_neighbors(int64_t* vals,
                                       int64_t* actual_vals,
                                       int* actual_sample_size,
@@ -390,7 +368,6 @@ __global__ void GraphFillSlotLodKernel(int64_t *id_tensor, int len) {
 }
 
 int GraphDataGenerator::FillInsBuf() {
-
   if (ins_buf_pair_len_ >= batch_size_) {
     return batch_size_;
   }
@@ -567,20 +544,6 @@ std::vector<std::shared_ptr<phi::Allocation>> GraphDataGenerator::SampleNeighbor
                          thrust::device_pointer_cast(all_sample_count_ptr) + len * edge_to_id_len_,
                          cumsum_actual_sample_size.begin(),
                          0);
-
-  /*constexpr int WARP_SIZE = 32;
-  constexpr int BLOCK_WARPS = 128 / WARP_SIZE;
-  constexpr int TILE_SIZE = BLOCK_WARPS * 16;
-  const dim3 block(WARP_SIZE, BLOCK_WARPS);
-  const dim3 grid((len * edge_to_id_len_ + TILE_SIZE - 1) / TILE_SIZE);
-  fill_actual_neighbors<WARP_SIZE, BLOCK_WARPS, TILE_SIZE>
-      <<<grid, block, 0, stream_>>>(
-          all_sample_val_ptr, 
-          final_sample_val_ptr,
-          all_sample_count_ptr,
-          thrust::raw_pointer_cast(cumsum_actual_sample_size.data()),
-          sample_size,
-          len * edge_to_id_len_);*/
 
   fill_actual_neighbors<<<GET_BLOCKS(len * edge_to_id_len_),
                           CUDA_NUM_THREADS,
@@ -909,7 +872,6 @@ int GraphDataGenerator::GenerateBatch() {
   std::shared_ptr<phi::Allocation> final_nodes;
   phi::DenseTensor inverse;
   if (gpu_graph_training_) {
-
     VLOG(2) << "total_instance: " << total_instance
             << ", ins_buf_pair_len = " << ins_buf_pair_len_;
     ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_->ptr());
@@ -1278,7 +1240,6 @@ int GraphDataGenerator::FillFeatureBuf(
 }
 
 int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
-
   platform::CUDADeviceGuard guard(gpuid_);
   size_t once_max_sample_keynum = walk_degree_ * once_sample_startid_len_;
   ////////
@@ -1410,7 +1371,6 @@ int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
     total_row += jump_rows_;
     cursor_ += 1;
   }
-
   buf_state_.Reset(total_row);
   int *d_random_row = reinterpret_cast<int *>(d_random_row_->ptr());
 
