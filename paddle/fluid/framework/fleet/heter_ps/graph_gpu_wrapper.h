@@ -23,8 +23,8 @@ namespace paddle {
 namespace framework {
 #ifdef PADDLE_WITH_HETERPS
 
-enum GpuGraphStorageMode {whole_hbm=1, mem_emb_and_gpu_graph,
-   mem_emb_feature_and_gpu_graph, ssd_emb_and_mem_feature_gpu_graph };
+enum GpuGraphStorageMode {WHOLE_HBM=1, MEM_EMB_AND_GPU_GRAPH,
+   MEM_EMB_FEATURE_AND_GPU_GRAPH, SSD_EMB_AND_MEM_FEATURE_GPU_GRAPH };
 
 class GraphGpuWrapper {
  public:

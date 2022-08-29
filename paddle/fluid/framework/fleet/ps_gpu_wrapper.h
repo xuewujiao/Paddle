@@ -212,7 +212,7 @@ class PSGPUWrapper {
     if (s_instance_ == nullptr) {
       return;
     }
-    if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::whole_hbm) {
+    if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::WHOLE_HBM) {
         this->EndPass();
     }
 

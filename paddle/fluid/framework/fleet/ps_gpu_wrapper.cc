@@ -928,7 +928,7 @@ void PSGPUWrapper::LoadIntoMemory(bool is_shuffle) {
 
   InitSlotInfo();
   gpu_graph_mode_ = dataset_->GetGpuGraphMode();
-  if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::whole_hbm) {
+  if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
     std::shared_ptr<HeterContext> gpu_task = gpu_task_pool_.Get();
     gpu_task->Reset();
     data_ready_channel_->Put(gpu_task);
@@ -1012,7 +1012,7 @@ void PSGPUWrapper::build_task() {
 
 void PSGPUWrapper::BeginPass() {
   platform::Timer timer;
-  if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::whole_hbm) {
+  if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::WHOLE_HBM) {
       return ;
   }
   timer.Start();
@@ -1040,7 +1040,7 @@ void PSGPUWrapper::BeginPass() {
 }
 
 void PSGPUWrapper::EndPass() {
-  if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::whole_hbm) {
+  if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::WHOLE_HBM) {
     return ;
   }
   platform::Timer timer;
@@ -1176,7 +1176,7 @@ void PSGPUWrapper::HbmToSparseTable() {
 }
 
 void PSGPUWrapper::DumpToMem() {
-  if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::whole_hbm) {
+  if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::WHOLE_HBM) {
     this->HbmToSparseTable();
   }
 }
