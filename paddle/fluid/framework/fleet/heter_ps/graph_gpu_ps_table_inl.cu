@@ -297,7 +297,7 @@ __global__ void fill_dvalues(uint64_t* d_shard_vals,
     d_actual_sample_size[idx[i]] = d_shard_actual_sample_size[i];
     size_t offset1 = idx[i] * sample_size;
     size_t offset2 = i * sample_size;
-    for (int j = 0; j < sample_size; j++) {
+    for (int j = 0; j < d_shard_actual_sample_size[i]; j++) {
       d_vals[offset1 + j] = d_shard_vals[offset2 + j];
     }
   }
