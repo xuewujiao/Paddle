@@ -1222,16 +1222,11 @@ int GraphDataGenerator::FillWalkBuf() {
     cudaMemsetAsync(d_node_cursor_ptr, 0, sizeof(uint64_t), sample_stream_);
     // uint64_t unused_key = std::numeric_limits<uint64_t>::max();
     table_->get_keys(d_uniq_node_ptr, d_node_cursor_ptr, sample_stream_);
-    uint64_t debug;
-    cudaMemcpyAsync(&debug,
-                    d_node_cursor_ptr,
-                    sizeof(uint64_t),
-                    cudaMemcpyDeviceToHost,
-                    sample_stream_);
 
     cudaStreamSynchronize(sample_stream_);
-    VLOG(2) << "table uniq len: " << debug;
+    
     host_vec_.resize(h_uniq_node_num);
+    VLOG(0) << "uniq node num: " << h_uniq_node_num;
     cudaMemcpyAsync(host_vec_.data(),
                     d_uniq_node_ptr,
                     sizeof(uint64_t) * h_uniq_node_num,
@@ -1346,8 +1341,7 @@ int GraphDataGenerator::FillWalkBuf() {
                       sample_stream_>>>(
           d_key_out_ptr, d_uniq_fea_ptr, d_uniq_fea_num_ptr, fea_num);
       host_vec_.resize(h_uniq_fea_num + h_uniq_node_num);
-      VLOG(0) << "uniq feature num: " << h_uniq_fea_num
-              << " uniq node num: " << h_uniq_node_num;
+      VLOG(0) << "uniq feature num: " << h_uniq_fea_num;
       cudaMemcpyAsync(host_vec_.data() + h_uniq_node_num,
                       d_uniq_fea_ptr,
                       sizeof(uint64_t) * h_uniq_fea_num,
@@ -1376,7 +1370,7 @@ void GraphDataGenerator::AllocResource(int thread_id,
 
   platform::CUDADeviceGuard guard(gpuid_);
   if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
-    table_capcity_ = once_sample_startid_len_ * repeat_time_ * 10;
+    table_capcity_ = once_sample_startid_len_ * repeat_time_ * 10 * 24;
     table_ = new HashTable<uint64_t, uint64_t>(
         table_capcity_ / FLAGS_gpugraph_hbm_table_load_factor);
   }
