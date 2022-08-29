@@ -916,6 +916,9 @@ class GraphDataGenerator {
                    int step,
                    int* len_per_row);
   int FillInsBuf();
+  int FillIdShowClkTensor(int total_instance, bool gpu_graph_training, size_t cursor = 0);
+  int FillGraphSlotFeature(int total_instance, bool gpu_graph_training);
+  int MakeInsPair();
   int GetPathNum() { return total_row_; }
   void SetDeviceKeys(std::vector<uint64_t>* device_keys, int type) {
     type_to_index_[type] = h_device_keys_.size();
