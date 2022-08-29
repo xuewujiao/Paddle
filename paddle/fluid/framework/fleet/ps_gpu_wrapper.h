@@ -36,6 +36,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/fleet/heter_context.h"
 #include "paddle/fluid/framework/fleet/heter_ps/heter_ps_base.h"
 #include "paddle/fluid/framework/fleet/heter_ps/heter_resource.h"
+#include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_wrapper.h"
 #include "paddle/fluid/framework/heter_util.h"
 #ifdef PADDLE_WITH_CUDA
 #include "paddle/fluid/framework/fleet/heter_ps/mem_pool.h"
@@ -63,6 +64,7 @@ limitations under the License. */
 #include "downpour_accessor.h"  // NOLINT
 #endif
 #include "paddle/fluid/framework/fleet/heter_ps/log_patch.h"
+DECLARE_int32(gpugraph_storage_mode);
 
 namespace paddle {
 namespace framework {
@@ -195,16 +197,25 @@ class PSGPUWrapper {
   void LoadIntoMemory(bool is_shuffle);
   void BeginPass();
   void EndPass();
+  void add_key_to_local(const std::vector<uint64_t> & keys);
+  void add_key_to_gputask(std::shared_ptr<HeterContext> gpu_task);
+  void SparseTableToHbm();
+  void HbmToSparseTable();
   void start_build_thread();
   void pre_build_thread();
   void build_pull_thread();
   void build_task();
+  void DumpToMem();
 
   void Finalize() {
     VLOG(3) << "PSGPUWrapper Begin Finalize.";
     if (s_instance_ == nullptr) {
       return;
     }
+    if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::WHOLE_HBM) {
+        this->EndPass();
+    }
+
     data_ready_channel_->Close();
     buildcpu_ready_channel_->Close();
     buildpull_ready_channel_->Close();
@@ -693,6 +704,7 @@ class PSGPUWrapper {
   int month_;
   int day_;
   bool slot_info_initialized_ = false;
+  bool hbm_sparse_table_initialized_ = false;
   int use_afs_api_ = 0;
   int optimizer_type_ = 1;
   std::string accessor_class_;
