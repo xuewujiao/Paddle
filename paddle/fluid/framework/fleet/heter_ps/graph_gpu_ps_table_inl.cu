@@ -168,6 +168,54 @@ __global__ void neighbor_sample_kernel(GpuPsCommGraph graph,
   }
 }
 
+__global__ void neighbor_sample_kernel2(GpuPsCommGraph graph,
+                                        GpuPsNodeInfo* node_info_list,
+                                        int* actual_size,
+                                        uint64_t* res,
+                                        int sample_len,
+                                        int n,
+                                        int default_value) {
+  curandState rng;
+  curand_init(blockIdx.x, threadIdx.x, 0, &rng);
+  const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < n) {
+    if (node_info_list[i].neighbor_size == 0) {
+      actual_size[i] = default_value;
+    } else {
+      int neighbor_len = (int)node_info_list[i].neighbor_size;
+      uint32_t data_offset = node_info_list[i].neighbor_offset;
+      int offset = i * sample_len;
+      uint64_t* data = graph.neighbor_list;
+      uint64_t tmp;
+      int split, begin;
+      if (neighbor_len <= sample_len) {
+        actual_size[i] = neighbor_len;
+        for (int j = 0; j < neighbor_len; j++) {
+          res[offset + j] = data[data_offset + j];
+        }
+      } else {
+        actual_size[i] = sample_len;
+        if (neighbor_len < 2 * sample_len) {
+          split = sample_len;
+          begin = 0;
+        } else {
+          split = neighbor_len - sample_len;
+          begin = neighbor_len - sample_len;
+        }
+        for (int idx = split; idx <= neighbor_len - 1; idx++) {
+          const int num = curand(&rng) % (idx + 1);
+          tmp = data[data_offset + num];
+          data[data_offset + num] = data[data_offset + idx];
+          data[data_offset + idx] = tmp;
+        }
+        for (int idx = 0; idx < sample_len; idx++) {
+          res[offset + idx] = data[data_offset + begin + idx];
+        }
+      }
+    }
+  }
+}
+
 int GpuPsGraphTable::init_cpu_table(
     const paddle::distributed::GraphParameter& graph) {
   cpu_graph_table_.reset(new paddle::distributed::GraphTable);
@@ -781,7 +829,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
     int* actual_size_array = (int*)(node_info_list + shard_len);
     uint64_t* sample_array =
         (uint64_t*)(actual_size_array + shard_len + shard_len % 2);
-    constexpr int WARP_SIZE = 32;
+    /*constexpr int WARP_SIZE = 32;
     constexpr int BLOCK_WARPS = 128 / WARP_SIZE;
     constexpr int TILE_SIZE = BLOCK_WARPS * 16;
     const dim3 block(WARP_SIZE, BLOCK_WARPS);
@@ -789,6 +837,15 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
 
     neighbor_sample_kernel<WARP_SIZE, BLOCK_WARPS, TILE_SIZE>
         <<<grid, block, 0, resource_->remote_stream(i, gpu_id)>>>(
+            graph,
+            node_info_list,
+            actual_size_array,
+            sample_array,
+            sample_size,
+            shard_len,
+            default_value);*/
+    neighbor_sample_kernel2<<<
+        grid_size, block_size_, 0, resource_->remote_stream(i, gpu_id)>>>(
             graph,
             node_info_list,
             actual_size_array,

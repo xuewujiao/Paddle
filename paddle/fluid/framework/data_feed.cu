@@ -226,13 +226,6 @@ __global__ void CopyDuplicateKeys(int64_t *dist_tensor,
   }
 }
 
-template <typename T>
-__global__ void ResetReindexTable(T* tensor, int64_t len) {
-  CUDA_KERNEL_LOOP(idx, len) {
-    tensor[idx] = -1;
-  }
-}
-
 int GraphDataGenerator::AcquireInstance(BufState *state) {
   //
   if (state->GetNextStep()) {
@@ -584,15 +577,12 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GetReindexResult(
 
   VLOG(2) << gpuid_ << ": ResetReindexTable With -1";
   // Fill table with -1.
-  ResetReindexTable<int64_t><<<
-      GET_BLOCKS(reindex_table_size_), CUDA_NUM_THREADS, 0, stream_>>>(
-          d_reindex_table_key_ptr, reindex_table_size_);
-  ResetReindexTable<int><<<
-      GET_BLOCKS(reindex_table_size_), CUDA_NUM_THREADS, 0, stream_>>>(
-          d_reindex_table_value_ptr, reindex_table_size_);
-  ResetReindexTable<int><<<
-      GET_BLOCKS(reindex_table_size_), CUDA_NUM_THREADS, 0, stream_>>>(
-          d_reindex_table_index_ptr, reindex_table_size_);
+  cudaMemsetAsync(d_reindex_table_key_ptr, -1, 
+                  reindex_table_size_ * sizeof(int64_t), stream_);
+  cudaMemsetAsync(d_reindex_table_value_ptr, -1,
+                  reindex_table_size_ * sizeof(int), stream_);
+  cudaMemsetAsync(d_reindex_table_index_ptr, -1,
+                  reindex_table_size_ * sizeof(int), stream_);
 
   VLOG(2) << gpuid_ << ": Alloc all_nodes";
   auto all_nodes =
@@ -605,6 +595,7 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GetReindexResult(
   cudaMemcpy(all_nodes_data + node_len, reindex_src_data, sizeof(int64_t) * neighbor_len,
              cudaMemcpyDeviceToDevice);
 
+  cudaStreamSynchronize(stream_);
   VLOG(2) << gpuid_ << ": Run phi::FillHashTable";
   auto final_nodes =
       phi::FillHashTable<int64_t, phi::GPUContext>(dev_ctx_, all_nodes_data,
