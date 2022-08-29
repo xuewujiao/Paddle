@@ -111,8 +111,6 @@ class GraphGpuWrapper {
                            int slot_num);
 
   void release_graph();
-  std::vector<uint64_t>& get_graph_total_keys();
-  std::vector<std::vector<uint64_t>>& get_graph_type_keys();
 
   std::unordered_map<std::string, int> edge_to_id, feature_to_id;
   std::vector<std::string> id_to_feature, id_to_edge;

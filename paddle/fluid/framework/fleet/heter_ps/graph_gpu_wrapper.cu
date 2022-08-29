@@ -458,16 +458,6 @@ void GraphGpuWrapper::release_graph() {
       ->cpu_graph_table_->release_graph();
 }
 
-std::vector<uint64_t> & GraphGpuWrapper::get_graph_total_keys() {
-  return ((GpuPsGraphTable *)graph_table)
-      ->cpu_graph_table_->graph_total_keys_;
-}
-
-std::vector<std::vector<uint64_t>> & GraphGpuWrapper::get_graph_type_keys() {
-  return ((GpuPsGraphTable *)graph_table)
-      ->cpu_graph_table_->graph_type_keys_;
-}
-
 #endif
 }  // namespace framework
 };  // namespace paddle
