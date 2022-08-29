@@ -462,8 +462,8 @@ void DatasetImpl<T>::LoadIntoMemory() {
       readers_[i]->SetGpuGraphMode(gpu_graph_mode_);
     }
 
-    if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::HBM) {
-    } else if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::CPU) {
+    if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::WHOLE_HBM) {
+    } else if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
       for (int64_t i = 0; i < thread_num_; ++i) {
         load_threads.push_back(std::thread(&paddle::framework::DataFeed::DoWalk,
                                            readers_[i].get()));

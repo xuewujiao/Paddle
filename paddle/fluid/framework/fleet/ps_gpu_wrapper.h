@@ -36,6 +36,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/fleet/heter_context.h"
 #include "paddle/fluid/framework/fleet/heter_ps/heter_ps_base.h"
 #include "paddle/fluid/framework/fleet/heter_ps/heter_resource.h"
+#include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_wrapper.h"
 #include "paddle/fluid/framework/heter_util.h"
 #ifdef PADDLE_WITH_CUDA
 #include "paddle/fluid/framework/fleet/heter_ps/mem_pool.h"
@@ -63,7 +64,7 @@ limitations under the License. */
 #include "downpour_accessor.h"  // NOLINT
 #endif
 #include "paddle/fluid/framework/fleet/heter_ps/log_patch.h"
-DECLARE_int32(gpugraph_sparse_table_storage_mode);
+DECLARE_int32(gpugraph_storage_mode);
 
 namespace paddle {
 namespace framework {
@@ -211,7 +212,7 @@ class PSGPUWrapper {
     if (s_instance_ == nullptr) {
       return;
     }
-    if (FLAGS_gpugraph_sparse_table_storage_mode == 0) {
+    if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::WHOLE_HBM) {
         this->EndPass();
     }
 
