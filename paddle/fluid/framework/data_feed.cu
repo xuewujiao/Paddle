@@ -483,8 +483,22 @@ int GraphDataGenerator::FillInsBuf() {
 
 std::vector<std::shared_ptr<phi::Allocation>> GraphDataGenerator::SampleNeighbors(
     int64_t* uniq_nodes, int len, int sample_size,
-    std::vector<int64_t>& edges_split_num, int64_t* neighbor_len) {
+    std::vector<int>& edges_split_num, int64_t* neighbor_len) {
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
+  auto edge_to_id = gpu_graph_ptr->edge_to_id;
+  std::vector<int> edge_to_id_;
+  for (auto& iter : edge_to_id) {
+    edge_to_id_.push_back(iter.second);
+  }
+  auto sample_res = gpu_graph_ptr->graph_neighbor_sample_all_edge_type(
+      gpuid_, edge_to_id_len_, (uint64_t*)(uniq_nodes), edge_to_id_,
+      edges_split_num, sample_size, len);
+  std::vector<std::shared_ptr<phi::Allocation>> sample_and_count;
+  sample_and_count.emplace_back(sample_res.actual_val_mem);
+  sample_and_count.emplace_back(sample_res.actual_sample_size_mem);
+  return sample_and_count;
+
+  /*
   auto edge_to_id = gpu_graph_ptr->edge_to_id;
   int64_t all_sample_size = 0;
   std::vector<std::shared_ptr<phi::Allocation>> concat_sample_val;
@@ -554,7 +568,7 @@ std::vector<std::shared_ptr<phi::Allocation>> GraphDataGenerator::SampleNeighbor
   std::vector<std::shared_ptr<phi::Allocation>> sample_and_count;
   sample_and_count.emplace_back(final_sample_val);
   sample_and_count.emplace_back(all_sample_count);
-  return sample_and_count;
+  return sample_and_count;*/
 }
 
 std::shared_ptr<phi::Allocation> GraphDataGenerator::GetReindexResult(
@@ -643,16 +657,16 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
   int uniq_len = uniq_nodes.numel();
   int len_samples = samples_.size();
 
-  int64_t *num_nodes_tensor_ptr_[len_samples];
-  int64_t *next_num_nodes_tensor_ptr_[len_samples];
+  int *num_nodes_tensor_ptr_[len_samples];
+  int *next_num_nodes_tensor_ptr_[len_samples];
   int64_t *edges_src_tensor_ptr_[len_samples];
   int64_t *edges_dst_tensor_ptr_[len_samples];
-  int64_t *edges_split_tensor_ptr_[len_samples];
+  int *edges_split_tensor_ptr_[len_samples];
 
   VLOG(2) << "Sample Neighbors and Reindex";
-  std::vector<int64_t> edges_split_num;
+  std::vector<int> edges_split_num;
   std::vector<std::shared_ptr<phi::Allocation>> final_nodes_vec;
-  std::vector<int64_t> final_nodes_len_vec;
+  std::vector<int> final_nodes_len_vec;
   for (int i = 0; i < len_samples; i++) {
 
     edges_split_num.clear();
@@ -702,22 +716,22 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
 
     int offset = 3 + 2 * slot_num_ + 5 * i;
     num_nodes_tensor_ptr_[i] =
-        feed_vec_[offset]->mutable_data<int64_t>({1}, this->place_);
+        feed_vec_[offset]->mutable_data<int>({1}, this->place_);
     next_num_nodes_tensor_ptr_[i] =
-        feed_vec_[offset + 1]->mutable_data<int64_t>({1}, this->place_);
+        feed_vec_[offset + 1]->mutable_data<int>({1}, this->place_);
     edges_src_tensor_ptr_[i] =
         feed_vec_[offset + 2]->mutable_data<int64_t>({neighbors_len, 1}, this->place_);
     edges_dst_tensor_ptr_[i] =
         feed_vec_[offset + 3]->mutable_data<int64_t>({neighbors_len, 1}, this->place_);
     edges_split_tensor_ptr_[i] =
-        feed_vec_[offset + 4]->mutable_data<int64_t>({edge_to_id_len_}, this->place_);
+        feed_vec_[offset + 4]->mutable_data<int>({edge_to_id_len_}, this->place_);
 
     cudaMemcpyAsync(num_nodes_tensor_ptr_[i], final_nodes_len_vec.data() + i,
-                    sizeof(int64_t), cudaMemcpyHostToDevice, stream_);
+                    sizeof(int), cudaMemcpyHostToDevice, stream_);
     cudaMemcpyAsync(next_num_nodes_tensor_ptr_[i], edges_split_num.data() + edge_to_id_len_,
-                    sizeof(int64_t), cudaMemcpyHostToDevice, stream_);
+                    sizeof(int), cudaMemcpyHostToDevice, stream_);
     cudaMemcpyAsync(edges_split_tensor_ptr_[i], edges_split_num.data(),
-                    sizeof(int64_t) * edge_to_id_len_, cudaMemcpyHostToDevice, stream_);
+                    sizeof(int) * edge_to_id_len_, cudaMemcpyHostToDevice, stream_);
     cudaMemcpyAsync(edges_src_tensor_ptr_[i], reindex_src_data,
                     sizeof(int64_t) * neighbors_len, cudaMemcpyDeviceToDevice, stream_);
     cudaMemcpyAsync(edges_dst_tensor_ptr_[i], reindex_dst_data,

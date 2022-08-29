@@ -139,6 +139,10 @@ class GpuPsGraphTable
                                                 int len,
                                                 bool cpu_query_switch,
                                                 bool compress);
+  NeighborSampleResultV2 graph_neighbor_sample_all_edge_type(
+      int gpu_id, int edge_type_len, uint64_t* key,
+      std::vector<int>& edge_to_id, std::vector<int>& edges_split,
+      int sample_size, int len);
 
   int get_feature_of_nodes(
       int gpu_id, uint64_t *d_walk, uint64_t *d_offset, int size, int slot_num);
@@ -155,6 +159,15 @@ class GpuPsGraphTable
                                  int *h_right,
                                  uint64_t *src_sample_res,
                                  int *actual_sample_size);
+  void move_result_to_source_gpu_all_edge_type(int gpu_id,
+                                               int gpu_num,
+                                               int sample_size,
+                                               int* h_left,
+                                               int* h_right,
+                                               uint64_t* src_sample_res,
+                                               int* actual_sample_size,
+                                               int edge_type_len,
+                                               int len);
   int init_cpu_table(const paddle::distributed::GraphParameter &graph);
 
   int gpu_num;
