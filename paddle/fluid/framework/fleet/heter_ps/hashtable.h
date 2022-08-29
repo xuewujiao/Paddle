@@ -158,6 +158,11 @@ class HashTable {
 
   template <typename StreamType>
   void dump_to_cpu(int devid, StreamType stream);
+  
+  template <typename StreamType>
+  void get_keys(KeyType* d_out,
+                uint64_t* global_cursor,
+                StreamType stream);
 
 #if defined(PADDLE_WITH_CUDA)
 

@@ -880,6 +880,9 @@ struct BufState {
 
   int GetNextBatch() {
     cursor += len;
+    if (row_num - cursor < 0 ) {
+      return 0;
+    }
     int tmp_len = cursor + batch_size > row_num ? row_num - cursor : batch_size;
     if (tmp_len == 0) {
       return 0;
@@ -951,6 +954,7 @@ class GraphDataGenerator {
   std::vector<std::shared_ptr<phi::Allocation>> d_device_keys_;
 
   std::shared_ptr<phi::Allocation> d_walk_;
+  std::shared_ptr<phi::Allocation> d_feature_list_;
   std::shared_ptr<phi::Allocation> d_feature_;
   std::shared_ptr<phi::Allocation> d_len_per_row_;
   std::shared_ptr<phi::Allocation> d_random_row_;

@@ -39,6 +39,11 @@ namespace framework {
   for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < (n); \
        i += blockDim.x * gridDim.x)
 
+#define DEBUG_STATE(state)                                             \
+  VLOG(2) << "left: " << state->left << " right: " << state->right     \
+          << " central_word: " << state->central_word                  \
+          << " step: " << state->step << " cursor: " << state->cursor  \
+          << " len: " << state->len << " row_num: " << state->row_num; \
 // CUDA: use 512 threads per block
 const int CUDA_NUM_THREADS = 512;
 // CUDA: number of blocks for threads.
@@ -211,13 +216,13 @@ __global__ void CopyDuplicateKeys(int64_t *dist_tensor,
 int GraphDataGenerator::AcquireInstance(BufState *state) {
   //
   if (state->GetNextStep()) {
-    state->Debug();
+    DEBUG_STATE(state);
     return state->len;
   } else if (state->GetNextCentrolWord()) {
-    state->Debug();
+    DEBUG_STATE(state);
     return state->len;
   } else if (state->GetNextBatch()) {
-    state->Debug();
+    DEBUG_STATE(state);
     return state->len;
   }
   return 0;
@@ -515,7 +520,6 @@ int GraphDataGenerator::MakeInsPair() {
     for (int xx = 0; xx < 2 * ins_buf_pair_len_; xx++) {
       VLOG(2) << "h_ins_buf[" << xx << "]: " << h_ins_buf[xx];
     }
-    delete[] h_ins_buf;
   }
   return ins_buf_pair_len_;
 }
@@ -597,7 +601,6 @@ int GraphDataGenerator::GenerateBatch() {
   if (slot_num_ > 0) {
     FillGraphSlotFeature(total_instance, gpu_graph_training_);
   }
-
   offset_.clear();
   offset_.push_back(0);
   offset_.push_back(total_instance);
@@ -679,6 +682,66 @@ __global__ void GraphFillFirstStepKernel(int *prefix_sum,
   }
 }
 
+__global__ void GetUniqueFeaNum(uint64_t *d_in,
+                                uint64_t *unique_num,
+                                size_t len) {
+  const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  __shared__ uint64_t local_num;
+  if (threadIdx.x == 0) {
+    local_num = 0;
+  }
+  __syncthreads();
+
+  if (i < len - 1) {
+    if (d_in[i] != d_in[i + 1]) {
+      atomicAdd(&local_num, 1);
+    }
+  }
+  if (i == len - 1) {
+    atomicAdd(&local_num, 1);
+  }
+
+  __syncthreads();
+  if (threadIdx.x == 0) {
+    atomicAdd(unique_num, local_num);
+  }
+}
+
+__global__ void UniqueFeature(uint64_t *d_in,
+                              uint64_t *d_out,
+                              uint64_t *unique_num,
+                              size_t len) {
+  const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  __shared__ uint64_t local_key[CUDA_NUM_THREADS];
+  __shared__ uint64_t local_num;
+  __shared__ uint64_t global_num;
+  if (threadIdx.x == 0) {
+    local_num = 0;
+  }
+  __syncthreads();
+
+  if (i < len - 1) {
+    if (d_in[i] != d_in[i + 1]) {
+      size_t dst = atomicAdd(&local_num, 1);
+      local_key[dst] = d_in[i];
+    }
+  }
+  if (i == len - 1) {
+    size_t dst = atomicAdd(&local_num, 1);
+    local_key[dst] = d_in[i];
+  }
+
+  __syncthreads();
+
+  if (threadIdx.x == 0) {
+    global_num = atomicAdd(unique_num, local_num);
+  }
+  __syncthreads();
+
+  if (threadIdx.x < local_num) {
+    d_out[global_num + threadIdx.x] = local_key[threadIdx.x];
+  }
+}
 // Fill sample_res to the stepth column of walk
 void GraphDataGenerator::FillOneStep(uint64_t *d_start_ids,
                                      uint64_t *walk,
@@ -762,7 +825,6 @@ void GraphDataGenerator::FillOneStep(uint64_t *d_start_ids,
     int *h_prefix_sum = new int[len + 1];
     int *h_actual_size = new int[len];
     int *h_offset2idx = new int[once_max_sample_keynum];
-    uint64_t h_sample_keys[once_max_sample_keynum];
     cudaMemcpy(h_offset2idx,
                d_tmp_sampleidx2row,
                once_max_sample_keynum * sizeof(int),
@@ -781,7 +843,6 @@ void GraphDataGenerator::FillOneStep(uint64_t *d_start_ids,
     delete[] h_prefix_sum;
     delete[] h_actual_size;
     delete[] h_offset2idx;
-    delete[] h_sample_keys;
   }
   cudaStreamSynchronize(sample_stream_);
   cur_sampleidx2row_ = 1 - cur_sampleidx2row_;
@@ -1033,15 +1094,171 @@ int GraphDataGenerator::FillWalkBuf() {
     delete[] h_prefix_sum;
   }
   if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
-    table_->prefetch(cudaCpuDeviceId, sample_stream_);
-    thrust::pair<uint64_t, uint64_t> *kv = table_->data();
-    size_t size = table_->size();
-    uint64_t unused_key = std::numeric_limits<uint64_t>::max();
-    for (size_t i = 0; i < size; i++) {
-      if (kv[i].first == unused_key) {
-        continue;
+    // table_->prefetch(cudaCpuDeviceId, sample_stream_);
+    // thrust::pair<uint64_t, uint64_t> *kv = table_->data();
+    // size_t size = table_->size();
+    // uint64_t unused_key = std::numeric_limits<uint64_t>::max();
+    // for (size_t i = 0; i < size; i++) {
+    //   if (kv[i].first == unused_key) {
+    //     continue;
+    //   }
+    //   host_vec_.push_back(kv[i].first);
+    // }
+
+    uint64_t h_uniq_node_num = 0;
+    uint64_t *d_uniq_node_num =
+        reinterpret_cast<uint64_t *>(d_uniq_node_num_->ptr());
+    cudaMemcpyAsync(&h_uniq_node_num,
+                    d_uniq_node_num,
+                    sizeof(uint64_t),
+                    cudaMemcpyDeviceToHost,
+                    sample_stream_);
+    cudaStreamSynchronize(sample_stream_);
+    VLOG(2) << "h_uniq_node_num: " << h_uniq_node_num;
+    // 临时显存, 存储去重后的nodeid
+    auto d_uniq_node = memory::AllocShared(
+        place_,
+        h_uniq_node_num * sizeof(uint64_t),
+        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+    uint64_t *d_uniq_node_ptr =
+        reinterpret_cast<uint64_t *>(d_uniq_node->ptr());
+
+    auto d_node_cursor = memory::AllocShared(
+        place_,
+        sizeof(uint64_t),
+        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+
+    uint64_t *d_node_cursor_ptr =
+        reinterpret_cast<uint64_t *>(d_node_cursor->ptr());
+    cudaMemsetAsync(d_node_cursor_ptr, 0, sizeof(uint64_t), sample_stream_);
+    // uint64_t unused_key = std::numeric_limits<uint64_t>::max();
+    table_->get_keys(d_uniq_node_ptr, d_node_cursor_ptr, sample_stream_);
+
+    cudaStreamSynchronize(sample_stream_);
+    
+    host_vec_.resize(h_uniq_node_num);
+    VLOG(0) << "uniq node num: " << h_uniq_node_num;
+    cudaMemcpyAsync(host_vec_.data(),
+                    d_uniq_node_ptr,
+                    sizeof(uint64_t) * h_uniq_node_num,
+                    cudaMemcpyDeviceToHost,
+                    sample_stream_);
+    cudaStreamSynchronize(sample_stream_);
+    VLOG(2) << "slot_num: " << slot_num_;
+    if (slot_num_ > 0) {
+      VLOG(2) << "uniq feature";
+      uint64_t fea_num = h_uniq_node_num * slot_num_;
+      d_feature_list_ = memory::AllocShared(
+          place_,
+          fea_num * sizeof(uint64_t),
+          phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+      uint64_t *d_feature_list_ptr =
+          reinterpret_cast<uint64_t *>(d_feature_list_->ptr());
+      int ret = gpu_graph_ptr->get_feature_of_nodes(gpuid_,
+                                                    d_uniq_node_ptr,
+                                                    d_feature_list_ptr,
+                                                    h_uniq_node_num,
+                                                    slot_num_);
+
+      // 存储排序后的feature
+      auto d_key_out = memory::AllocShared(
+          place_,
+          fea_num * sizeof(uint64_t),
+          phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+
+      uint64_t *d_key_out_ptr = reinterpret_cast<uint64_t *>(d_key_out->ptr());
+
+      // 对feature进行排序
+      size_t temp_storage_bytes = 0;
+      cub::DeviceRadixSort::SortKeys(NULL,
+                                     temp_storage_bytes,
+                                     d_feature_list_ptr,
+                                     d_key_out_ptr,
+                                     fea_num,
+                                     0,
+                                     sizeof(uint64_t) * 8,
+                                     sample_stream_);
+
+      VLOG(2) << "fea_num: " << fea_num
+              << " temp_storage_bytes: " << temp_storage_bytes;
+      auto d_temp_storage = memory::Alloc(
+          place_,
+          temp_storage_bytes,
+          phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+      cub::DeviceRadixSort::SortKeys(d_temp_storage->ptr(),
+                                     temp_storage_bytes,
+                                     d_feature_list_ptr,
+                                     d_key_out_ptr,
+                                     fea_num,
+                                     0,
+                                     sizeof(uint64_t) * 8,
+                                     sample_stream_);
+
+      // 对feature去重
+      auto d_uniq_fea_num = memory::AllocShared(
+          place_,
+          sizeof(uint64_t),
+          phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+      uint64_t *d_uniq_fea_num_ptr =
+          reinterpret_cast<uint64_t *>(d_uniq_fea_num->ptr());
+      cudaMemsetAsync(d_uniq_fea_num_ptr, 0, sizeof(uint64_t), sample_stream_);
+      if (debug_mode_) {
+        uint64_t *h_sort_fea = new uint64_t[fea_num];
+        uint64_t *h_fea = new uint64_t[fea_num];
+
+        cudaMemcpy(h_fea,
+                   d_feature_list_ptr,
+                   fea_num * sizeof(uint64_t),
+                   cudaMemcpyDeviceToHost);
+        cudaMemcpy(h_sort_fea,
+                   d_key_out_ptr,
+                   fea_num * sizeof(uint64_t),
+                   cudaMemcpyDeviceToHost);
+        for (int xx = 0; xx < fea_num; xx++) {
+          VLOG(2) << "h_fea[" << xx << "]: " << h_fea[xx];
+        }
+        for (int xx = 0; xx < fea_num; xx++) {
+          VLOG(2) << "h_sort_fea[" << xx << "]: " << h_sort_fea[xx];
+        }
+        delete[] h_sort_fea;
+        delete[] h_fea;
       }
-      host_vec_.push_back(kv[i].first);
+      // 统计去重后的feature数量
+      GetUniqueFeaNum<<<GET_BLOCKS(fea_num),
+                        CUDA_NUM_THREADS,
+                        0,
+                        sample_stream_>>>(
+          d_key_out_ptr, d_uniq_fea_num_ptr, fea_num);
+      uint64_t h_uniq_fea_num;
+      cudaMemcpyAsync(&h_uniq_fea_num,
+                      d_uniq_fea_num_ptr,
+                      sizeof(uint64_t),
+                      cudaMemcpyDeviceToHost,
+                      sample_stream_);
+      cudaStreamSynchronize(sample_stream_);
+
+      cudaMemsetAsync(d_uniq_fea_num_ptr, 0, sizeof(uint64_t), sample_stream_);
+      auto d_uniq_fea = memory::AllocShared(
+          place_,
+          h_uniq_fea_num * sizeof(uint64_t),
+          phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+      uint64_t *d_uniq_fea_ptr =
+          reinterpret_cast<uint64_t *>(d_uniq_fea->ptr());
+
+      // 去重
+      UniqueFeature<<<GET_BLOCKS(fea_num),
+                      CUDA_NUM_THREADS,
+                      0,
+                      sample_stream_>>>(
+          d_key_out_ptr, d_uniq_fea_ptr, d_uniq_fea_num_ptr, fea_num);
+      host_vec_.resize(h_uniq_fea_num + h_uniq_node_num);
+      VLOG(0) << "uniq feature num: " << h_uniq_fea_num;
+      cudaMemcpyAsync(host_vec_.data() + h_uniq_node_num,
+                      d_uniq_fea_ptr,
+                      sizeof(uint64_t) * h_uniq_fea_num,
+                      cudaMemcpyDeviceToHost,
+                      sample_stream_);
+      cudaStreamSynchronize(sample_stream_);
     }
   }
   return total_row_ != 0;
@@ -1064,17 +1281,18 @@ void GraphDataGenerator::AllocResource(int thread_id,
 
   platform::CUDADeviceGuard guard(gpuid_);
   if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
-    table_capcity_ = once_sample_startid_len_ * repeat_time_ * 10;
+    table_capcity_ = once_sample_startid_len_ * repeat_time_ * 10 * 24;
     table_ = new HashTable<uint64_t, uint64_t>(
         table_capcity_ / FLAGS_gpugraph_hbm_table_load_factor);
   }
-  VLOG(2) << "AllocResource gpuid " << gpuid_;
+  VLOG(2) << "AllocResource gpuid " << gpuid_
+          << " feed_vec.size: " << feed_vec.size();
   sample_stream_ = gpu_graph_ptr->get_local_stream(gpuid_);
   train_stream_ = dynamic_cast<phi::GPUContext *>(
                       platform::DeviceContextPool::Instance().Get(place_))
                       ->stream();
   // feed_vec_ = feed_vec;
-  slot_num_ = (feed_vec_.size() - 3) / 2;
+  slot_num_ = (feed_vec.size() - 3) / 2;
 
   VLOG(2) << "h_device_keys size: " << h_device_keys_.size();
   // infer_node_type_start_ = std::vector<int>(h_device_keys_.size(), 0);

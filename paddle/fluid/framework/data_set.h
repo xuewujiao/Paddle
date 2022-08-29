@@ -275,8 +275,10 @@ class DatasetImpl : public Dataset {
       return multi_consume_channel_;
     }
   }
-  std::vector<uint64_t>& GetGpuGraphTotalKeys();
   Channel<T>& GetInputChannelRef() { return input_channel_; }
+  std::vector<uint64_t>& GetGpuGraphTotalKeys() {
+    return gpu_graph_total_keys_;
+  }
 
  protected:
   virtual int ReceiveFromClient(int msg_type,

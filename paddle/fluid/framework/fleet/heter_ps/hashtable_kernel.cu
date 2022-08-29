@@ -167,6 +167,41 @@ __global__ void dy_mf_update_kernel(Table* table,
   }
 }
 
+template <typename Table>
+__global__ void get_keys_kernel(Table* table,
+                                typename Table::key_type* d_out,
+                                uint64_t* global_cursor,
+                                uint64_t unused_key) {
+  extern __shared__ typename Table::key_type local_key[];
+  __shared__ uint64_t local_num;
+  __shared__ uint64_t global_num;
+
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (threadIdx.x == 0) {
+    local_num = 0;
+  }
+  __syncthreads();
+  uint64_t len = table->size();
+  if (idx < len) {
+    typename Table::value_type val = *(table->data() + idx);
+    if (val.first != unused_key) {
+      uint64_t dst = atomicAdd(&local_num, 1);
+      local_key[dst] = val.first;
+    }
+  }
+
+  __syncthreads();
+
+  if (threadIdx.x == 0) {
+    global_num = atomicAdd(global_cursor, local_num);
+  }
+  __syncthreads();
+
+  if (threadIdx.x < local_num) {
+    d_out[global_num + threadIdx.x] = local_key[threadIdx.x];
+  }
+}
+
 template <typename KeyType, typename ValType>
 HashTable<KeyType, ValType>::HashTable(size_t capacity) {
   container_ = new TableContainer<KeyType, ValType>(capacity);
@@ -266,6 +301,20 @@ void HashTable<KeyType, ValType>::insert(const KeyType* d_keys,
   insert_kernel<<<grid_size, BLOCK_SIZE_, 0, stream>>>(
       container_, d_keys, d_vals, len);
 }
+
+template <typename KeyType, typename ValType>
+template <typename StreamType>
+void HashTable<KeyType, ValType>::get_keys(KeyType* d_out,
+                                           uint64_t* global_cursor,
+                                           StreamType stream) {
+  size_t len = container_->size();
+  const int grid_size = (len - 1) / BLOCK_SIZE_ + 1;
+  KeyType unuse_key = std::numeric_limits<KeyType>::max();
+  size_t shared_mem_size = sizeof(KeyType) * BLOCK_SIZE_;
+  get_keys_kernel<<<grid_size, BLOCK_SIZE_, shared_mem_size, stream>>>(
+      container_, d_out, global_cursor, unuse_key);
+}
+
 
 template <typename KeyType, typename ValType>
 template <typename StreamType>
@@ -477,6 +526,11 @@ template void HashTable<long, unsigned int>::insert<cudaStream_t>(
     const unsigned int* d_vals,
     size_t len,
     cudaStream_t stream);
+
+template void HashTable<unsigned long, unsigned long>::get_keys<cudaStream_t>(
+                unsigned long* d_out,
+                unsigned long* global_cursor,
+                cudaStream_t stream);
 
 template void HashTable<unsigned long, unsigned long>::insert<cudaStream_t>(
     const unsigned long* d_keys,

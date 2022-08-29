@@ -447,13 +447,6 @@ void MultiSlotDataset::PrepareTrain() {
   return;
 }
 
-template <typename T>
-std::vector<uint64_t>& DatasetImpl<T>::GetGpuGraphTotalKeys() {
-#ifdef PADDLE_WITH_PSCORE
-  return GraphGpuWrapper::GetInstance()->get_graph_total_keys();
-#endif
-}
-
 // load data into memory, Dataset hold this memory,
 // which will later be fed into readers' channel
 template <typename T>
