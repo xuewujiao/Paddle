@@ -335,7 +335,7 @@ void PSGPUWrapper::PreBuildTask(std::shared_ptr<HeterContext> gpu_task) {
     VLOG(0) << "PreBuild in GpuGraph mode";
     SlotRecordDataset* dataset = (SlotRecordDataset*)(dataset_);
     const std::vector<uint64_t>& vec_data = dataset->GetGpuGraphTotalKeys();
-    VLOG(0) << "GpuGraphTotalKeys: " << total_len;
+    VLOG(0) << "GpuGraphTotalKeys: " << vec_data.size();
     add_key_to_local(vec_data);
   }
 

@@ -1264,8 +1264,14 @@ int GraphDataGenerator::FillWalkBuf() {
 
       // 对feature进行排序
       size_t temp_storage_bytes = 0;
-      cub::DeviceRadixSort::SortKeys(
-          NULL, temp_storage_bytes, d_feature_list_ptr, d_key_out_ptr, fea_num);
+      cub::DeviceRadixSort::SortKeys(NULL,
+                                     temp_storage_bytes,
+                                     d_feature_list_ptr,
+                                     d_key_out_ptr,
+                                     fea_num,
+                                     0,
+                                     sizeof(uint64_t) * 8,
+                                     sample_stream_);
 
       VLOG(2) << "fea_num: " << fea_num
               << " temp_storage_bytes: " << temp_storage_bytes;
@@ -1277,7 +1283,10 @@ int GraphDataGenerator::FillWalkBuf() {
                                      temp_storage_bytes,
                                      d_feature_list_ptr,
                                      d_key_out_ptr,
-                                     fea_num);
+                                     fea_num,
+                                     0,
+                                     sizeof(uint64_t) * 8,
+                                     sample_stream_);
 
       // 对feature去重
       auto d_uniq_fea_num = memory::AllocShared(
@@ -1287,7 +1296,27 @@ int GraphDataGenerator::FillWalkBuf() {
       uint64_t *d_uniq_fea_num_ptr =
           reinterpret_cast<uint64_t *>(d_uniq_fea_num->ptr());
       cudaMemsetAsync(d_uniq_fea_num_ptr, 0, sizeof(uint64_t), sample_stream_);
+      if (debug_mode_) {
+        uint64_t *h_sort_fea = new uint64_t[fea_num];
+        uint64_t *h_fea = new uint64_t[fea_num];
 
+        cudaMemcpy(h_fea,
+                   d_feature_list_ptr,
+                   fea_num * sizeof(uint64_t),
+                   cudaMemcpyDeviceToHost);
+        cudaMemcpy(h_sort_fea,
+                   d_key_out_ptr,
+                   fea_num * sizeof(uint64_t),
+                   cudaMemcpyDeviceToHost);
+        for (int xx = 0; xx < fea_num; xx++) {
+          VLOG(2) << "h_fea[" << xx << "]: " << h_fea[xx];
+        }
+        for (int xx = 0; xx < fea_num; xx++) {
+          VLOG(2) << "h_sort_fea[" << xx << "]: " << h_sort_fea[xx];
+        }
+        delete[] h_sort_fea;
+        delete[] h_fea;
+      }
       // 统计去重后的feature数量
       GetUniqueFeaNum<<<GET_BLOCKS(fea_num),
                         CUDA_NUM_THREADS,
@@ -1317,9 +1346,11 @@ int GraphDataGenerator::FillWalkBuf() {
                       sample_stream_>>>(
           d_key_out_ptr, d_uniq_fea_ptr, d_uniq_fea_num_ptr, fea_num);
       host_vec_.resize(h_uniq_fea_num + h_uniq_node_num);
+      VLOG(0) << "uniq feature num: " << h_uniq_fea_num
+              << " uniq node num: " << h_uniq_node_num;
       cudaMemcpyAsync(host_vec_.data() + h_uniq_node_num,
-                      d_uniq_node_ptr,
-                      sizeof(uint64_t) * h_uniq_node_num,
+                      d_uniq_fea_ptr,
+                      sizeof(uint64_t) * h_uniq_fea_num,
                       cudaMemcpyDeviceToHost,
                       sample_stream_);
       cudaStreamSynchronize(sample_stream_);
