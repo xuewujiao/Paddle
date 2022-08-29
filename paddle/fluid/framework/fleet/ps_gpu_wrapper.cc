@@ -41,6 +41,7 @@ limitations under the License. */
 #endif
 
 DECLARE_int32(gpugraph_dedup_pull_push_mode);
+DECLARE_int32(gpugraph_storage_mode);
 
 namespace paddle {
 namespace framework {
@@ -928,7 +929,7 @@ void PSGPUWrapper::LoadIntoMemory(bool is_shuffle) {
 
   InitSlotInfo();
   gpu_graph_mode_ = dataset_->GetGpuGraphMode();
-  if (FLAGS_gpugraph_sparse_table_storage_mode != 0) {
+  if (FLAGS_gpugraph_storage_mode != 0) {
     std::shared_ptr<HeterContext> gpu_task = gpu_task_pool_.Get();
     gpu_task->Reset();
     data_ready_channel_->Put(gpu_task);
