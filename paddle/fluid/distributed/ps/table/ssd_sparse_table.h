@@ -38,7 +38,10 @@ class SSDSparseTable : public MemorySparseTable {
   int32_t Push(TableContext& context) override;
 
   int32_t PullSparse(float* pull_values, const uint64_t* keys, size_t num);
-  int32_t PullSparsePtr(char** pull_values, const uint64_t* keys, size_t num);
+  int32_t PullSparsePtr(int shard_id,
+                        char** pull_values,
+                        const uint64_t* keys,
+                        size_t num);
   int32_t PushSparse(const uint64_t* keys, const float* values, size_t num);
   int32_t PushSparse(const uint64_t* keys, const float** values, size_t num);
 

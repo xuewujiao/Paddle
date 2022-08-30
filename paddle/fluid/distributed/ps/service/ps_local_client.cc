@@ -260,7 +260,8 @@ int32_t PsLocalClient::Initialize() {
 //  return done();
 //}
 
-::std::future<int32_t> PsLocalClient::PullSparsePtr(char** select_values,
+::std::future<int32_t> PsLocalClient::PullSparsePtr(int shard_id,
+                                                    char** select_values,
                                                     size_t table_id,
                                                     const uint64_t* keys,
                                                     size_t num) {
@@ -278,6 +279,7 @@ int32_t PsLocalClient::Initialize() {
   table_context.pull_context.ptr_values = select_values;
   table_context.use_ptr = true;
   table_context.num = num;
+  table_context.shard_id = shard_id;
 
   //  table_ptr->PullSparsePtr(select_values, keys, num);
   table_ptr->Pull(table_context);
