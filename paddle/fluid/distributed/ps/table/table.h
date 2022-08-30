@@ -62,6 +62,7 @@ struct TableContext {
   size_t num;
   bool use_ptr = false;
   uint32_t trainer_id;  // for GEO and global step
+  int shard_id;         // for gpups
 };
 
 class Table {

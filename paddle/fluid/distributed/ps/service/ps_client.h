@@ -148,7 +148,8 @@ class PSClient {
     return fut;
   }
 
-  virtual ::std::future<int32_t> PullSparsePtr(char **select_values,
+  virtual ::std::future<int32_t> PullSparsePtr(int shard_id,
+                                               char **select_values,
                                                size_t table_id,
                                                const uint64_t *keys,
                                                size_t num) {

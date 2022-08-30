@@ -25,6 +25,8 @@ DECLARE_bool(pserver_create_value_when_push);
 DECLARE_bool(pserver_enable_create_feasign_randomly);
 DEFINE_bool(pserver_open_strict_check, false, "pserver_open_strict_check");
 DEFINE_string(rocksdb_path, "database", "path of sparse table rocksdb file");
+// DEFINE_string(rocksdb_path, "/raid0/database", "path of sparse table rocksdb
+// file");
 DEFINE_int32(pserver_load_batch_size, 5000, "load batch size for ssd");
 
 namespace paddle {
@@ -45,7 +47,7 @@ int32_t SSDSparseTable::Pull(TableContext& context) {
   if (context.use_ptr) {
     char** pull_values = context.pull_context.ptr_values;
     const uint64_t* keys = context.pull_context.keys;
-    return PullSparsePtr(pull_values, keys, context.num);
+    return PullSparsePtr(context.shard_id, pull_values, keys, context.num);
   } else {
     float* pull_values = context.pull_context.values;
     const PullSparseValue& pull_value = context.pull_context.pull_value;
@@ -172,8 +174,9 @@ int32_t SSDSparseTable::PullSparse(float* pull_values,
   return 0;
 }
 
-int32_t SSDSparseTable::PullSparsePtr(char** pull_values,
-                                      const uint64_t* keys,
+int32_t SSDSparseTable::PullSparsePtr(int shard_id,
+                                      char** pull_values,
+                                      const uint64_t* pull_keys,
                                       size_t num) {
   CostTimer timer("pserver_ssd_sparse_select_all");
   size_t value_size = _value_accesor->GetAccessorInfo().size / sizeof(float);
@@ -181,81 +184,128 @@ int32_t SSDSparseTable::PullSparsePtr(char** pull_values,
       _value_accesor->GetAccessorInfo().mf_size / sizeof(float);
 
   {  // 从table取值 or create
-    std::vector<std::future<int>> tasks(_real_local_shard_num);
-    std::vector<std::vector<std::pair<uint64_t, int>>> task_keys(
-        _real_local_shard_num);
-    for (size_t i = 0; i < num; ++i) {
-      int shard_id = (keys[i] % _sparse_table_shard_num) % _avg_local_shard_num;
-      task_keys[shard_id].push_back({keys[i], i});
-    }
+    RocksDBCtx context;
+    std::vector<std::future<int>> tasks;
+    RocksDBItem* cur_ctx = context.switch_item();
+    cur_ctx->reset();
+    FixedFeatureValue* ret = NULL;
+    auto& local_shard = _local_shards[shard_id];
+    float data_buffer[value_size];
+    float* data_buffer_ptr = data_buffer;
 
-    std::atomic<uint32_t> missed_keys{0};
-    for (int shard_id = 0; shard_id < _real_local_shard_num; ++shard_id) {
-      tasks[shard_id] =
+    for (int i = 0; i < num; ++i) {
+      uint64_t key = pull_keys[i];
+      auto itr = local_shard.find(key);
+      if (itr == local_shard.end()) {
+        cur_ctx->batch_index.push_back(i);
+        cur_ctx->batch_keys.push_back(
+            rocksdb::Slice((char*)&(pull_keys[i]), sizeof(uint64_t)));
+        if (cur_ctx->batch_keys.size() == 1024) {
+          cur_ctx->batch_values.resize(cur_ctx->batch_keys.size());
+          cur_ctx->status.resize(cur_ctx->batch_keys.size());
+          auto fut =
+              _shards_task_pool[shard_id % _shards_task_pool.size()]->enqueue(
+                  [this, shard_id, cur_ctx]() -> int {
+                    _db->multi_get(shard_id,
+                                   cur_ctx->batch_keys.size(),
+                                   cur_ctx->batch_keys.data(),
+                                   cur_ctx->batch_values.data(),
+                                   cur_ctx->status.data());
+                    return 0;
+                  });
+          cur_ctx = context.switch_item();
+          for (size_t x = 0; x < tasks.size(); ++x) {
+            tasks[x].wait();
+            for (size_t idx = 0; idx < cur_ctx->status.size(); idx++) {
+              uint64_t cur_key = *((uint64_t*)const_cast<char*>(
+                  cur_ctx->batch_keys[idx].data()));
+              if (cur_ctx->status[idx].IsNotFound()) {
+                auto& feature_value = local_shard[cur_key];
+                int init_size = value_size - mf_value_size;
+                feature_value.resize(init_size);
+                _value_accesor->Create(&data_buffer_ptr, 1);
+                memcpy(const_cast<float*>(feature_value.data()),
+                       data_buffer_ptr,
+                       init_size * sizeof(float));
+                ret = &feature_value;
+              } else {
+                int data_size =
+                    cur_ctx->batch_values[idx].size() / sizeof(float);
+                // from rocksdb to mem
+                auto& feature_value = local_shard[cur_key];
+                feature_value.resize(data_size);
+                memcpy(const_cast<float*>(feature_value.data()),
+                       paddle::string::str_to_float(
+                           cur_ctx->batch_values[idx].data()),
+                       data_size * sizeof(float));
+                _db->del_data(shard_id, (char*)&cur_key, sizeof(uint64_t));
+                ret = &feature_value;
+              }
+              // pull时，内存和ssd里使用到的feasign均修正show、click和unseenday
+              int pull_data_idx = cur_ctx->batch_index[idx];
+              pull_values[pull_data_idx] = (char*)ret;
+            }
+          }
+          cur_ctx->reset();
+          tasks.clear();
+          tasks.push_back(std::move(fut));
+        }
+      } else {
+        ret = itr.value_ptr();
+        // pull时，内存和ssd里使用到的feasign均修正show、click和unseenday
+        // int pull_data_idx = keys[i].second;
+        pull_values[i] = (char*)ret;
+      }
+    }
+    if (cur_ctx->batch_keys.size() != 0) {
+      cur_ctx->batch_values.resize(cur_ctx->batch_keys.size());
+      cur_ctx->status.resize(cur_ctx->batch_keys.size());
+      auto fut =
           _shards_task_pool[shard_id % _shards_task_pool.size()]->enqueue(
-              [this,
-               shard_id,
-               &task_keys,
-               value_size,
-               mf_value_size,
-               pull_values,
-               &missed_keys]() -> int {
-                auto& keys = task_keys[shard_id];
-                auto& local_shard = _local_shards[shard_id];
-                float data_buffer[value_size];  // NOLINT
-                float* data_buffer_ptr = data_buffer;
-                for (size_t i = 0; i < keys.size(); ++i) {
-                  uint64_t key = keys[i].first;
-                  auto itr = local_shard.find(key);
-                  size_t data_size = value_size - mf_value_size;
-                  FixedFeatureValue* ret = NULL;
-                  if (itr == local_shard.end()) {
-                    // pull rocksdb
-                    std::string tmp_string("");
-                    if (_db->get(shard_id,
-                                 reinterpret_cast<char*>(&key),
-                                 sizeof(uint64_t),
-                                 tmp_string) > 0) {
-                      ++missed_keys;
-                      auto& feature_value = local_shard[key];
-                      feature_value.resize(data_size);
-                      float* data_ptr =
-                          const_cast<float*>(feature_value.data());
-                      _value_accesor->Create(&data_buffer_ptr, 1);
-                      memcpy(
-                          data_ptr, data_buffer_ptr, data_size * sizeof(float));
-                      ret = &feature_value;
-                    } else {
-                      data_size = tmp_string.size() / sizeof(float);
-                      memcpy(data_buffer_ptr,
-                             paddle::string::str_to_float(tmp_string),
-                             data_size * sizeof(float));
-                      // from rocksdb to mem
-                      auto& feature_value = local_shard[key];
-                      feature_value.resize(data_size);
-                      memcpy(const_cast<float*>(feature_value.data()),
-                             data_buffer_ptr,
-                             data_size * sizeof(float));
-                      _db->del_data(shard_id,
-                                    reinterpret_cast<char*>(&key),
-                                    sizeof(uint64_t));
-                      ret = &feature_value;
-                    }
-                  } else {
-                    ret = itr.value_ptr();
-                  }
-                  int pull_data_idx = keys[i].second;
-                  pull_values[pull_data_idx] = reinterpret_cast<char*>(ret);
-                }
+              [this, shard_id, cur_ctx]() -> int {
+                _db->multi_get(shard_id,
+                               cur_ctx->batch_keys.size(),
+                               cur_ctx->batch_keys.data(),
+                               cur_ctx->batch_values.data(),
+                               cur_ctx->status.data());
                 return 0;
               });
+      tasks.push_back(std::move(fut));
     }
-    for (int i = 0; i < _real_local_shard_num; ++i) {
-      tasks[i].wait();
+    for (size_t x = 0; x < tasks.size(); ++x) {
+      tasks[x].wait();
     }
-    if (FLAGS_pserver_print_missed_key_num_every_push) {
-      LOG(WARNING) << "total pull keys:" << num
-                   << " missed_keys:" << missed_keys.load();
+    for (size_t x = 0; x < 2; x++) {
+      cur_ctx = context.switch_item();
+      for (size_t idx = 0; idx < cur_ctx->status.size(); idx++) {
+        uint64_t cur_key =
+            *((uint64_t*)const_cast<char*>(cur_ctx->batch_keys[idx].data()));
+        if (cur_ctx->status[idx].IsNotFound()) {
+          auto& feature_value = local_shard[cur_key];
+          int init_size = value_size - mf_value_size;
+          feature_value.resize(init_size);
+          _value_accesor->Create(&data_buffer_ptr, 1);
+          memcpy(const_cast<float*>(feature_value.data()),
+                 data_buffer_ptr,
+                 init_size * sizeof(float));
+          ret = &feature_value;
+        } else {
+          int data_size = cur_ctx->batch_values[idx].size() / sizeof(float);
+          // from rocksdb to mem
+          auto& feature_value = local_shard[cur_key];
+          feature_value.resize(data_size);
+          memcpy(
+              const_cast<float*>(feature_value.data()),
+              paddle::string::str_to_float(cur_ctx->batch_values[idx].data()),
+              data_size * sizeof(float));
+          _db->del_data(shard_id, (char*)&cur_key, sizeof(uint64_t));
+          ret = &feature_value;
+        }
+        // pull时，内存和ssd里使用到的feasign均修正show、click和unseenday
+        int pull_data_idx = cur_ctx->batch_index[idx];
+        pull_values[pull_data_idx] = (char*)ret;
+      }
+      cur_ctx->reset();
     }
   }
   return 0;
