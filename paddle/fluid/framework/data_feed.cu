@@ -87,16 +87,20 @@ __global__ void FillSlotValueOffsetKernel(const int ins_num,
 
 __global__ void fill_actual_neighbors(int64_t* vals,
                                       int64_t* actual_vals,
+                                      int64_t* actual_vals_dst,
                                       int* actual_sample_size,
                                       int* cumsum_actual_sample_size,
                                       int sample_size,
-                                      int len) {
+                                      int len,
+                                      int mod) {
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < len) {
     int offset1 = cumsum_actual_sample_size[i];
     int offset2 = sample_size * i;
+    int dst_id = i % mod;
     for (int j = 0; j < actual_sample_size[i]; j++) {
       actual_vals[offset1 + j] = vals[offset2 + j];
+      actual_vals_dst[offset1 + j] = dst_id;
     }
   }
 }
@@ -486,7 +490,7 @@ std::vector<std::shared_ptr<phi::Allocation>> GraphDataGenerator::SampleNeighbor
     std::vector<int>& edges_split_num, int64_t* neighbor_len) {
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   auto edge_to_id = gpu_graph_ptr->edge_to_id;
-  std::vector<int> edge_to_id_;
+  /*std::vector<int> edge_to_id_;
   for (auto& iter : edge_to_id) {
     edge_to_id_.push_back(iter.second);
   }
@@ -496,10 +500,8 @@ std::vector<std::shared_ptr<phi::Allocation>> GraphDataGenerator::SampleNeighbor
   std::vector<std::shared_ptr<phi::Allocation>> sample_and_count;
   sample_and_count.emplace_back(sample_res.actual_val_mem);
   sample_and_count.emplace_back(sample_res.actual_sample_size_mem);
-  return sample_and_count;
+  return sample_and_count;*/
 
-  /*
-  auto edge_to_id = gpu_graph_ptr->edge_to_id;
   int64_t all_sample_size = 0;
   std::vector<std::shared_ptr<phi::Allocation>> concat_sample_val;
   std::vector<std::shared_ptr<phi::Allocation>> concat_sample_count;
@@ -522,12 +524,16 @@ std::vector<std::shared_ptr<phi::Allocation>> GraphDataGenerator::SampleNeighbor
       memory::AllocShared(place_, len * sample_size * edge_to_id_len_ * sizeof(int64_t));
   auto final_sample_val =
       memory::AllocShared(place_, all_sample_size * sizeof(int64_t));
+  auto final_sample_val_dst =
+      memory::AllocShared(place_, all_sample_size * sizeof(int64_t));
   auto all_sample_count =
       memory::AllocShared(place_, edge_to_id_len_ * len * sizeof(int));
   int64_t* all_sample_val_ptr =
       reinterpret_cast<int64_t* >(all_sample_val->ptr());
   int64_t* final_sample_val_ptr =
       reinterpret_cast<int64_t* >(final_sample_val->ptr());
+  int64_t* final_sample_val_dst_ptr =
+      reinterpret_cast<int64_t* >(final_sample_val_dst->ptr());
   int* all_sample_count_ptr =
       reinterpret_cast<int* >(all_sample_count->ptr());
 
@@ -557,24 +563,25 @@ std::vector<std::shared_ptr<phi::Allocation>> GraphDataGenerator::SampleNeighbor
                           0,
                           stream_>>>(all_sample_val_ptr,
                                      final_sample_val_ptr,
+                                     final_sample_val_dst_ptr,
                                      all_sample_count_ptr,
                                      thrust::raw_pointer_cast(cumsum_actual_sample_size.data()),
                                      sample_size,
-                                     len * edge_to_id_len_);
+                                     len * edge_to_id_len_,
+                                     len);
 
   *neighbor_len = all_sample_size;
   cudaStreamSynchronize(stream_);
 
-  std::vector<std::shared_ptr<phi::Allocation>> sample_and_count;
-  sample_and_count.emplace_back(final_sample_val);
-  sample_and_count.emplace_back(all_sample_count);
-  return sample_and_count;*/
+  std::vector<std::shared_ptr<phi::Allocation>> sample_results;
+  sample_results.emplace_back(final_sample_val);
+  sample_results.emplace_back(final_sample_val_dst);
+  return sample_results;
 }
 
 std::shared_ptr<phi::Allocation> GraphDataGenerator::GetReindexResult(
-    int64_t* reindex_src_data, int64_t* reindex_dst_data,
-    const int* count_data, const int64_t* center_nodes,
-    int* final_nodes_len, int node_len, int64_t neighbor_len) {
+    int64_t* reindex_src_data, const int64_t* center_nodes, int* final_nodes_len,
+    int node_len, int64_t neighbor_len) {
 
   VLOG(2) << gpuid_ << ": Enter GetReindexResult Function";
   const phi::GPUContext& dev_ctx_ = 
@@ -626,13 +633,6 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GetReindexResult(
                                          reindex_table_size_,
                                          d_reindex_table_key_ptr,
                                          d_reindex_table_value_ptr);
-
-  VLOG(2) << gpuid_ << ": Run phi::ReindexDst";
-  thrust::device_vector<int> scan_dst(node_len);
-  thrust::sequence(scan_dst.begin(), scan_dst.end());
-  phi::ReindexDst<int64_t, phi::GPUContext>(dev_ctx_, reindex_dst_data,
-                                            thrust::raw_pointer_cast(scan_dst.data()),
-                                            count_data, edge_to_id_len_, node_len);
   return final_nodes;
 }
 
@@ -670,45 +670,40 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
   for (int i = 0; i < len_samples; i++) {
 
     edges_split_num.clear();
-    std::shared_ptr<phi::Allocation> neighbors, count;
+    std::shared_ptr<phi::Allocation> neighbors, reindex_dst;
     int64_t neighbors_len = 0;
     if (i == 0) {
-      auto sample_and_count =
+      auto sample_results =
           SampleNeighbors(uniq_nodes_data, uniq_len, samples_[i], edges_split_num,
                           &neighbors_len);
-      neighbors = sample_and_count[0];
-      count = sample_and_count[1];
+      neighbors = sample_results[0];
+      reindex_dst = sample_results[1];
       edges_split_num.push_back(uniq_len);
     } else {
       int64_t* final_nodes_data =
           reinterpret_cast<int64_t* >(final_nodes_vec[i - 1]->ptr());
-      auto sample_and_count =
+      auto sample_results =
           SampleNeighbors(final_nodes_data, final_nodes_len_vec[i - 1],
                           samples_[i], edges_split_num, &neighbors_len);
-      neighbors = sample_and_count[0];
-      count = sample_and_count[1];
+      neighbors = sample_results[0];
+      reindex_dst = sample_results[1];
       edges_split_num.push_back(final_nodes_len_vec[i - 1]);
     }
 
-    auto reindex_dst =
-        memory::AllocShared(place_, sizeof(int64_t) * neighbors_len);
     int64_t* reindex_src_data = reinterpret_cast<int64_t* >(neighbors->ptr());
     int64_t* reindex_dst_data = reinterpret_cast<int64_t* >(reindex_dst->ptr());
-    int* count_data = reinterpret_cast<int* >(count->ptr());
     int final_nodes_len = 0;
     if (i == 0) {
       auto tmp_final_nodes =
-          GetReindexResult(reindex_src_data, reindex_dst_data, count_data,
-                           uniq_nodes_data, &final_nodes_len, uniq_len,
-                           neighbors_len);
+          GetReindexResult(reindex_src_data, uniq_nodes_data, &final_nodes_len,
+                           uniq_len, neighbors_len);
       final_nodes_vec.emplace_back(tmp_final_nodes);
       final_nodes_len_vec.emplace_back(final_nodes_len);
     } else {
       int64_t* final_nodes_data =
           reinterpret_cast<int64_t* >(final_nodes_vec[i - 1]->ptr());
       auto tmp_final_nodes =
-          GetReindexResult(reindex_src_data, reindex_dst_data, count_data,
-                           final_nodes_data, &final_nodes_len,
+          GetReindexResult(reindex_src_data, final_nodes_data, &final_nodes_len,
                            final_nodes_len_vec[i - 1], neighbors_len);
       final_nodes_vec.emplace_back(tmp_final_nodes);
       final_nodes_len_vec.emplace_back(final_nodes_len);
