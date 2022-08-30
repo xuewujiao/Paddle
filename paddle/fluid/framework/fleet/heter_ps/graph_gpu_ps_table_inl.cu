@@ -1140,8 +1140,7 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
                    shard_len * sizeof(uint64_t),
                    shard_len * sizeof(uint64_t) +
                    (shard_len * sample_size * sizeof(uint64_t) +
-                    shard_len * sizeof(int)) * edge_type_len + 
-                    (shard_len % 2) * sizeof(int) * edge_type_len);
+                   (shard_len + shard_len % 2) * sizeof(int)) * edge_type_len);
   }
   walk_to_dest(
       gpu_id, total_gpu, h_left, h_right, (uint64_t*)(d_shard_keys_ptr), NULL);
@@ -1156,6 +1155,7 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
     platform::CUDADeviceGuard guard(resource_->dev_id(i));
 
     for (int edge_id = 0; edge_id < edge_to_id.size(); edge_id++) {
+      VLOG(0) << "Begin: " << edge_id;
       int idx = edge_to_id[edge_id];
       CUDA_CHECK(cudaMemsetAsync(
           node.val_storage, 0, shard_len * sizeof(int64_t), node.in_stream));
@@ -1164,15 +1164,16 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
       int offset = i * graph_table_num_ + idx;
       tables_[table_offset]->get(reinterpret_cast<uint64_t*>(node.key_storage),
                                  reinterpret_cast<uint64_t*>(node.val_storage),
-                                 (size_t)(h_right[i] - h_left[i] + 1),
+                                 (size_t)(shard_len),
                                  resource_->remote_stream(i, gpu_id));
       GpuPsNodeInfo* node_info_list =
-        reinterpret_cast<GpuPsNodeInfo*>(node.val_storage);
+          reinterpret_cast<GpuPsNodeInfo*>(node.val_storage);
       auto graph = gpu_graph_list_[offset];
-      int* actual_size_array = (int*)(node_info_list + shard_len) + i * shard_len;
+      int* actual_size_array = (int*)(node_info_list + shard_len) + edge_id * shard_len;
       uint64_t* sample_array = 
           (uint64_t*)(actual_size_array + (shard_len + shard_len % 2) * edge_type_len) +
-          i * shard_len * sample_size;
+          edge_id * shard_len * sample_size;
+      VLOG(0) << "Begin neighbor_sample_kernel2";
       neighbor_sample_kernel2<<<
           grid_size, block_size_, 0, resource_->remote_stream(i, gpu_id)>>>(
               graph,
