@@ -23,8 +23,12 @@ namespace paddle {
 namespace framework {
 #ifdef PADDLE_WITH_HETERPS
 
-enum GpuGraphStorageMode {WHOLE_HBM=1, MEM_EMB_AND_GPU_GRAPH,
-   MEM_EMB_FEATURE_AND_GPU_GRAPH, SSD_EMB_AND_MEM_FEATURE_GPU_GRAPH };
+enum GpuGraphStorageMode {
+  WHOLE_HBM = 1,
+  MEM_EMB_AND_GPU_GRAPH,
+  MEM_EMB_FEATURE_AND_GPU_GRAPH,
+  SSD_EMB_AND_MEM_FEATURE_GPU_GRAPH
+};
 
 class GraphGpuWrapper {
  public:
@@ -111,8 +115,10 @@ class GraphGpuWrapper {
                            int slot_num);
 
   void release_graph();
+  void init_type_keys();
   std::vector<uint64_t>& get_graph_total_keys();
   std::vector<std::vector<uint64_t>>& get_graph_type_keys();
+  std::unordered_map<int, int>& get_graph_type_to_index();
 
   std::unordered_map<std::string, int> edge_to_id, feature_to_id;
   std::vector<std::string> id_to_feature, id_to_edge;
@@ -135,6 +141,9 @@ class GraphGpuWrapper {
   std::vector<std::set<int>> finish_node_type_;
   std::vector<std::unordered_map<int, size_t>> node_type_start_;
   std::vector<std::unordered_map<int, size_t>> infer_node_type_start_;
+  std::vector<std::vector<std::shared_ptr<phi::Allocation>>>
+      d_graph_all_type_total_keys_;
+  std::vector<std::vector<uint64_t>> h_graph_all_type_keys_len_;
 };
 #endif
 }  // namespace framework

@@ -543,11 +543,12 @@ class GraphTable : public Table {
                                   bool reverse);
 
   std::string get_inverse_etype(std::string &etype);
-  
-  int32_t parse_type_to_typepath(std::string &type2files,
-                                 std::string graph_data_local_path,
-                                 std::vector<std::string> &res_type,
-                                 std::unordered_map<std::string, std::string> &res_type2path);
+
+  int32_t parse_type_to_typepath(
+      std::string &type2files,
+      std::string graph_data_local_path,
+      std::vector<std::string> &res_type,
+      std::unordered_map<std::string, std::string> &res_type2path);
 
   int32_t load_edges(const std::string &path,
                      bool reverse,
@@ -705,6 +706,7 @@ class GraphTable : public Table {
 
   std::vector<uint64_t> graph_total_keys_;
   std::vector<std::vector<uint64_t>> graph_type_keys_;
+  std::unordered_map<int, int> type_to_index_;
 
   std::vector<std::vector<GraphShard *>> edge_shards, feature_shards;
   size_t shard_start, shard_end, server_num, shard_num_per_server, shard_num;

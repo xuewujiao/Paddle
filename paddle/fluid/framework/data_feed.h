@@ -880,7 +880,7 @@ struct BufState {
 
   int GetNextBatch() {
     cursor += len;
-    if (row_num - cursor < 0 ) {
+    if (row_num - cursor < 0) {
       return 0;
     }
     int tmp_len = cursor + batch_size > row_num ? row_num - cursor : batch_size;
@@ -916,13 +916,15 @@ class GraphDataGenerator {
                    int step,
                    int* len_per_row);
   int FillInsBuf();
-  int FillIdShowClkTensor(int total_instance, bool gpu_graph_training, size_t cursor = 0);
+  int FillIdShowClkTensor(int total_instance,
+                          bool gpu_graph_training,
+                          size_t cursor = 0);
   int FillGraphSlotFeature(int total_instance, bool gpu_graph_training);
   int MakeInsPair();
   int GetPathNum() { return total_row_; }
   void SetDeviceKeys(std::vector<uint64_t>* device_keys, int type) {
-    type_to_index_[type] = h_device_keys_.size();
-    h_device_keys_.push_back(device_keys);
+    // type_to_index_[type] = h_device_keys_.size();
+    // h_device_keys_.push_back(device_keys);
   }
   int InsertTable(const unsigned long* d_keys, unsigned long len);
   std::vector<uint64_t>& GetHostVec() { return host_vec_; }
@@ -937,8 +939,6 @@ class GraphDataGenerator {
   // start ids
   // int64_t* device_keys_;
   // size_t device_key_size_;
-  std::vector<std::vector<uint64_t>*> h_device_keys_;
-  std::unordered_map<int, int> type_to_index_;
   // point to device_keys_
   size_t cursor_;
   size_t jump_rows_;
@@ -976,6 +976,7 @@ class GraphDataGenerator {
   size_t buf_size_;
   int repeat_time_;
   std::vector<int> window_step_;
+  std::vector<int> infer_node_type_start_;
   BufState buf_state_;
   int batch_size_;
   int slot_num_;
@@ -983,6 +984,7 @@ class GraphDataGenerator {
   int debug_mode_;
   bool gpu_graph_training_;
   std::vector<uint64_t> host_vec_;
+  std::vector<uint64_t> h_device_keys_len_;
   uint64_t table_capcity_;
   int total_row_;
 };

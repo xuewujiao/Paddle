@@ -485,32 +485,29 @@ void GraphTable::release_graph() {
 void GraphTable::clear_graph() {
   VLOG(0) << "begin clear_graph";
   std::vector<std::future<int>> tasks;
-  for (auto& type_shards : edge_shards) {
-    for (auto& shard : type_shards) {
-        tasks.push_back(load_node_edge_task_pool->enqueue(
-                    [&shard, this]() -> int {
-                    delete shard;
-                    return 0;
-        }));
+  for (auto &type_shards : edge_shards) {
+    for (auto &shard : type_shards) {
+      tasks.push_back(
+          load_node_edge_task_pool->enqueue([&shard, this]() -> int {
+            delete shard;
+            return 0;
+          }));
     }
   }
-  for (auto& type_shards: feature_shards) {
-    for (auto& shard : type_shards) {
-        tasks.push_back(load_node_edge_task_pool->enqueue(
-                    [&shard, this]() -> int{
-                    delete shard;
-                    return 0;
-        }));
+  for (auto &type_shards : feature_shards) {
+    for (auto &shard : type_shards) {
+      tasks.push_back(
+          load_node_edge_task_pool->enqueue([&shard, this]() -> int {
+            delete shard;
+            return 0;
+          }));
     }
   }
-  for (size_t i = 0; i < tasks.size(); i++)
-    tasks[i].get();
+  for (size_t i = 0; i < tasks.size(); i++) tasks[i].get();
 
-  for (auto& shards: edge_shards)
-    shards.clear();
+  for (auto &shards : edge_shards) shards.clear();
   edge_shards.clear();
-  for (auto& shards: feature_shards)
-    shards.clear();
+  for (auto &shards : feature_shards) shards.clear();
   feature_shards.clear();
   VLOG(0) << "finish clear_graph";
 }
@@ -1080,9 +1077,7 @@ Node *GraphShard::find_node(uint64_t id) {
   return iter == node_location.end() ? nullptr : bucket[iter->second];
 }
 
-GraphTable::~GraphTable() {
-  clear_graph();
-}
+GraphTable::~GraphTable() { clear_graph(); }
 
 int32_t GraphTable::Load(const std::string &path, const std::string &param) {
   bool load_edge = (param[0] == 'e');
@@ -1110,16 +1105,19 @@ std::string GraphTable::get_inverse_etype(std::string &etype) {
   return res;
 }
 
-int32_t GraphTable::parse_type_to_typepath(std::string &type2files,
-                                           std::string graph_data_local_path,
-                                           std::vector<std::string> &res_type,
-                                           std::unordered_map<std::string, std::string> &res_type2path) {
-  auto type2files_split = paddle::string::split_string<std::string>(type2files, ",");
+int32_t GraphTable::parse_type_to_typepath(
+    std::string &type2files,
+    std::string graph_data_local_path,
+    std::vector<std::string> &res_type,
+    std::unordered_map<std::string, std::string> &res_type2path) {
+  auto type2files_split =
+      paddle::string::split_string<std::string>(type2files, ",");
   if (type2files_split.size() == 0) {
     return -1;
   }
   for (auto one_type2file : type2files_split) {
-    auto one_type2file_split = paddle::string::split_string<std::string>(one_type2file, ":");
+    auto one_type2file_split =
+        paddle::string::split_string<std::string>(one_type2file, ":");
     auto type = one_type2file_split[0];
     auto type_dir = one_type2file_split[1];
     res_type.push_back(type);
@@ -1135,14 +1133,16 @@ int32_t GraphTable::load_node_and_edge_file(std::string etype2files,
                                             bool reverse) {
   std::vector<std::string> etypes;
   std::unordered_map<std::string, std::string> edge_to_edgedir;
-  int res = parse_type_to_typepath(etype2files, graph_data_local_path, etypes, edge_to_edgedir);
+  int res = parse_type_to_typepath(
+      etype2files, graph_data_local_path, etypes, edge_to_edgedir);
   if (res != 0) {
     VLOG(0) << "parse edge type and edgedir failed!";
     return -1;
   }
   std::vector<std::string> ntypes;
   std::unordered_map<std::string, std::string> node_to_nodedir;
-  res = parse_type_to_typepath(ntype2files, graph_data_local_path, ntypes, node_to_nodedir);
+  res = parse_type_to_typepath(
+      ntype2files, graph_data_local_path, ntypes, node_to_nodedir);
   if (res != 0) {
     VLOG(0) << "parse node type and nodedir failed!";
     return -1;
@@ -2299,16 +2299,16 @@ void GraphTable::build_graph_total_keys() {
   // build node embedding id
   std::vector<std::vector<uint64_t>> keys;
   this->get_node_embedding_ids(1, &keys);
-  graph_total_keys_.insert(graph_total_keys_.end(),
-          keys[0].begin(), keys[0].end());
+  graph_total_keys_.insert(
+      graph_total_keys_.end(), keys[0].begin(), keys[0].end());
 
   // build feature embedding id
-  for (auto& it : this->feature_to_id) {
+  for (auto &it : this->feature_to_id) {
     auto node_idx = it.second;
     std::vector<std::vector<uint64_t>> keys;
     this->get_all_feature_ids(1, node_idx, 1, &keys);
-    graph_total_keys_.insert(graph_total_keys_.end(),
-            keys[0].begin(), keys[0].end());
+    graph_total_keys_.insert(
+        graph_total_keys_.end(), keys[0].begin(), keys[0].end());
   }
   VLOG(0) << "finish build_graph_total_keys";
 }
@@ -2318,12 +2318,13 @@ void GraphTable::build_graph_type_keys() {
   graph_type_keys_.clear();
   graph_type_keys_.resize(this->feature_to_id.size());
 
-  int type = 0;
-  for (auto& it : this->feature_to_id) {
-      auto node_idx = it.second;
-      std::vector<std::vector<uint64_t>> keys;
-      this->get_all_id(1, node_idx, 1, &keys);
-      graph_type_keys_[type++] = std::move(keys[0]);
+  int cnt = 0;
+  for (auto &it : this->feature_to_id) {
+    auto node_idx = it.second;
+    std::vector<std::vector<uint64_t>> keys;
+    this->get_all_id(1, node_idx, 1, &keys);
+    type_to_index_[node_idx] = cnt;
+    graph_type_keys_[cnt++] = std::move(keys[0]);
   }
   VLOG(0) << "finish build_graph_type_keys";
 }
