@@ -291,11 +291,10 @@ NeighborSampleResult GraphGpuWrapper::graph_neighbor_sample_v3(
 }
 
 NeighborSampleResultV2 GraphGpuWrapper::graph_neighbor_sample_all_edge_type(
-    int gpu_id, int edge_type_len, uint64_t* key,
-    std::vector<int>& edges_split, int sample_size, int len) {
+    int gpu_id, int edge_type_len, uint64_t* key, int sample_size, int len) {
   return ((GpuPsGraphTable *)graph_table)
       ->graph_neighbor_sample_all_edge_type(gpu_id, edge_type_len, key,
-                                            edges_split, sample_size, len);
+                                            sample_size, len);
 }
 
 int GraphGpuWrapper::get_feature_of_nodes(int gpu_id,

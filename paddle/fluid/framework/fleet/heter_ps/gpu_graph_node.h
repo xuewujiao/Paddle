@@ -296,7 +296,6 @@ struct NeighborSampleResult {
 struct NeighborSampleResultV2 {
   uint64_t *val;
   int *actual_sample_size;
-  int total_sample_size;
   std::shared_ptr<memory::Allocation> val_mem, actual_sample_size_mem;
 
   void initialize(int _sample_size, int _key_size, int _edge_to_id_len, int dev_id) {
