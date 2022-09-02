@@ -475,40 +475,63 @@ void GraphTable::clear_graph(int idx) {
 
 void GraphTable::release_graph() {
   // Before releasing graph, prepare for sampling ids and embedding keys.
-  build_graph_type_keys();
-  build_graph_total_keys();
+  build_graph_type_keys();  
+  build_graph_total_keys(); 
 
   // clear graph
   clear_graph();
 }
 
-void GraphTable::clear_graph() {
-  VLOG(0) << "begin clear_graph";
+void GraphTable::release_graph_edge() {
+  build_graph_total_keys();
+  clear_edge_shard();
+}
+
+void GraphTable::release_graph_node() {
+  build_graph_type_keys();
+  clear_feature_shard();
+}
+
+void GraphTable::clear_edge_shard() {
+  VLOG(0) << "begin clear edge shard";
   std::vector<std::future<int>> tasks;
   for (auto &type_shards : edge_shards) {
     for (auto &shard : type_shards) {
       tasks.push_back(
-          load_node_edge_task_pool->enqueue([&shard, this]() -> int {
-            delete shard;
-            return 0;
-          }));
+        load_node_edge_task_pool->enqueue([&shard, this]() -> int {
+          delete shard;
+          return 0;
+      }));
     }
   }
+  for (size_t i = 0; i < tasks.size(); i++) tasks[i].get(); 
+  for (auto &shards : edge_shards) shards.clear();
+  edge_shards.clear();
+  VLOG(0) << "finish clear edge shard"; 
+}
+
+void GraphTable::clear_feature_shard() {
+  VLOG(0) << "begin clear feature shard";
+  std::vector<std::future<int>> tasks;
   for (auto &type_shards : feature_shards) {
     for (auto &shard : type_shards) {
       tasks.push_back(
-          load_node_edge_task_pool->enqueue([&shard, this]() -> int {
-            delete shard;
-            return 0;
-          }));
+        load_node_edge_task_pool->enqueue([&shard, this]() -> int {
+          delete shard;
+          return 0;
+      }));
     }
   }
   for (size_t i = 0; i < tasks.size(); i++) tasks[i].get();
-
-  for (auto &shards : edge_shards) shards.clear();
-  edge_shards.clear();
   for (auto &shards : feature_shards) shards.clear();
   feature_shards.clear();
+  VLOG(0) << "finish clear feature shard";
+}
+
+void GraphTable::clear_graph() {
+  VLOG(0) << "begin clear_graph";
+  clear_edge_shard();
+  clear_feature_shard();
   VLOG(0) << "finish clear_graph";
 }
 
@@ -1126,6 +1149,90 @@ int32_t GraphTable::parse_type_to_typepath(
   return 0;
 }
 
+int32_t GraphTable::parse_edge_and_load(std::string etype2files,
+                                       std::string graph_data_local_path,
+                                       int part_num,
+                                       bool reverse) {
+   std::vector<std::string> etypes;
+   std::unordered_map<std::string, std::string> edge_to_edgedir;
+   int res = parse_type_to_typepath(
+       etype2files, graph_data_local_path, etypes, edge_to_edgedir);
+   if (res != 0) {
+     VLOG(0) << "parse edge type and edgedir failed!";
+     return -1;
+   }
+   VLOG(0) << "etypes size: " << etypes.size();
+   VLOG(0) << "whether reverse: " << reverse;
+   is_load_reverse_edge = reverse;
+   std::string delim = ";";
+   size_t total_len = etypes.size();
+   
+   std::vector<std::future<int>> tasks;
+   for (size_t i = 0; i < total_len; i++) { 
+     tasks.push_back(
+         _shards_task_pool[i % task_pool_size_]->enqueue([&, i, this]() -> int {
+           std::string etype_path = edge_to_edgedir[etypes[i]];
+           auto etype_path_list = paddle::framework::localfs_list(etype_path);
+           std::string etype_path_str;
+           if (part_num > 0 && part_num < (int)etype_path_list.size()) {
+             std::vector<std::string> sub_etype_path_list(
+                etype_path_list.begin(), etype_path_list.begin() + part_num);
+             etype_path_str =
+                paddle::string::join_strings(sub_etype_path_list, delim);
+           } else {
+             etype_path_str =
+                paddle::string::join_strings(etype_path_list, delim);
+           }
+           this->load_edges(etype_path_str, false, etypes[i]);
+           if (reverse) {
+             std::string r_etype = get_inverse_etype(etypes[i]);
+             this->load_edges(etype_path_str, true, r_etype);
+           }
+           return 0;
+     }));
+   }
+   for (int i = 0; i < (int)tasks.size(); i++) tasks[i].get();
+   return 0; 
+}
+
+int32_t GraphTable::parse_node_and_load(std::string ntype2files,
+                                       std::string graph_data_local_path,
+                                       int part_num) {
+  std::vector<std::string> ntypes;
+  std::unordered_map<std::string, std::string> node_to_nodedir;
+  int res = parse_type_to_typepath(
+       ntype2files, graph_data_local_path, ntypes, node_to_nodedir);
+  if (res != 0) {
+    VLOG(0) << "parse node type and nodedir failed!";
+    return -1;
+  }
+
+  std::string delim = ";";
+  std::string npath = node_to_nodedir[ntypes[0]];
+  auto npath_list = paddle::framework::localfs_list(npath);
+  std::string npath_str;
+  if (part_num > 0 && part_num < (int)npath_list.size()) {
+    std::vector<std::string> sub_npath_list(
+      npath_list.begin(), npath_list.begin() + part_num);
+    npath_str = paddle::string::join_strings(sub_npath_list, delim);
+  } else {
+    npath_str = paddle::string::join_strings(npath_list, delim);
+  }
+  if (ntypes.size() == 0) {
+    VLOG(0) << "node_type not specified, nothing will be loaded ";
+    return 0;
+  }
+
+  if (FLAGS_graph_load_in_parallel) {
+    this->load_nodes(npath_str, "");
+  } else {
+    for (size_t j = 0; j < ntypes.size(); j++) {
+      this->load_nodes(npath_str, ntypes[j]);
+    }
+  } 
+  return 0;
+}
+
 int32_t GraphTable::load_node_and_edge_file(std::string etype2files,
                                             std::string ntype2files,
                                             std::string graph_data_local_path,
@@ -1497,7 +1604,7 @@ int32_t GraphTable::load_edges(const std::string &path,
   VLOG(0) << "Begin GraphTable::load_edges() edge_type[" << edge_type << "]";
   if (FLAGS_graph_load_in_parallel) {
     std::vector<std::future<std::pair<uint64_t, uint64_t>>> tasks;
-    for (int i = 0; i < paths.size(); i++) {
+    for (size_t i = 0; i < paths.size(); i++) {
       tasks.push_back(load_node_edge_task_pool->enqueue(
           [&, i, idx, this]() -> std::pair<uint64_t, uint64_t> {
             return parse_edge_file(paths[i], idx, reverse_edge);
@@ -2295,7 +2402,8 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
 }
 
 void GraphTable::build_graph_total_keys() {
-  VLOG(0) << "begin build_graph_total_keys";
+  //VLOG(0) << "begin build_graph_total_keys";
+  VLOG(0) << "begin insert edge to graph_total_keys";
   // build node embedding id
   std::vector<std::vector<uint64_t>> keys;
   this->get_node_embedding_ids(1, &keys);
@@ -2303,14 +2411,15 @@ void GraphTable::build_graph_total_keys() {
       graph_total_keys_.end(), keys[0].begin(), keys[0].end());
 
   // build feature embedding id
-  for (auto &it : this->feature_to_id) {
-    auto node_idx = it.second;
-    std::vector<std::vector<uint64_t>> keys;
-    this->get_all_feature_ids(1, node_idx, 1, &keys);
-    graph_total_keys_.insert(
-        graph_total_keys_.end(), keys[0].begin(), keys[0].end());
-  }
-  VLOG(0) << "finish build_graph_total_keys";
+  //for (auto &it : this->feature_to_id) {
+  //  auto node_idx = it.second;
+  //  std::vector<std::vector<uint64_t>> keys;
+  //  this->get_all_feature_ids(1, node_idx, 1, &keys);
+  //  graph_total_keys_.insert(
+  //      graph_total_keys_.end(), keys[0].begin(), keys[0].end());
+  //}
+  VLOG(0) << "finish insert edge to graph_total_keys";
+  //VLOG(0) << "finish build_graph_total_keys";
 }
 
 void GraphTable::build_graph_type_keys() {
@@ -2327,6 +2436,17 @@ void GraphTable::build_graph_type_keys() {
     graph_type_keys_[cnt++] = std::move(keys[0]);
   }
   VLOG(0) << "finish build_graph_type_keys";
+
+  VLOG(0) << "begin insert feature into graph_total_keys";
+  // build feature embedding id
+  for (auto &it : this->feature_to_id) {
+    auto node_idx = it.second;
+    std::vector<std::vector<uint64_t>> keys;
+    this->get_all_feature_ids(1, node_idx, 1, &keys);
+    graph_total_keys_.insert(
+        graph_total_keys_.end(), keys[0].begin(), keys[0].end());
+  }
+  VLOG(0) << "finish insert feature into graph_total_keys";
 }
 
 }  // namespace distributed
