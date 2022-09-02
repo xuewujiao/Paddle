@@ -2402,7 +2402,6 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
 }
 
 void GraphTable::build_graph_total_keys() {
-  //VLOG(0) << "begin build_graph_total_keys";
   VLOG(0) << "begin insert edge to graph_total_keys";
   // build node embedding id
   std::vector<std::vector<uint64_t>> keys;
@@ -2410,16 +2409,7 @@ void GraphTable::build_graph_total_keys() {
   graph_total_keys_.insert(
       graph_total_keys_.end(), keys[0].begin(), keys[0].end());
 
-  // build feature embedding id
-  //for (auto &it : this->feature_to_id) {
-  //  auto node_idx = it.second;
-  //  std::vector<std::vector<uint64_t>> keys;
-  //  this->get_all_feature_ids(1, node_idx, 1, &keys);
-  //  graph_total_keys_.insert(
-  //      graph_total_keys_.end(), keys[0].begin(), keys[0].end());
-  //}
   VLOG(0) << "finish insert edge to graph_total_keys";
-  //VLOG(0) << "finish build_graph_total_keys";
 }
 
 void GraphTable::build_graph_type_keys() {
