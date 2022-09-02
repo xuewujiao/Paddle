@@ -216,8 +216,7 @@ __global__ void neighbor_sample_kernel2(GpuPsCommGraph graph,
   }
 }
 
-/*
-__global__ void neighbor_sample_kernel3(std::vector<GpuPsCommGraph>* graphs,
+/*__global__ void neighbor_sample_kernel3(GpuPsCommGraph* graphs,
                                         GpuPsNodeInfo* node_info_base,
                                         int sample_len,
                                         int n,
@@ -240,7 +239,7 @@ __global__ void neighbor_sample_kernel3(std::vector<GpuPsCommGraph>* graphs,
       int neighbor_len = (int)node_info_list[node_i].neighbor_size;
       uint32_t data_offset = node_info_list[i].neighbor_offset;
       int offset = node_i * sample_len;
-      uint64_t* data = (*graphs)[edge_idx].neighbor_list;
+      uint64_t* data = graphs[edge_idx].neighbor_list;
       uint64_t tmp;
       int split, begin;
       if (neighbor_len <= sample_len) {
@@ -1228,6 +1227,36 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
     CUDA_CHECK(cudaStreamSynchronize(node.in_stream));
     platform::CUDADeviceGuard guard(resource_->dev_id(i));
 
+    /*GpuPsNodeInfo* node_info_base = reinterpret_cast<GpuPsNodeInfo*>(node.val_storage);
+    GpuPsCommGraph graphs[edge_type_len];
+    for (int idx = 0; idx < edge_type_len; idx++) {
+      int table_offset = get_table_offset(i, GraphTableType::EDGE_TABLE, idx);
+      int offset = i * graph_table_num_ + idx;
+      tables_[table_offset]->get(reinterpret_cast<uint64_t*>(node.key_storage),
+                                 reinterpret_cast<uint64_t*>(node_info_base + idx * shard_len),
+                                 (size_t)(shard_len),
+                                 resource_->remote_stream(i, gpu_id));
+      graphs[idx] = gpu_graph_list_[offset];
+    }
+
+    auto d_commgraph_mem = memory::Alloc(place, edge_type_len * sizeof(GpuPsCommGraph));
+    GpuPsCommGraph* d_commgraph_ptr = reinterpret_cast<GpuPsCommGraph*>(d_commgraph_mem->ptr());
+    CUDA_CHECK(cudaMemcpy(
+        d_commgraph_ptr,
+        &graphs,
+        sizeof(GpuPsCommGraph) * edge_type_len,
+        cudaMemcpyHostToDevice));
+
+    int grid_size_ = (shard_len * edge_type_len - 1) / block_size_ + 1;
+    neighbor_sample_kernel3<<<
+        grid_size_, block_size_, 0, resource_->remote_stream(i, gpu_id)>>>(
+            d_commgraph_ptr,
+            node_info_base,
+            sample_size,
+            shard_len * edge_type_len,
+            default_value,
+            shard_len);*/
+    
     for (int idx = 0; idx < edge_type_len; idx++) {
       GpuPsNodeInfo* node_info_base = reinterpret_cast<GpuPsNodeInfo*>(node.val_storage);
       GpuPsNodeInfo* node_info_list = node_info_base + idx * shard_len;
