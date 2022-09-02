@@ -57,7 +57,16 @@ class GraphGpuWrapper {
                            std::string feat_dtype,
                            int feat_shape);
   void load_edge_file(std::string name, std::string filepath, bool reverse);
+  void load_edge_file(std::string etype2files,
+                      std::string graph_data_local_path,
+                      int part_num,
+                      bool reverse);
+
   void load_node_file(std::string name, std::string filepath);
+  void load_node_file(std::string ntype2files,
+                      std::string graph_data_local_path,
+                      int part_num);
+ 
   void load_node_and_edge(std::string etype2files,
                           std::string ntype2files,
                           std::string graph_data_local_path,
@@ -115,6 +124,8 @@ class GraphGpuWrapper {
                            int slot_num);
 
   void release_graph();
+  void release_graph_edge();
+  void release_graph_node();
   void init_type_keys();
   std::vector<uint64_t>& get_graph_total_keys();
   std::vector<std::vector<uint64_t>>& get_graph_type_keys();

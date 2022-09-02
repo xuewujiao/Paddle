@@ -257,6 +257,15 @@ void GraphGpuWrapper::load_edge_file(std::string name,
   }
 }
 
+void GraphGpuWrapper::load_edge_file(std::string etype2files,
+                                     std::string graph_data_local_path,
+                                     int part_num,
+                                     bool reverse) {
+  ((GpuPsGraphTable *)graph_table)
+      ->cpu_graph_table_->parse_edge_and_load(
+          etype2files, graph_data_local_path, part_num, reverse);
+}
+
 void GraphGpuWrapper::load_node_file(std::string name, std::string filepath) {
   // 'n' means load nodes and 'node_type' follows
 
@@ -266,6 +275,14 @@ void GraphGpuWrapper::load_node_file(std::string name, std::string filepath) {
     ((GpuPsGraphTable *)graph_table)
         ->cpu_graph_table_->Load(std::string(filepath), params);
   }
+}
+
+void GraphGpuWrapper::load_node_file(std::string ntype2files,
+                                     std::string graph_data_local_path,
+                                     int part_num) {
+  ((GpuPsGraphTable *)graph_table)
+      ->cpu_graph_table_->parse_node_and_load(
+          ntype2files, graph_data_local_path, part_num);
 }
 
 void GraphGpuWrapper::load_node_and_edge(std::string etype2files,
@@ -502,6 +519,14 @@ void GraphGpuWrapper::export_partition_files(int idx, std::string file_path) {
 
 void GraphGpuWrapper::release_graph() {
   return ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->release_graph();
+}
+
+void GraphGpuWrapper::release_graph_edge() {
+  return ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->release_graph_edge();
+}
+
+void GraphGpuWrapper::release_graph_node() {
+  return ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->release_graph_node();
 }
 
 std::vector<uint64_t> &GraphGpuWrapper::get_graph_total_keys() {

@@ -535,25 +535,27 @@ class GraphTable : public Table {
                              const FsClientParameter &fs_config);
   virtual int32_t Initialize(const GraphParameter &config);
   int32_t Load(const std::string &path, const std::string &param);
-
   int32_t load_node_and_edge_file(std::string etype2files,
                                   std::string ntype2files,
                                   std::string graph_data_local_path,
                                   int part_num,
                                   bool reverse);
-
+  int32_t parse_edge_and_load(std::string etype2files,
+                                        std::string graph_data_local_path,
+                                        int part_num,
+                                        bool reverse);
+  int32_t parse_node_and_load(std::string ntype2files,
+                                        std::string graph_data_local_path,
+                                        int part_num);
   std::string get_inverse_etype(std::string &etype);
-
   int32_t parse_type_to_typepath(
       std::string &type2files,
       std::string graph_data_local_path,
       std::vector<std::string> &res_type,
       std::unordered_map<std::string, std::string> &res_type2path);
-
   int32_t load_edges(const std::string &path,
                      bool reverse,
                      const std::string &edge_type);
-
   int get_all_id(int type,
                  int slice_num,
                  std::vector<std::vector<uint64_t>> *output);
@@ -637,7 +639,11 @@ class GraphTable : public Table {
   size_t get_server_num() { return server_num; }
   void clear_graph();
   void clear_graph(int idx);
+  void clear_edge_shard();
+  void clear_feature_shard();
   void release_graph();
+  void release_graph_edge();
+  void release_graph_node();
   virtual int32_t make_neighbor_sample_cache(size_t size_limit, size_t ttl) {
     {
       std::unique_lock<std::mutex> lock(mutex_);
