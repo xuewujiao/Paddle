@@ -1243,7 +1243,7 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
             default_value,
             shard_len);
 
-    cudaStreamSynchronize(resource_->remote_stream(i, gpu_id));
+    // cudaStreamSynchronize(resource_->remote_stream(i, gpu_id));
     VLOG(0) << "Finish neighbor_sample_kernel3";
    
     /*for (int idx = 0; idx < edge_type_len; idx++) {
@@ -1309,24 +1309,6 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
       len * edge_type_len,
       len);
   CUDA_CHECK(cudaStreamSynchronize(stream));
-  
-  /*auto cumsum_ac_size = memory::Alloc(place, len * edge_type_len * sizeof(int));
-  int* cumsum_ac_size_ptr = reinterpret_cast<int*>(cumsum_ac_size->ptr());
-  edges_split.resize(edge_type_len);
-  thrust::inclusive_scan(
-      thrust::device_pointer_cast(actual_sample_size),
-      thrust::device_pointer_cast(actual_sample_size) + edge_type_len * len,
-      thrust::device_pointer_cast(cumsum_ac_size_ptr));
-  for (int i = 0; i < edge_type_len; i++) {
-    cudaMemcpyAsync(
-        edges_split.data() + i,
-        cumsum_ac_size_ptr + (i + 1) * len - 1,
-        sizeof(int),
-        cudaMemcpyDeviceToHost,
-        stream); 
-  }
-  CUDA_CHECK(cudaStreamSynchronize(stream));
-  result.total_sample_size = edges_split[edge_type_len - 1];*/
   
   for (int i = 0; i < total_gpu; i++) {
     int shard_len = h_left[i] == -1 ? 0 : h_right[i] - h_left[i] + 1;
