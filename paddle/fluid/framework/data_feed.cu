@@ -492,7 +492,6 @@ std::vector<std::shared_ptr<phi::Allocation>> GraphDataGenerator::SampleNeighbor
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   auto edge_to_id = gpu_graph_ptr->edge_to_id;
   
-  /* 
   // for (gpu_id) { for (edge_type) } 
   auto sample_res = gpu_graph_ptr->graph_neighbor_sample_all_edge_type(
       gpuid_, edge_to_id_len_, (uint64_t*)(uniq_nodes), sample_size, len);
@@ -541,8 +540,9 @@ std::vector<std::shared_ptr<phi::Allocation>> GraphDataGenerator::SampleNeighbor
   std::vector<std::shared_ptr<phi::Allocation>> sample_results;
   sample_results.emplace_back(final_sample_val);
   sample_results.emplace_back(final_sample_val_dst);
-  return sample_results; */
+  return sample_results;
 
+  /*
   std::vector<std::shared_ptr<phi::Allocation>> concat_sample_val;
   std::vector<std::shared_ptr<phi::Allocation>> concat_sample_count;
 
@@ -622,7 +622,7 @@ std::vector<std::shared_ptr<phi::Allocation>> GraphDataGenerator::SampleNeighbor
   std::vector<std::shared_ptr<phi::Allocation>> sample_results;
   sample_results.emplace_back(final_sample_val);
   sample_results.emplace_back(final_sample_val_dst);
-  return sample_results;
+  return sample_results;*/
 }
 
 std::shared_ptr<phi::Allocation> GraphDataGenerator::GetReindexResult(

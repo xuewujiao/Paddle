@@ -216,7 +216,7 @@ __global__ void neighbor_sample_kernel2(GpuPsCommGraph graph,
   }
 }
 
-/*__global__ void neighbor_sample_kernel3(GpuPsCommGraph* graphs,
+__global__ void neighbor_sample_kernel3(GpuPsCommGraph* graphs,
                                         GpuPsNodeInfo* node_info_base,
                                         int sample_len,
                                         int n,
@@ -268,7 +268,7 @@ __global__ void neighbor_sample_kernel2(GpuPsCommGraph graph,
       }
     }
   }
-}*/
+}
 
 int GpuPsGraphTable::init_cpu_table(
     const paddle::distributed::GraphParameter& graph) {
@@ -1227,7 +1227,7 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
     CUDA_CHECK(cudaStreamSynchronize(node.in_stream));
     platform::CUDADeviceGuard guard(resource_->dev_id(i));
 
-    /*GpuPsNodeInfo* node_info_base = reinterpret_cast<GpuPsNodeInfo*>(node.val_storage);
+    GpuPsNodeInfo* node_info_base = reinterpret_cast<GpuPsNodeInfo*>(node.val_storage);
     GpuPsCommGraph graphs[edge_type_len];
     for (int idx = 0; idx < edge_type_len; idx++) {
       int table_offset = get_table_offset(i, GraphTableType::EDGE_TABLE, idx);
@@ -1247,6 +1247,7 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
         sizeof(GpuPsCommGraph) * edge_type_len,
         cudaMemcpyHostToDevice));
 
+    VLOG(0) << "Begin neighbor_sample_kernel3";
     int grid_size_ = (shard_len * edge_type_len - 1) / block_size_ + 1;
     neighbor_sample_kernel3<<<
         grid_size_, block_size_, 0, resource_->remote_stream(i, gpu_id)>>>(
@@ -1255,9 +1256,12 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
             sample_size,
             shard_len * edge_type_len,
             default_value,
-            shard_len);*/
-    
-    for (int idx = 0; idx < edge_type_len; idx++) {
+            shard_len);
+
+    cudaStreamSynchronize(resource_->remote_stream(i, gpu_id));
+    VLOG(0) << "Finish neighbor_sample_kernel3";
+   
+    /*for (int idx = 0; idx < edge_type_len; idx++) {
       GpuPsNodeInfo* node_info_base = reinterpret_cast<GpuPsNodeInfo*>(node.val_storage);
       GpuPsNodeInfo* node_info_list = node_info_base + idx * shard_len;
 
@@ -1289,7 +1293,7 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
               sample_size,
               shard_len,
               default_value);
-    }
+    } */
   } 
 
   for (int i = 0; i < total_gpu; ++i) {
