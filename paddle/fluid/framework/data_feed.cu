@@ -492,57 +492,6 @@ std::vector<std::shared_ptr<phi::Allocation>> GraphDataGenerator::SampleNeighbor
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   auto edge_to_id = gpu_graph_ptr->edge_to_id;
   
-  // for (gpu_id) { for (edge_type) } 
-  auto sample_res = gpu_graph_ptr->graph_neighbor_sample_all_edge_type(
-      gpuid_, edge_to_id_len_, (uint64_t*)(uniq_nodes), sample_size, len);
-
-  int* all_sample_count_ptr =
-      reinterpret_cast<int* >(sample_res.actual_sample_size_mem->ptr());
-  thrust::device_vector<int> cumsum_actual_sample_size(len * edge_to_id_len_ + 1, 0);
-  thrust::inclusive_scan(thrust::device_pointer_cast(all_sample_count_ptr),
-                         thrust::device_pointer_cast(all_sample_count_ptr) + len * edge_to_id_len_,
-                         cumsum_actual_sample_size.begin() + 1);
-  edges_split_num.resize(edge_to_id_len_);
-  for (int i = 0; i < edge_to_id_len_; i++) {
-    cudaMemcpyAsync(
-        edges_split_num.data() + i,
-        thrust::raw_pointer_cast(cumsum_actual_sample_size.data()) + (i + 1) * len,
-        sizeof(int),
-        cudaMemcpyDeviceToHost,
-        stream_);
-  }
-  CUDA_CHECK(cudaStreamSynchronize(stream_));
-  int all_sample_size = edges_split_num[edge_to_id_len_ - 1];
-  auto final_sample_val =
-      memory::AllocShared(place_, all_sample_size * sizeof(int64_t));
-  auto final_sample_val_dst =
-      memory::AllocShared(place_, all_sample_size * sizeof(int64_t));
-  int64_t* final_sample_val_ptr =
-      reinterpret_cast<int64_t* >(final_sample_val->ptr());
-  int64_t* final_sample_val_dst_ptr =
-      reinterpret_cast<int64_t* >(final_sample_val_dst->ptr());
-  int64_t* all_sample_val_ptr =
-      reinterpret_cast<int64_t* >(sample_res.val_mem->ptr());
-  fill_actual_neighbors<<<GET_BLOCKS(len * edge_to_id_len_),
-                          CUDA_NUM_THREADS,
-                          0,
-                          stream_>>>(all_sample_val_ptr,
-                                     final_sample_val_ptr,
-                                     final_sample_val_dst_ptr,
-                                     all_sample_count_ptr,
-                                     thrust::raw_pointer_cast(cumsum_actual_sample_size.data()),
-                                     sample_size,
-                                     len * edge_to_id_len_,
-                                     len);
-  *neighbor_len = all_sample_size;
-  cudaStreamSynchronize(stream_);
-
-  std::vector<std::shared_ptr<phi::Allocation>> sample_results;
-  sample_results.emplace_back(final_sample_val);
-  sample_results.emplace_back(final_sample_val_dst);
-  return sample_results;
-
-  /*
   std::vector<std::shared_ptr<phi::Allocation>> concat_sample_val;
   std::vector<std::shared_ptr<phi::Allocation>> concat_sample_count;
 
@@ -622,7 +571,7 @@ std::vector<std::shared_ptr<phi::Allocation>> GraphDataGenerator::SampleNeighbor
   std::vector<std::shared_ptr<phi::Allocation>> sample_results;
   sample_results.emplace_back(final_sample_val);
   sample_results.emplace_back(final_sample_val_dst);
-  return sample_results;*/
+  return sample_results;
 }
 
 std::shared_ptr<phi::Allocation> GraphDataGenerator::GetReindexResult(
