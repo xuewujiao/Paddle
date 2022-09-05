@@ -369,7 +369,7 @@ int GraphDataGenerator::FillIdShowClkTensor(int total_instance,
   } else {
     uint64_t *d_type_keys =
         reinterpret_cast<uint64_t *>(d_device_keys_[cursor]->ptr());
-    auto &infer_node_type_start = gpu_graph_ptr->infer_node_type_start_[gpuid_];
+    auto &infer_node_type_start = infer_node_type_start_;
     d_type_keys += infer_node_type_start[cursor];
     infer_node_type_start[cursor] += total_instance / 2;
     CopyDuplicateKeys<<<GET_BLOCKS(total_instance / 2),
@@ -536,21 +536,7 @@ int GraphDataGenerator::FillInsBuf() {
   buf_state_.Debug();
 
   if (total_instance == 0) {
-    if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
-      return -1;
-    }
-    int res = FillWalkBuf();
-    if (!res) {
-      // graph iterate complete
-      return -1;
-    } else {
-      total_instance = buf_state_.len;
-      VLOG(2) << "total_ins: " << total_instance;
-      buf_state_.Debug();
-      // if (total_instance == 0) {
-      //  return -1;
-      //}
-    }
+    return -1;
   }
   return MakeInsPair();
 }
@@ -561,26 +547,18 @@ int GraphDataGenerator::GenerateBatch() {
   int res = 0;
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   if (!gpu_graph_training_) {
-    auto &infer_node_type_start = gpu_graph_ptr->infer_node_type_start_[gpuid_];
-    while (cursor_ < h_device_keys_len_.size()) {
-      size_t device_key_size = h_device_keys_len_[cursor_];
-      if (infer_node_type_start[cursor_] >= device_key_size) {
-        cursor_++;
-        continue;
-      }
-      total_instance =
-          (infer_node_type_start[cursor_] + batch_size_ <= device_key_size)
-              ? batch_size_
-              : device_key_size - infer_node_type_start[cursor_];
-      VLOG(1) << "in graph_data generator:batch_size = " << batch_size_
-              << " instance = " << total_instance;
-      total_instance *= 2;
-      FillIdShowClkTensor(total_instance, gpu_graph_training_, cursor_);
-      break;
-    }
+    size_t device_key_size = h_device_keys_len_[cursor_];
+    total_instance =
+        (infer_node_type_start_[cursor_] + batch_size_ <= device_key_size)
+            ? batch_size_
+            : device_key_size - infer_node_type_start_[cursor_];
+    VLOG(1) << "in graph_data generator:batch_size = " << batch_size_
+            << " instance = " << total_instance;
+    total_instance *= 2;
     if (total_instance == 0) {
       return 0;
     }
+    FillIdShowClkTensor(total_instance, gpu_graph_training_, cursor_);
   } else {
     while (ins_buf_pair_len_ < batch_size_) {
       res = FillInsBuf();
@@ -895,6 +873,54 @@ int GraphDataGenerator::InsertTable(const unsigned long *d_keys,
   }
   table_->insert(d_keys, len, d_uniq_node_num, sample_stream_);
   CUDA_CHECK(cudaStreamSynchronize(sample_stream_));
+  return 0;
+}
+
+void GraphDataGenerator::DoWalk() {
+  if (gpu_graph_training_) {
+    FillWalkBuf();
+  } else {
+    FillInferBuf();
+  }
+}
+
+int GraphDataGenerator::FillInferBuf() {
+  platform::CUDADeviceGuard guard(gpuid_);
+  auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
+  auto &global_infer_node_type_start =
+      gpu_graph_ptr->global_infer_node_type_start_[gpuid_];
+  auto &infer_cursor = gpu_graph_ptr->infer_cursor_;
+  total_row_ = 0;
+  if (infer_cursor < h_device_keys_len_.size()) {
+    if (global_infer_node_type_start[infer_cursor] >=
+        h_device_keys_len_[infer_cursor]) {
+      infer_cursor++;
+      if (infer_cursor >= h_device_keys_len_.size()) {
+        return 0;
+      }
+    }
+    size_t device_key_size = h_device_keys_len_[infer_cursor];
+    total_row_ =
+        (global_infer_node_type_start[infer_cursor] + table_capcity_ <=
+         device_key_size)
+            ? table_capcity_
+            : device_key_size - global_infer_node_type_start[infer_cursor];
+
+    host_vec_.resize(total_row_);
+    uint64_t *d_type_keys =
+        reinterpret_cast<uint64_t *>(d_device_keys_[infer_cursor]->ptr());
+    cudaMemcpyAsync(host_vec_.data(),
+                    d_type_keys + global_infer_node_type_start[infer_cursor],
+                    sizeof(uint64_t) * total_row_,
+                    cudaMemcpyDeviceToHost,
+                    sample_stream_);
+    cudaStreamSynchronize(sample_stream_);
+    VLOG(1) << "cursor: " << infer_cursor
+            << " start: " << global_infer_node_type_start[infer_cursor]
+            << " num: " << total_row_;
+    global_infer_node_type_start[infer_cursor] += total_row_;
+    cursor_ = infer_cursor;
+  }
   return 0;
 }
 
@@ -1283,13 +1309,14 @@ void GraphDataGenerator::AllocResource(int thread_id,
   place_ = platform::CUDAPlace(gpuid_);
 
   platform::CUDADeviceGuard guard(gpuid_);
+  table_capcity_ = once_sample_startid_len_ * repeat_time_ * 10 * 24;
   if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
-    table_capcity_ = once_sample_startid_len_ * repeat_time_ * 10 * 24;
     table_ = new HashTable<uint64_t, uint64_t>(
         table_capcity_ / FLAGS_gpugraph_hbm_table_load_factor);
   }
-  VLOG(2) << "AllocResource gpuid " << gpuid_
-          << " feed_vec.size: " << feed_vec.size();
+  VLOG(1) << "AllocResource gpuid " << gpuid_
+          << " feed_vec.size: " << feed_vec.size()
+          << " table cap: " << table_capcity_;
   sample_stream_ = gpu_graph_ptr->get_local_stream(gpuid_);
   train_stream_ = dynamic_cast<phi::GPUContext *>(
                       platform::DeviceContextPool::Instance().Get(place_))
