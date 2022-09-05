@@ -141,7 +141,6 @@ class GpuPsGraphTable
                                                 bool compress);
   NeighborSampleResultV2 graph_neighbor_sample_all_edge_type(
       int gpu_id, int edge_type_len, uint64_t* key, int sample_size, int len);
-
   int get_feature_of_nodes(
       int gpu_id, uint64_t *d_walk, uint64_t *d_offset, int size, int slot_num);
 
