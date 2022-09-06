@@ -231,6 +231,7 @@ __global__ void neighbor_sample_kernel3(GpuPsCommGraph* graphs,
     GpuPsNodeInfo* node_info_list = node_info_base + edge_idx * shard_len;
     int* actual_size_base = (int*)(node_info_base + n);
     int* actual_size_array = actual_size_base + edge_idx * shard_len;
+
     if (node_info_list[node_i].neighbor_size == 0) {
       actual_size_array[node_i] = default_value;
     } else {
@@ -1228,10 +1229,11 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
     GpuPsCommGraph* d_commgraph_ptr = reinterpret_cast<GpuPsCommGraph*>(d_commgraph_mem->ptr());
     CUDA_CHECK(cudaMemcpy(
         d_commgraph_ptr,
-        &graphs,
+        graphs,
         sizeof(GpuPsCommGraph) * edge_type_len,
         cudaMemcpyHostToDevice));
 
+    VLOG(0) << "Begin neighbor_sample_kernel3";
     int grid_size_ = (shard_len * edge_type_len - 1) / block_size_ + 1;
     neighbor_sample_kernel3<<<
         grid_size_, block_size_, 0, resource_->remote_stream(i, gpu_id)>>>(
@@ -1241,8 +1243,10 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
             shard_len * edge_type_len,
             default_value,
             shard_len);
-   
-    /*for (int idx = 0; idx < edge_type_len; idx++) {
+    VLOG(0) << "Finish neighbor_sample_kernel3";
+  
+    /* 
+    for (int idx = 0; idx < edge_type_len; idx++) {
       GpuPsNodeInfo* node_info_base = reinterpret_cast<GpuPsNodeInfo*>(node.val_storage);
       GpuPsNodeInfo* node_info_list = node_info_base + idx * shard_len;
 
