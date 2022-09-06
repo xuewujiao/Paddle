@@ -151,7 +151,8 @@ class GraphGpuWrapper {
 
   std::vector<std::set<int>> finish_node_type_;
   std::vector<std::unordered_map<int, size_t>> node_type_start_;
-  std::vector<std::unordered_map<int, size_t>> infer_node_type_start_;
+  std::vector<std::unordered_map<int, size_t>> global_infer_node_type_start_;
+  size_t infer_cursor_;
   std::vector<std::vector<std::shared_ptr<phi::Allocation>>>
       d_graph_all_type_total_keys_;
   std::vector<std::vector<uint64_t>> h_graph_all_type_keys_len_;

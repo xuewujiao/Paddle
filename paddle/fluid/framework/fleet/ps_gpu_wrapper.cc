@@ -920,14 +920,17 @@ void PSGPUWrapper::LoadIntoMemory(bool is_shuffle) {
   dataset_->LoadIntoMemory();
   timer.Pause();
   VLOG(0) << "LoadIntoMemory cost: " << timer.ElapsedSec() << "s";
-
+  gpu_graph_mode_ = dataset_->GetGpuGraphMode();
+  if (dataset_->GetMemoryDataSize() == 0) {
+    VLOG(0) << "GetMemoryDataSize == 0";
+    return;
+  }
   // local shuffle
   if (is_shuffle) {
     dataset_->LocalShuffle();
   }
 
   InitSlotInfo();
-  gpu_graph_mode_ = dataset_->GetGpuGraphMode();
   if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
     std::shared_ptr<HeterContext> gpu_task = gpu_task_pool_.Get();
     gpu_task->Reset();

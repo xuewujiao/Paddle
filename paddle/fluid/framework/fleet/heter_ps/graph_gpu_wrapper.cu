@@ -74,23 +74,24 @@ void GraphGpuWrapper::init_conf(const std::string &first_node_type,
     }
     finish_node_type_.resize(max_dev_id + 1);
     node_type_start_.resize(max_dev_id + 1);
-    infer_node_type_start_.resize(max_dev_id + 1);
+    global_infer_node_type_start_.resize(max_dev_id + 1);
     for (size_t i = 0; i < device_id_mapping.size(); i++) {
       int dev_id = device_id_mapping[i];
       auto &node_type_start = node_type_start_[i];
-      auto &infer_node_type_start = infer_node_type_start_[i];
+      auto &infer_node_type_start = global_infer_node_type_start_[i];
       auto &finish_node_type = finish_node_type_[i];
       finish_node_type.clear();
-      // for (auto& kv : feature_to_id) {
-      //   node_type_start[kv.second] = 0;
-      //   infer_node_type_start[kv.second] = 0;
-      // }
+
+      for (size_t idx = 0; idx < feature_to_id.size(); idx++) {
+        infer_node_type_start[idx] = 0;
+      }
       for (auto &type : node_types) {
         auto iter = feature_to_id.find(type);
         node_type_start[iter->second] = 0;
         infer_node_type_start[iter->second] = 0;
       }
     }
+    infer_cursor_ = 0;
     init_type_keys();
   }
 }
@@ -117,7 +118,7 @@ void GraphGpuWrapper::init_type_keys() {
     }
     for (size_t j = 0; j < thread_num; j++) {
       h_graph_all_type_keys_len_[f_idx].push_back(tmp_keys[j].size());
-      VLOG(2) << "node type: " << type_to_index[f_idx]
+      VLOG(1) << "node type: " << type_to_index[f_idx]
               << ", gpu_graph_device_keys[" << j
               << "] = " << tmp_keys[j].size();
     }
