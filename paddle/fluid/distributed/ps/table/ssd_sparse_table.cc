@@ -24,8 +24,10 @@ DECLARE_bool(pserver_print_missed_key_num_every_push);
 DECLARE_bool(pserver_create_value_when_push);
 DECLARE_bool(pserver_enable_create_feasign_randomly);
 DEFINE_bool(pserver_open_strict_check, false, "pserver_open_strict_check");
-DEFINE_string(rocksdb_path, "database", "path of sparse table rocksdb file");
 DEFINE_int32(pserver_load_batch_size, 5000, "load batch size for ssd");
+PADDLE_DEFINE_EXPORTED_string(rocksdb_path,
+                              "database",
+                              "path of sparse table rocksdb file");
 
 namespace paddle {
 namespace distributed {
@@ -862,7 +864,164 @@ int32_t SSDSparseTable::SaveCache(
 
 int32_t SSDSparseTable::Load(const std::string& path,
                              const std::string& param) {
-  return MemorySparseTable::Load(path, param);
+  // return MemorySparseTable::Load(path, param);
+  VLOG(0) << "LOAD FLAGS_rocksdb_path:" << FLAGS_rocksdb_path;
+  std::string table_path = TableDir(path);
+  auto file_list = _afs_client.list(table_path);
+
+  std::sort(file_list.begin(), file_list.end());
+  for (auto file : file_list) {
+    VLOG(1) << "MemorySparseTable::Load() file list: " << file;
+  }
+
+  VLOG(0) << " Load _sparse_table_shard_num:" << _sparse_table_shard_num;
+
+  int load_param = atoi(param.c_str());
+  size_t expect_shard_num = _sparse_table_shard_num;
+  if (file_list.size() != expect_shard_num) {
+    LOG(WARNING) << "SSDSparseTable file_size:" << file_list.size()
+                 << " not equal to expect_shard_num:" << expect_shard_num;
+    return -1;
+  }
+  if (file_list.size() == 0) {
+    LOG(WARNING) << "SSDSparseTable load file is empty, path:" << path;
+    return -1;
+  }
+
+  size_t file_start_idx = _shard_idx * _avg_local_shard_num;
+
+  if (file_start_idx >= file_list.size()) {
+    return 0;
+  }
+
+  size_t feature_value_size =
+      _value_accesor->GetAccessorInfo().size / sizeof(float);
+  size_t mf_value_size =
+      _value_accesor->GetAccessorInfo().mf_size / sizeof(float);
+
+#ifdef PADDLE_WITH_HETERPS
+  int thread_num = _real_local_shard_num;
+#else
+  int thread_num = _real_local_shard_num < 15 ? _real_local_shard_num : 15;
+#endif
+
+  omp_set_num_threads(thread_num);
+#pragma omp parallel for schedule(dynamic)
+  for (int i = 0; i < _real_local_shard_num; ++i) {
+    FsChannelConfig channel_config;
+    channel_config.path = file_list[file_start_idx + i];
+    VLOG(1) << "SSDSparseTable::load begin load " << channel_config.path
+            << " into local shard " << i;
+    channel_config.converter = _value_accesor->Converter(load_param).converter;
+    channel_config.deconverter =
+        _value_accesor->Converter(load_param).deconverter;
+
+    int retry_num = 0;
+    int err_no = 0;
+    bool is_read_failed = false;
+    std::vector<std::pair<char*, int>> ssd_keys;
+    std::vector<std::pair<char*, int>> ssd_values;
+    std::vector<uint64_t> tmp_key;
+    ssd_keys.reserve(FLAGS_pserver_load_batch_size);
+    ssd_values.reserve(FLAGS_pserver_load_batch_size);
+    tmp_key.reserve(FLAGS_pserver_load_batch_size);
+    do {
+      ssd_keys.clear();
+      ssd_values.clear();
+      tmp_key.clear();
+      err_no = 0;
+      is_read_failed = false;
+      std::string line_data;
+      auto read_channel = _afs_client.open_r(channel_config, 0, &err_no);
+      char* end = NULL;
+      int local_shard_id = i % _avg_local_shard_num;
+      auto& shard = _local_shards[local_shard_id];
+      float data_buffer[FLAGS_pserver_load_batch_size * feature_value_size];
+      float* data_buffer_ptr = data_buffer;
+      uint64_t mem_count = 0;
+      uint64_t ssd_count = 0;
+      uint64_t mem_mf_count = 0;
+      uint64_t ssd_mf_count = 0;
+      try {
+        while (read_channel->read_line(line_data) == 0 &&
+               line_data.size() > 1) {
+          uint64_t key = std::strtoul(line_data.data(), &end, 10);
+          if (FLAGS_pserver_open_strict_check) {
+            if (key % _sparse_table_shard_num != i) {
+              LOG(WARNING) << "SSDSparseTable key:" << key
+                           << " not match shard,"
+                           << " file_idx:" << i
+                           << " shard num:" << _sparse_table_shard_num
+                           << " file:" << channel_config.path;
+              continue;
+            }
+          }
+          size_t value_size =
+              _value_accesor->ParseFromString(++end, data_buffer_ptr);
+          // ssd or mem
+          if (_value_accesor->SaveSSD(data_buffer_ptr)) {
+            tmp_key.emplace_back(key);
+            ssd_keys.emplace_back(
+                std::make_pair((char*)&tmp_key.back(), sizeof(uint64_t)));
+            ssd_values.emplace_back(std::make_pair((char*)data_buffer_ptr,
+                                                   value_size * sizeof(float)));
+            data_buffer_ptr += feature_value_size;
+            if (static_cast<int>(ssd_keys.size()) ==
+                FLAGS_pserver_load_batch_size) {
+              _db->put_batch(
+                  local_shard_id, ssd_keys, ssd_values, ssd_keys.size());
+              ssd_keys.clear();
+              ssd_values.clear();
+              tmp_key.clear();
+              data_buffer_ptr = data_buffer;
+            }
+            ssd_count++;
+            if (value_size > feature_value_size - mf_value_size) {
+              ssd_mf_count++;
+            }
+          } else {
+            auto& value = shard[key];
+            value.resize(value_size);
+            _value_accesor->ParseFromString(end, value.data());
+            mem_count++;
+            if (value_size > feature_value_size - mf_value_size) {
+              mem_mf_count++;
+            }
+          }
+        }
+        // last batch
+        if (ssd_keys.size() > 0) {
+          _db->put_batch(local_shard_id, ssd_keys, ssd_values, ssd_keys.size());
+        }
+        read_channel->close();
+        if (err_no == -1) {
+          ++retry_num;
+          is_read_failed = true;
+          LOG(ERROR) << "SSDSparseTable load failed after read, retry it! path:"
+                     << channel_config.path << " , retry_num=" << retry_num;
+          continue;
+        }
+
+        _db->flush(local_shard_id);
+        LOG(INFO) << "Table>> load done. ALL[" << mem_count + ssd_count
+                  << "] MEM[" << mem_count << "] MEM_MF[" << mem_mf_count
+                  << "] SSD[" << ssd_count << "] SSD_MF[" << ssd_mf_count
+                  << "].";
+      } catch (...) {
+        ++retry_num;
+        is_read_failed = true;
+        LOG(ERROR) << "SSDSparseTable load failed after read, retry it! path:"
+                   << channel_config.path << " , retry_num=" << retry_num;
+      }
+    } while (is_read_failed);
+  }
+  LOG(INFO) << "load num:" << LocalSize();
+  LOG(INFO) << "SSDSparseTable load success, path from "
+            << file_list[file_start_idx] << " to "
+            << file_list[file_start_idx + _real_local_shard_num - 1];
+
+  _cache_tk_size = LocalSize() * _config.sparse_table_cache_rate();
+  return 0;
 }
 
 //加载path目录下数据[start_idx, end_idx)
