@@ -218,8 +218,10 @@ __global__ void neighbor_sample_kernel2(GpuPsCommGraph graph,
 
 __global__ void neighbor_sample_kernel3(GpuPsCommGraph* graphs,
                                         GpuPsNodeInfo* node_info_base,
+                                        int* actual_size_base,
+                                        uint64_t* sample_array_base,
                                         int sample_len,
-                                        int n,
+                                        int n, // edge_type * shard_len
                                         int default_value,
                                         int shard_len) {
   curandState rng;
@@ -228,14 +230,13 @@ __global__ void neighbor_sample_kernel3(GpuPsCommGraph* graphs,
 
   if (i < n) {
     int edge_idx = i / shard_len, node_i = i % shard_len;
+
     GpuPsNodeInfo* node_info_list = node_info_base + edge_idx * shard_len;
-    int* actual_size_base = (int*)(node_info_base + n);
     int* actual_size_array = actual_size_base + edge_idx * shard_len;
 
     if (node_info_list[node_i].neighbor_size == 0) {
       actual_size_array[node_i] = default_value;
     } else {
-      uint64_t* sample_array_base = (uint64_t*)(actual_size_base + n + n % 2);
       uint64_t* sample_array = sample_array_base + edge_idx * shard_len * sample_len;
       int neighbor_len = (int)node_info_list[node_i].neighbor_size;
       uint32_t data_offset = node_info_list[node_i].neighbor_offset;
@@ -1198,6 +1199,14 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
   walk_to_dest(
       gpu_id, total_gpu, h_left, h_right, (uint64_t*)(d_shard_keys_ptr), NULL);
 
+  /*std::vector<std::shared_ptr<phi::Allocation>> graphs;
+  for (int i = 0; i < total_gpu; ++i) {
+    
+    for (int idx = 0; idx < edge_type_len; idx++) {
+
+    }
+  }*/
+
   for (int i = 0; i < total_gpu; ++i) {
     if (h_left[i] == -1) {
       continue;
@@ -1225,7 +1234,7 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
       graphs[idx] = gpu_graph_list_[offset];
     }
 
-    auto d_commgraph_mem = memory::Alloc(place, edge_type_len * sizeof(GpuPsCommGraph));
+    auto d_commgraph_mem = memory::AllocShared(place, edge_type_len * sizeof(GpuPsCommGraph));
     GpuPsCommGraph* d_commgraph_ptr = reinterpret_cast<GpuPsCommGraph*>(d_commgraph_mem->ptr());
     CUDA_CHECK(cudaMemcpy(
         d_commgraph_ptr,
@@ -1233,20 +1242,23 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
         sizeof(GpuPsCommGraph) * edge_type_len,
         cudaMemcpyHostToDevice));
 
-    VLOG(0) << "Begin neighbor_sample_kernel3";
+    // VLOG(0) << "Begin neighbor_sample_kernel3";
+    int* actual_size_base = (int*)(node_info_base + shard_len * edge_type_len);
+    uint64_t* sample_array_base = (uint64_t*)(actual_size_base +
+        shard_len * edge_type_len + (shard_len * edge_type_len) % 2);
     int grid_size_ = (shard_len * edge_type_len - 1) / block_size_ + 1;
     neighbor_sample_kernel3<<<
         grid_size_, block_size_, 0, resource_->remote_stream(i, gpu_id)>>>(
             d_commgraph_ptr,
             node_info_base,
+            actual_size_base,
+            sample_array_base,
             sample_size,
             shard_len * edge_type_len,
             default_value,
             shard_len);
-    VLOG(0) << "Finish neighbor_sample_kernel3";
-  
-    /* 
-    for (int idx = 0; idx < edge_type_len; idx++) {
+
+    /*for (int idx = 0; idx < edge_type_len; idx++) {
       GpuPsNodeInfo* node_info_base = reinterpret_cast<GpuPsNodeInfo*>(node.val_storage);
       GpuPsNodeInfo* node_info_list = node_info_base + idx * shard_len;
 
@@ -1259,15 +1271,15 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
       auto graph = gpu_graph_list_[offset];
       // node_info_list:
       //     key * edge_type
-      //     actual_size * edge_type 
-      //     sample_val * edge_type 
+      //     actual_size * edge_type
+      //     sample_val * edge_type
 
       int* actual_size_base = (int*)(node_info_base + edge_type_len * shard_len);
       int* actual_size_array = actual_size_base + idx * shard_len;
-      uint64_t* sample_array_base = 
+      uint64_t* sample_array_base =
           (uint64_t*)(actual_size_base + edge_type_len * shard_len + (shard_len * edge_type_len) % 2);
       uint64_t* sample_array = sample_array_base + idx * shard_len * sample_size;
-      
+
       int grid_size_ = (shard_len - 1) / block_size_ + 1;
       neighbor_sample_kernel2<<<
           grid_size_, block_size_, 0, resource_->remote_stream(i, gpu_id)>>>(
@@ -1279,6 +1291,43 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
               shard_len,
               default_value);
     }*/
+
+    CUDA_CHECK(cudaStreamSynchronize(resource_->remote_stream(i, gpu_id)));
+
+    /*if (true) {
+      int idx = 0;
+      GpuPsNodeInfo* node_info_base = reinterpret_cast<GpuPsNodeInfo*>(node.val_storage);
+      // uint64_t* node_info_list = (uint64_t*)(node_info_base);
+      int* actual_size_base = (int*)(node_info_base + edge_type_len * shard_len);
+      int* actual_size_array = actual_size_base + idx * shard_len;
+      //uint64_t* sample_array_base =
+      //    (uint64_t*)(actual_size_base + edge_type_len * shard_len + (shard_len * edge_type_len) % 2);
+      //uint64_t* sample_array = sample_array_base + idx * shard_len * sample_size;
+
+      // uint64_t h_node_info_list[shard_len * edge_type_len];
+      // cudaMemcpy(h_node_info_list, node_info_list, sizeof(uint64_t) * edge_type_len * shard_len, cudaMemcpyDeviceToHost);
+      int h_actual_size_array[shard_len];
+      cudaMemcpy(h_actual_size_array, actual_size_array, sizeof(int) * shard_len, cudaMemcpyDeviceToHost);
+      //uint64_t h_sample_array[shard_len * sample_size];
+      //cudaMemcpy(h_sample_array, sample_array, sizeof(uint64_t) * shard_len * sample_size, cudaMemcpyDeviceToHost);
+      std::string a, b, c;
+      //for (int j = 0; j < shard_len * edge_type_len; j++) {
+      //  c += std::to_string(h_node_info_list[j]);
+      //  c += ";";
+      //}
+      for (int j = 0; j < shard_len; j++) {
+        a += std::to_string(h_actual_size_array[j]);
+        a += ";";
+      }
+      a += std::to_string(shard_len);
+      //for (int j = 0; j < shard_len * sample_size; j++) {
+      //  b += std::to_string(h_sample_array[j]);
+      //  b += ";";
+      //}
+      // VLOG(0) << gpu_id << " " << i << " node_infolist: " << c;
+      VLOG(0) << gpu_id << " " << i << " actual_size: " << a;
+      //VLOG(0) << gpu_id << " " << i << " sample_array: " << b;
+    } */
   } 
 
   for (int i = 0; i < total_gpu; ++i) {
