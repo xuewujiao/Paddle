@@ -494,7 +494,8 @@ std::vector<std::shared_ptr<phi::Allocation>> GraphDataGenerator::SampleNeighbor
   
   // for (gpu_id) { for (edge_type) } 
   auto sample_res = gpu_graph_ptr->graph_neighbor_sample_all_edge_type(
-      gpuid_, edge_to_id_len_, (uint64_t*)(uniq_nodes), sample_size, len);
+      gpuid_, edge_to_id_len_, (uint64_t*)(uniq_nodes), sample_size, len,
+      edge_type_graph_);
 
   int* all_sample_count_ptr =
       reinterpret_cast<int* >(sample_res.actual_sample_size_mem->ptr());
@@ -1563,6 +1564,9 @@ void GraphDataGenerator::AllocResource(const paddle::platform::Place &place,
         memory::AllocShared(place_, reindex_table_size_ * sizeof(int));
     d_reindex_table_index_ =
         memory::AllocShared(place_, reindex_table_size_ * sizeof(int));
+    auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
+    edge_type_graph_ =
+        gpu_graph_ptr->get_edge_type_graph(gpuid_, edge_to_id_len_);
   }
 
   cudaStreamSynchronize(stream_);
