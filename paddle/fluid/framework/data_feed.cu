@@ -889,7 +889,7 @@ int GraphDataGenerator::FillInferBuf() {
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   auto &global_infer_node_type_start =
       gpu_graph_ptr->global_infer_node_type_start_[gpuid_];
-  auto &infer_cursor = gpu_graph_ptr->infer_cursor_;
+  auto &infer_cursor = gpu_graph_ptr->infer_cursor_[thread_id_];
   total_row_ = 0;
   if (infer_cursor < h_device_keys_len_.size()) {
     if (global_infer_node_type_start[infer_cursor] >=
@@ -957,13 +957,13 @@ int GraphDataGenerator::FillWalkBuf() {
   auto &node_type_start = gpu_graph_ptr->node_type_start_[gpuid_];
   auto &finish_node_type = gpu_graph_ptr->finish_node_type_[gpuid_];
   auto &type_to_index = gpu_graph_ptr->get_graph_type_to_index();
-
+  auto& cursor = gpu_graph_ptr->cursor_[thread_id_];
   size_t node_type_len = first_node_type.size();
   int remain_size =
       buf_size_ - walk_degree_ * once_sample_startid_len_ * walk_len_;
 
   while (i <= remain_size) {
-    int cur_node_idx = cursor_ % node_type_len;
+    int cur_node_idx = cursor % node_type_len;
     int node_type = first_node_type[cur_node_idx];
     auto &path = meta_path[cur_node_idx];
     size_t start = node_type_start[node_type];
@@ -988,13 +988,10 @@ int GraphDataGenerator::FillWalkBuf() {
       if (finish_node_type.size() == node_type_start.size()) {
         break;
       }
-      cursor_ += 1;
+      cursor += 1;
       continue;
     }
 
-    VLOG(2) << "i = " << i << " buf_size_ = " << buf_size_
-            << " tmp_len = " << tmp_len << " cursor = " << cursor_
-            << " once_max_sample_keynum = " << once_max_sample_keynum;
     VLOG(2) << "gpuid = " << gpuid_ << " path[0] = " << path[0];
     uint64_t *cur_walk = walk + i;
 
@@ -1009,10 +1006,13 @@ int GraphDataGenerator::FillWalkBuf() {
     int step = 1;
     VLOG(2) << "sample edge type: " << path[0] << " step: " << 1;
     jump_rows_ = sample_res.total_sample_size;
+    VLOG(2) << "i = " << i << " start = " << start
+            << " tmp_len = " << tmp_len << " cursor = " << node_type
+            << " cur_node_idx = " << cur_node_idx << " jump row: " << jump_rows_;
     VLOG(2) << "jump_row: " << jump_rows_;
     if (jump_rows_ == 0) {
       node_type_start[node_type] = tmp_len + start;
-      cursor_ += 1;
+      cursor += 1;
       continue;
     }
 
@@ -1089,7 +1089,7 @@ int GraphDataGenerator::FillWalkBuf() {
     node_type_start[node_type] = tmp_len + start;
     i += jump_rows_ * walk_len_;
     total_row_ += jump_rows_;
-    cursor_ += 1;
+    cursor += 1;
   }
   buf_state_.Reset(total_row_);
   int *d_random_row = reinterpret_cast<int *>(d_random_row_->ptr());
@@ -1103,6 +1103,7 @@ int GraphDataGenerator::FillWalkBuf() {
                        thrust::device_pointer_cast(d_random_row),
                        engine);
 
+  VLOG(2) << "FillWalkBuf: " << total_row_;
   cudaStreamSynchronize(sample_stream_);
   shuffle_seed_ = engine();
 
@@ -1306,6 +1307,7 @@ void GraphDataGenerator::AllocResource(int thread_id,
                                        std::vector<LoDTensor *> feed_vec) {
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   gpuid_ = gpu_graph_ptr->device_id_mapping[thread_id];
+  thread_id_ = thread_id;
   place_ = platform::CUDAPlace(gpuid_);
 
   platform::CUDADeviceGuard guard(gpuid_);
