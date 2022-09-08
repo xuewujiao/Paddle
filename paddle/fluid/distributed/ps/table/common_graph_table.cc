@@ -24,6 +24,7 @@
 #include "gflags/gflags.h"
 #include "paddle/fluid/distributed/common/utils.h"
 #include "paddle/fluid/distributed/ps/table/graph/graph_node.h"
+#include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_wrapper.h"
 #include "paddle/fluid/framework/generator.h"
 #include "paddle/fluid/framework/io/fs.h"
 #include "paddle/fluid/platform/timer.h"
@@ -32,6 +33,7 @@
 
 DECLARE_bool(graph_load_in_parallel);
 DECLARE_bool(graph_get_neighbor_id);
+DECLARE_int32(gpugraph_storage_mode);
 
 namespace paddle {
 namespace distributed {
@@ -475,9 +477,11 @@ void GraphTable::clear_graph(int idx) {
 
 void GraphTable::release_graph() {
   // Before releasing graph, prepare for sampling ids and embedding keys.
-  build_graph_type_keys();  
-  build_graph_total_keys(); 
+  build_graph_type_keys();
 
+  if (FLAGS_gpugraph_storage_mode == paddle::framework::GpuGraphStorageMode::WHOLE_HBM) {
+    build_graph_total_keys();
+  }
   // clear graph
   clear_graph();
 }
