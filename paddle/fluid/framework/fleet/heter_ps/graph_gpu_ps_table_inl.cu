@@ -181,6 +181,8 @@ __global__ void neighbor_sample_kernel2(GpuPsCommGraph graph,
   if (i < n) {
     if (node_info_list[i].neighbor_size == 0) {
       actual_size[i] = default_value;
+      int offset = i * sample_len;
+      res[offset] = 0;
     } else {
       int neighbor_len = (int)node_info_list[i].neighbor_size;
       uint32_t data_offset = node_info_list[i].neighbor_offset;
@@ -210,6 +212,62 @@ __global__ void neighbor_sample_kernel2(GpuPsCommGraph graph,
         }
         for (int idx = 0; idx < sample_len; idx++) {
           res[offset + idx] = data[data_offset + begin + idx];
+        }
+      }
+    }
+  }
+}
+
+__global__ void neighbor_sample_kernel3(GpuPsCommGraph* graphs,
+                                        GpuPsNodeInfo* node_info_base,
+                                        int* actual_size_base,
+                                        uint64_t* sample_array_base,
+                                        int sample_len,
+                                        int n, // edge_type * shard_len
+                                        int default_value,
+                                        int shard_len) {
+  curandState rng;
+  curand_init(blockIdx.x, threadIdx.x, 0, &rng);
+  const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+
+  if (i < n) {
+    int edge_idx = i / shard_len, node_i = i % shard_len;
+
+    GpuPsNodeInfo* node_info_list = node_info_base + edge_idx * shard_len;
+    int* actual_size_array = actual_size_base + edge_idx * shard_len;
+
+    if (node_info_list[node_i].neighbor_size == 0) {
+      actual_size_array[node_i] = default_value;
+    } else {
+      uint64_t* sample_array = sample_array_base + edge_idx * shard_len * sample_len;
+      int neighbor_len = (int)node_info_list[node_i].neighbor_size;
+      uint32_t data_offset = node_info_list[node_i].neighbor_offset;
+      int offset = node_i * sample_len;
+      uint64_t* data = graphs[edge_idx].neighbor_list;
+      uint64_t tmp;
+      int split, begin;
+      if (neighbor_len <= sample_len) {
+        actual_size_array[node_i] = neighbor_len;
+        for (int j = 0; j < neighbor_len; j++) {
+          sample_array[offset + j] = data[data_offset + j];
+        }
+      } else {
+        actual_size_array[node_i] = sample_len;
+        if (neighbor_len < 2 * sample_len) {
+          split = sample_len;
+          begin = 0;
+        } else {
+          split = neighbor_len - sample_len;
+          begin = neighbor_len - sample_len;
+        }
+        for (int idx = split; idx <= neighbor_len - 1; idx++) {
+          const int num = curand(&rng) % (idx + 1);
+          tmp = data[data_offset + num];
+          data[data_offset + num] = data[data_offset + idx];
+          data[data_offset + idx] = tmp;
+        }
+        for (int idx = 0; idx < sample_len; idx++) {
+          sample_array[offset + idx] = data[data_offset + begin + idx];
         }
       }
     }
@@ -865,7 +923,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
   auto d_right = memory::Alloc(place, total_gpu * sizeof(int));
   int* d_left_ptr = reinterpret_cast<int*>(d_left->ptr());
   int* d_right_ptr = reinterpret_cast<int*>(d_right->ptr());
-  int default_value = 0;
+  int default_value = 1;
   if (cpu_query_switch) {
     default_value = -1;
   }
