@@ -1311,8 +1311,6 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
     }
     destroy_storage(gpu_id, i);
   }
-
-  cudaStreamSynchronize(stream);
   return result;
 }
 

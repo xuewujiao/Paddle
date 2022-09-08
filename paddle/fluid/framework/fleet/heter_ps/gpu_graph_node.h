@@ -166,6 +166,7 @@ struct NeighborSampleQuery {
   }
 };
 struct NeighborSampleResult {
+  // Used in deepwalk.
   uint64_t *val;
   uint64_t *actual_val;
   int *actual_sample_size, sample_size, key_size;
@@ -294,6 +295,7 @@ struct NeighborSampleResult {
 };
 
 struct NeighborSampleResultV2 {
+  // Used in graphsage.
   uint64_t *val;
   int *actual_sample_size;
   std::shared_ptr<memory::Allocation> val_mem, actual_sample_size_mem;
