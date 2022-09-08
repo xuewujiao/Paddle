@@ -424,13 +424,14 @@ void GpuPsGraphTable::move_result_to_source_gpu_all_edge_type(
       CUDA_CHECK(cudaMemcpyAsync(
           reinterpret_cast<char*>(src_sample_res + i * len * sample_size + h_left[j] * sample_size),
           node.val_storage + sizeof(int64_t) * shard_len[j] * edge_type_len +
-              sizeof(int) * (shard_len[j] * edge_type_len + (shard_len[j] * edge_type_len) % 2),
+              sizeof(int) * (shard_len[j] * edge_type_len + (shard_len[j] * edge_type_len) % 2) +
+              sizeof(uint64_t) * i * shard_len[j] * sample_size,
           sizeof(uint64_t) * shard_len[j] * sample_size,
           cudaMemcpyDefault,
           node.out_stream));
       CUDA_CHECK(cudaMemcpyAsync(
           reinterpret_cast<char*>(actual_sample_size + i * len + h_left[j]),
-          node.val_storage + sizeof(int64_t) * shard_len[j] * edge_type_len,
+          node.val_storage + sizeof(int64_t) * shard_len[j] * edge_type_len + sizeof(int) * i * shard_len[j],
           sizeof(int) * shard_len[j],
           cudaMemcpyDefault,
           node.out_stream));
