@@ -940,8 +940,6 @@ class GraphDataGenerator {
   int gpuid_;
   // start ids
   // int64_t* device_keys_;
-  // size_t device_key_size_;
-  // point to device_keys_
   size_t cursor_;
   int thread_id_;
   size_t jump_rows_;
@@ -991,6 +989,7 @@ class GraphDataGenerator {
   uint64_t infer_table_cap_;
   int total_row_;
   size_t infer_node_start_;
+  size_t infer_node_end_;
 };
 
 class DataFeed {

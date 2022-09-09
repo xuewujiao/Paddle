@@ -546,9 +546,9 @@ int GraphDataGenerator::GenerateBatch() {
   int res = 0;
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   if (!gpu_graph_training_) {
-    total_instance = (infer_node_start_ + batch_size_ <= total_row_)
+    total_instance = (infer_node_start_ + batch_size_ <= infer_node_end_)
                          ? batch_size_
-                         : total_row_ - infer_node_start;
+                         : infer_node_end_ - infer_node_start_;
     VLOG(1) << "in graph_data generator:batch_size = " << batch_size_
             << " instance = " << total_instance;
     total_instance *= 2;
@@ -917,6 +917,7 @@ int GraphDataGenerator::FillInferBuf() {
             << " num: " << total_row_;
     infer_node_start_ = global_infer_node_type_start[infer_cursor];
     global_infer_node_type_start[infer_cursor] += total_row_;
+    infer_node_end_ = global_infer_node_type_start[infer_cursor];
     cursor_ = infer_cursor;
   }
   return 0;
