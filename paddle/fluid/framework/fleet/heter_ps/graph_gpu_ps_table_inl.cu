@@ -181,8 +181,6 @@ __global__ void neighbor_sample_kernel2(GpuPsCommGraph graph,
   if (i < n) {
     if (node_info_list[i].neighbor_size == 0) {
       actual_size[i] = default_value;
-      int offset = i * sample_len;
-      res[offset] = 0;
     } else {
       int neighbor_len = (int)node_info_list[i].neighbor_size;
       uint32_t data_offset = node_info_list[i].neighbor_offset;
@@ -924,7 +922,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
   auto d_right = memory::Alloc(place, total_gpu * sizeof(int));
   int* d_left_ptr = reinterpret_cast<int*>(d_left->ptr());
   int* d_right_ptr = reinterpret_cast<int*>(d_right->ptr());
-  int default_value = 1;
+  int default_value = 0;
   if (cpu_query_switch) {
     default_value = -1;
   }
