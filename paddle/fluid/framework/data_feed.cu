@@ -1057,7 +1057,7 @@ int GraphDataGenerator::FillWalkBuf() {
                    (uint64_t)sample_keys_ptr,
                    1,
                    sample_res.total_sample_size);
-      int sample_key_len = sample_res.total_sample_size;
+      int sample_key_len =  sample_res.total_sample_size;
       sample_res = gpu_graph_ptr->graph_neighbor_sample_v3(q, false);
       if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
         // table_->insert(sample_res.actual_val, sample_res.total_sample_size,
