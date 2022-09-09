@@ -1316,11 +1316,12 @@ int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
                    (uint64_t)sample_keys_ptr,
                    1,
                    sample_res.total_sample_size);
+      int sample_key_len =  sample_res.total_sample_size;
       sample_res = gpu_graph_ptr->graph_neighbor_sample_v3(q, false, true);
 
       FillOneStep(d_type_keys + start,
                   cur_walk,
-                  sample_res.total_sample_size,
+                  sample_key_len,
                   sample_res,
                   1,
                   step,
