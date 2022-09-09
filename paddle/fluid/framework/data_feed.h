@@ -979,7 +979,6 @@ class GraphDataGenerator {
   size_t buf_size_;
   int repeat_time_;
   std::vector<int> window_step_;
-  std::vector<int> infer_node_type_start_;
   BufState buf_state_;
   int batch_size_;
   int slot_num_;
@@ -988,8 +987,10 @@ class GraphDataGenerator {
   bool gpu_graph_training_;
   std::vector<uint64_t> host_vec_;
   std::vector<uint64_t> h_device_keys_len_;
-  uint64_t table_capcity_;
+  uint64_t train_table_cap_;
+  uint64_t infer_table_cap_;
   int total_row_;
+  size_t infer_node_start_;
 };
 
 class DataFeed {
