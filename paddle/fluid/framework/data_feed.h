@@ -943,6 +943,7 @@ class GraphDataGenerator {
   // size_t device_key_size_;
   // point to device_keys_
   size_t cursor_;
+  int thread_id_;
   size_t jump_rows_;
   int64_t* id_tensor_ptr_;
   int64_t* show_tensor_ptr_;

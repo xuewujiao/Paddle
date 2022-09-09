@@ -90,8 +90,9 @@ void GraphGpuWrapper::init_conf(const std::string &first_node_type,
         node_type_start[iter->second] = 0;
         infer_node_type_start[iter->second] = 0;
       }
+      infer_cursor_.push_back(0);
+      cursor_.push_back(0);
     }
-    infer_cursor_ = 0;
     init_type_keys();
   }
 }
