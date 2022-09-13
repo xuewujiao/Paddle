@@ -243,7 +243,6 @@ int32_t SSDSparseTable::PullSparsePtr(int shard_id,
                 _db->del_data(shard_id, (char*)&cur_key, sizeof(uint64_t));
                 ret = &feature_value;
               }
-              // pull时，内存和ssd里使用到的feasign均修正show、click和unseenday
               int pull_data_idx = cur_ctx->batch_index[idx];
               pull_values[pull_data_idx] = (char*)ret;
             }
@@ -254,7 +253,6 @@ int32_t SSDSparseTable::PullSparsePtr(int shard_id,
         }
       } else {
         ret = itr.value_ptr();
-        // pull时，内存和ssd里使用到的feasign均修正show、click和unseenday
         // int pull_data_idx = keys[i].second;
         pull_values[i] = (char*)ret;
       }
@@ -678,8 +676,6 @@ int32_t SSDSparseTable::Save(const std::string& path,
     auto& writer = writers[i];
     writer.Reset(fs_channel[i].get());
     {
-      // auto ssd_timer =
-      // std::make_shared<CostTimer>("pslib_downpour_memtable_iterator_v2");
       for (auto it = shard.begin(); it != shard.end(); ++it) {
         if (_config.enable_sparse_table_cache() &&
             (save_param == 1 || save_param == 2)) {

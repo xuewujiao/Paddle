@@ -98,9 +98,9 @@ bool CtrDymfAccessor::SaveCache(float* value,
 }
 
 bool CtrDymfAccessor::SaveSSD(float* value) {
-  // if (common_feature_value.UnseenDays(value) > _ssd_unseenday_threshold) {
-  //   return true;
-  // }
+  if (common_feature_value.UnseenDays(value) > _ssd_unseenday_threshold) {
+    return true;
+  }
   return true;
 }
 
