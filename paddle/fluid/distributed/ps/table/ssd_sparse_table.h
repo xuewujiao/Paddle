@@ -84,6 +84,7 @@ class SSDSparseTable : public MemorySparseTable {
   RocksDBHandler* _db;
   int64_t _cache_tk_size;
   double _local_show_threshold{0.0};
+  std::vector<paddle::framework::Channel<std::string>> _fs_channel;
 };
 
 }  // namespace distributed
