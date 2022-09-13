@@ -1100,7 +1100,12 @@ void PSGPUWrapper::SparseTableToHbm() {
   add_key_to_local(vec_data);
   add_key_to_gputask(gpu_task);
   BuildPull(gpu_task);
-  PrepareGPUTask(gpu_task);
+  if (!multi_mf_dim_) {
+    PrepareGPUTask(gpu_task);
+  }
+  else {
+    divide_to_device(gpu_task);
+  }
   BuildGPUTask(gpu_task);
   current_task_ = gpu_task;
   hbm_sparse_table_initialized_ = true;
