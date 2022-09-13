@@ -166,6 +166,7 @@ struct NeighborSampleQuery {
   }
 };
 struct NeighborSampleResult {
+  // Used in deepwalk.
   uint64_t *val;
   uint64_t *actual_val;
   int *actual_sample_size, sample_size, key_size;
@@ -232,6 +233,20 @@ struct NeighborSampleResult {
     delete[] ac_size;
     VLOG(0) << " ------------------";
   }
+  void display2() {
+    VLOG(0) << "in node sample result display -----";
+    uint64_t *res = new uint64_t[total_sample_size];
+    cudaMemcpy(res, actual_val, total_sample_size * sizeof(uint64_t),
+               cudaMemcpyDeviceToHost);
+    std::string sample_str;
+    for (int i = 0; i < total_sample_size; i++) {
+       if (sample_str.size() > 0) sample_str += ";";
+       sample_str += std::to_string(res[i]);
+    }
+    VLOG(0) << "sample result: " << sample_str;
+    delete[] res;
+  }
+
   std::vector<uint64_t> get_sampled_graph(NeighborSampleQuery q) {
     std::vector<uint64_t> graph;
     int64_t *sample_keys = new int64_t[q.len];
@@ -277,6 +292,26 @@ struct NeighborSampleResult {
   }
   NeighborSampleResult(){};
   ~NeighborSampleResult() {}
+};
+
+struct NeighborSampleResultV2 {
+  // Used in graphsage.
+  uint64_t *val;
+  int *actual_sample_size;
+  std::shared_ptr<memory::Allocation> val_mem, actual_sample_size_mem;
+
+  void initialize(int _sample_size, int _key_size, int _edge_to_id_len, int dev_id) {
+    platform::CUDADeviceGuard guard(dev_id);
+    platform::CUDAPlace place = platform::CUDAPlace(dev_id);
+    val_mem =
+        memory::AllocShared(place, _sample_size * _key_size * _edge_to_id_len * sizeof(uint64_t));
+    val = (uint64_t *)val_mem->ptr();
+    actual_sample_size_mem =
+        memory::AllocShared(place, _key_size * _edge_to_id_len * sizeof(int));
+    actual_sample_size = (int *)actual_sample_size_mem->ptr();
+  }
+  NeighborSampleResultV2() {}
+  ~NeighborSampleResultV2() {}
 };
 
 struct NodeQueryResult {

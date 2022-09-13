@@ -285,9 +285,23 @@ void GraphGpuWrapper::upload_batch(int type, int slice_num, int slot_num) {
 }
 
 NeighborSampleResult GraphGpuWrapper::graph_neighbor_sample_v3(
-    NeighborSampleQuery q, bool cpu_switch) {
+    NeighborSampleQuery q, bool cpu_switch, bool compress = true) {
   return ((GpuPsGraphTable *)graph_table)
-      ->graph_neighbor_sample_v3(q, cpu_switch);
+      ->graph_neighbor_sample_v3(q, cpu_switch, compress);
+}
+
+NeighborSampleResultV2 GraphGpuWrapper::graph_neighbor_sample_all_edge_type(
+    int gpu_id, int edge_type_len, uint64_t* key, int sample_size, int len,
+    std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs) {
+  return ((GpuPsGraphTable *)graph_table)
+      ->graph_neighbor_sample_all_edge_type(gpu_id, edge_type_len, key,
+                                            sample_size, len, edge_type_graphs);
+}
+
+std::vector<std::shared_ptr<phi::Allocation>> GraphGpuWrapper::get_edge_type_graph(
+    int gpu_id, int edge_type_len) {
+  return ((GpuPsGraphTable *)graph_table)
+      ->get_edge_type_graph(gpu_id, edge_type_len);
 }
 
 int GraphGpuWrapper::get_feature_of_nodes(int gpu_id,
@@ -332,7 +346,7 @@ std::vector<uint64_t> GraphGpuWrapper::graph_neighbor_sample(
   auto neighbor_sample_res =
       ((GpuPsGraphTable *)graph_table)
           ->graph_neighbor_sample_v2(
-              gpu_id, idx, cuda_key, sample_size, key.size(), false);
+              gpu_id, idx, cuda_key, sample_size, key.size(), false, true);
   int *actual_sample_size = new int[key.size()];
   cudaMemcpy(actual_sample_size,
              neighbor_sample_res.actual_sample_size,

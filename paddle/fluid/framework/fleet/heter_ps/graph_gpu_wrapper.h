@@ -87,15 +87,21 @@ class GraphGpuWrapper {
                                   int start,
                                   int query_size);
   NeighborSampleResult graph_neighbor_sample_v3(NeighborSampleQuery q,
-                                                bool cpu_switch);
+                                                bool cpu_switch,
+                                                bool compress);
   NeighborSampleResult graph_neighbor_sample(int gpu_id,
                                              uint64_t* device_keys,
                                              int walk_degree,
                                              int len);
+  NeighborSampleResultV2 graph_neighbor_sample_all_edge_type(
+      int gpu_id, int edge_type_len, uint64_t* key, int sample_size, int len,
+      std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs);
   std::vector<uint64_t> graph_neighbor_sample(int gpu_id,
                                               int idx,
                                               std::vector<uint64_t>& key,
                                               int sample_size);
+  std::vector<std::shared_ptr<phi::Allocation>> get_edge_type_graph(
+      int gpu_id, int edge_type_len);
   void set_feature_separator(std::string ch);
   int get_feature_of_nodes(int gpu_id,
                            uint64_t* d_walk,
