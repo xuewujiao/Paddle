@@ -369,9 +369,8 @@ int GraphDataGenerator::FillIdShowClkTensor(int total_instance,
   } else {
     uint64_t *d_type_keys =
         reinterpret_cast<uint64_t *>(d_device_keys_[cursor]->ptr());
-    auto &infer_node_type_start = infer_node_type_start_;
-    d_type_keys += infer_node_type_start[cursor];
-    infer_node_type_start[cursor] += total_instance / 2;
+    d_type_keys += infer_node_start_;
+    infer_node_start_ += total_instance / 2;
     CopyDuplicateKeys<<<GET_BLOCKS(total_instance / 2),
                         CUDA_NUM_THREADS,
                         0,
@@ -547,11 +546,9 @@ int GraphDataGenerator::GenerateBatch() {
   int res = 0;
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   if (!gpu_graph_training_) {
-    size_t device_key_size = h_device_keys_len_[cursor_];
-    total_instance =
-        (infer_node_type_start_[cursor_] + batch_size_ <= device_key_size)
-            ? batch_size_
-            : device_key_size - infer_node_type_start_[cursor_];
+    total_instance = (infer_node_start_ + batch_size_ <= infer_node_end_)
+                         ? batch_size_
+                         : infer_node_end_ - infer_node_start_;
     VLOG(1) << "in graph_data generator:batch_size = " << batch_size_
             << " instance = " << total_instance;
     total_instance *= 2;
@@ -866,9 +863,9 @@ int GraphDataGenerator::InsertTable(const unsigned long *d_keys,
                   sample_stream_);
   cudaStreamSynchronize(sample_stream_);
   // 产生了足够多的node，采样结束
-  VLOG(2) << "table capcity: " << table_capcity_ << ", " << h_uniq_node_num
+  VLOG(2) << "table capcity: " << train_table_cap_ << ", " << h_uniq_node_num
           << " used";
-  if (h_uniq_node_num + len >= table_capcity_) {
+  if (h_uniq_node_num + len >= train_table_cap_) {
     return 1;
   }
   table_->insert(d_keys, len, d_uniq_node_num, sample_stream_);
@@ -901,9 +898,9 @@ int GraphDataGenerator::FillInferBuf() {
     }
     size_t device_key_size = h_device_keys_len_[infer_cursor];
     total_row_ =
-        (global_infer_node_type_start[infer_cursor] + table_capcity_ <=
+        (global_infer_node_type_start[infer_cursor] + infer_table_cap_ <=
          device_key_size)
-            ? table_capcity_
+            ? infer_table_cap_
             : device_key_size - global_infer_node_type_start[infer_cursor];
 
     host_vec_.resize(total_row_);
@@ -918,7 +915,9 @@ int GraphDataGenerator::FillInferBuf() {
     VLOG(1) << "cursor: " << infer_cursor
             << " start: " << global_infer_node_type_start[infer_cursor]
             << " num: " << total_row_;
+    infer_node_start_ = global_infer_node_type_start[infer_cursor];
     global_infer_node_type_start[infer_cursor] += total_row_;
+    infer_node_end_ = global_infer_node_type_start[infer_cursor];
     cursor_ = infer_cursor;
   }
   return 0;
@@ -957,7 +956,7 @@ int GraphDataGenerator::FillWalkBuf() {
   auto &node_type_start = gpu_graph_ptr->node_type_start_[gpuid_];
   auto &finish_node_type = gpu_graph_ptr->finish_node_type_[gpuid_];
   auto &type_to_index = gpu_graph_ptr->get_graph_type_to_index();
-  auto& cursor = gpu_graph_ptr->cursor_[thread_id_];
+  auto &cursor = gpu_graph_ptr->cursor_[thread_id_];
   size_t node_type_len = first_node_type.size();
   int remain_size =
       buf_size_ - walk_degree_ * once_sample_startid_len_ * walk_len_;
@@ -1006,9 +1005,9 @@ int GraphDataGenerator::FillWalkBuf() {
     int step = 1;
     VLOG(2) << "sample edge type: " << path[0] << " step: " << 1;
     jump_rows_ = sample_res.total_sample_size;
-    VLOG(2) << "i = " << i << " start = " << start
-            << " tmp_len = " << tmp_len << " cursor = " << node_type
-            << " cur_node_idx = " << cur_node_idx << " jump row: " << jump_rows_;
+    VLOG(2) << "i = " << i << " start = " << start << " tmp_len = " << tmp_len
+            << " cursor = " << node_type << " cur_node_idx = " << cur_node_idx
+            << " jump row: " << jump_rows_;
     VLOG(2) << "jump_row: " << jump_rows_;
     if (jump_rows_ == 0) {
       node_type_start[node_type] = tmp_len + start;
@@ -1311,14 +1310,13 @@ void GraphDataGenerator::AllocResource(int thread_id,
   place_ = platform::CUDAPlace(gpuid_);
 
   platform::CUDADeviceGuard guard(gpuid_);
-  table_capcity_ = once_sample_startid_len_ * repeat_time_ * 10 * 24;
   if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
     table_ = new HashTable<uint64_t, uint64_t>(
-        table_capcity_ / FLAGS_gpugraph_hbm_table_load_factor);
+        train_table_cap_ / FLAGS_gpugraph_hbm_table_load_factor);
   }
   VLOG(1) << "AllocResource gpuid " << gpuid_
           << " feed_vec.size: " << feed_vec.size()
-          << " table cap: " << table_capcity_;
+          << " table cap: " << train_table_cap_;
   sample_stream_ = gpu_graph_ptr->get_local_stream(gpuid_);
   train_stream_ = dynamic_cast<phi::GPUContext *>(
                       platform::DeviceContextPool::Instance().Get(place_))
@@ -1349,7 +1347,6 @@ void GraphDataGenerator::AllocResource(int thread_id,
     h_device_keys_len_.push_back(h_graph_all_type_keys_len[i][thread_id]);
   }
   VLOG(2) << "h_device_keys size: " << h_device_keys_len_.size();
-  infer_node_type_start_ = std::vector<int>(h_device_keys_len_.size(), 0);
   size_t once_max_sample_keynum = walk_degree_ * once_sample_startid_len_;
   d_prefix_sum_ = memory::AllocShared(
       place_,
@@ -1440,11 +1437,15 @@ void GraphDataGenerator::SetConfig(
   repeat_time_ = graph_config.sample_times_one_chunk();
   buf_size_ =
       once_sample_startid_len_ * walk_len_ * walk_degree_ * repeat_time_;
-  VLOG(2) << "Confirm GraphConfig, walk_degree : " << walk_degree_
+  train_table_cap_ = graph_config.train_table_cap();
+  infer_table_cap_ = graph_config.infer_table_cap();
+  VLOG(0) << "Confirm GraphConfig, walk_degree : " << walk_degree_
           << ", walk_len : " << walk_len_ << ", window : " << window_
           << ", once_sample_startid_len : " << once_sample_startid_len_
           << ", sample_times_one_chunk : " << repeat_time_
-          << ", batch_size: " << batch_size_;
+          << ", batch_size: " << batch_size_
+          << ", train_table_cap: " << train_table_cap_
+          << ", infer_table_cap: " << infer_table_cap_;
   std::string first_node_type = graph_config.first_node_type();
   std::string meta_path = graph_config.meta_path();
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
