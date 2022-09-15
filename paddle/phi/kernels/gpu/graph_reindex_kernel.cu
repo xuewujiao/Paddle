@@ -16,7 +16,6 @@
 
 #include <thrust/copy.h>
 #include <thrust/device_vector.h>
-#include <thrust/reduce.h>
 #include <thrust/scan.h>
 #include <thrust/sequence.h>
 

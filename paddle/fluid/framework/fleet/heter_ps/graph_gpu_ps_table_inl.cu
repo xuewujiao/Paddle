@@ -1124,24 +1124,62 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
   }
 
   if (compress) {
-    int total_sample_size = thrust::reduce(
-        thrust::device_pointer_cast(actual_sample_size),
-        thrust::device_pointer_cast(actual_sample_size) + len);
+    size_t temp_storage_bytes = 0;
+    auto d_total_sample_size = memory::Alloc(place, sizeof(int));
+    int* d_total_sample_size_ptr =
+        reinterpret_cast<int*>(d_total_sample_size->ptr());
+    CUDA_CHECK(cub::DeviceReduce::Sum(NULL,
+                                      temp_storage_bytes,
+                                      actual_sample_size,
+                                      d_total_sample_size_ptr,
+                                      len,
+                                      stream));
+    auto d_temp_storage = memory::Alloc(place, temp_storage_bytes);
+    CUDA_CHECK(cub::DeviceReduce::Sum(d_temp_storage->ptr(),
+                                      temp_storage_bytes,
+                                      actual_sample_size,
+                                      d_total_sample_size_ptr,
+                                      len,
+                                      stream));
+    int total_sample_size = 0;
+    CUDA_CHECK(cudaMemcpyAsync(&total_sample_size,
+                               d_total_sample_size_ptr,
+                               sizeof(int),
+                               cudaMemcpyDeviceToHost,
+                               stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+
     result.set_total_sample_size(total_sample_size);
     result.actual_val_mem =
         memory::AllocShared(place, total_sample_size * sizeof(uint64_t));
     result.actual_val = (uint64_t*)(result.actual_val_mem)->ptr();
 
-    thrust::device_vector<int> cumsum_actual_sample_size(len);
-    thrust::exclusive_scan(thrust::device_pointer_cast(actual_sample_size),
-                           thrust::device_pointer_cast(actual_sample_size) + len,
-                           cumsum_actual_sample_size.begin(),
-                           0);
+    temp_storage_bytes = 0;
+    auto cumsum_actual_sample_size = memory::Alloc(place, len * sizeof(int));
+    int* cumsum_actual_sample_size_ptr =
+        reinterpret_cast<int*>(cumsum_actual_sample_size->ptr());
+    CUDA_CHECK(cub::DeviceScan::ExclusiveSum(NULL,
+                                             temp_storage_bytes,
+                                             actual_sample_size,
+                                             cumsum_actual_sample_size_ptr,
+                                             len,
+                                             stream));
+    if (d_temp_storage->size() < temp_storage_bytes) {
+      d_temp_storage = NULL;
+      d_temp_storage = memory::Alloc(place, temp_storage_bytes);
+    }
+    CUDA_CHECK(cub::DeviceScan::ExclusiveSum(d_temp_storage->ptr(),
+                                             temp_storage_bytes,
+                                             actual_sample_size,
+                                             cumsum_actual_sample_size_ptr,
+                                             len,
+                                             stream));
+
     fill_actual_vals<<<grid_size, block_size_, 0, stream>>>(
         val,
         result.actual_val,
         actual_sample_size,
-        thrust::raw_pointer_cast(cumsum_actual_sample_size.data()),
+        cumsum_actual_sample_size_ptr,
         sample_size,
         len);
   }
