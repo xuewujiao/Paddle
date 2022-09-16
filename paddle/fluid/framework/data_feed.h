@@ -898,7 +898,7 @@ struct BufState {
 class GraphDataGenerator {
  public:
   GraphDataGenerator(){};
-  virtual ~GraphDataGenerator();
+  virtual ~GraphDataGenerator(){};
   void SetConfig(const paddle::framework::DataFeedDesc& data_feed_desc);
   void AllocResource(int thread_id, std::vector<LoDTensor*> feed_vec);
   void SetFeedVec(std::vector<LoDTensor*> feed_vec);
