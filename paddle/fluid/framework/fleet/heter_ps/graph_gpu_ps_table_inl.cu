@@ -15,7 +15,7 @@
 #include <thrust/device_vector.h>
 #include <thrust/reduce.h>
 #include <thrust/scan.h>
-
+#include "cub/cub.cuh"
 #include <functional>
 #pragma once
 #ifdef PADDLE_WITH_HETERPS
@@ -747,10 +747,11 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
 
   CUDA_CHECK(cudaStreamSynchronize(stream));
 
-  CUDA_CHECK(cudaMemcpy(
-      h_left, d_left_ptr, total_gpu * sizeof(int), cudaMemcpyDeviceToHost));
-  CUDA_CHECK(cudaMemcpy(
-      h_right, d_right_ptr, total_gpu * sizeof(int), cudaMemcpyDeviceToHost));
+  CUDA_CHECK(cudaMemcpyAsync(
+      h_left, d_left_ptr, total_gpu * sizeof(int), cudaMemcpyDeviceToHost, stream));
+  CUDA_CHECK(cudaMemcpyAsync(
+      h_right, d_right_ptr, total_gpu * sizeof(int), cudaMemcpyDeviceToHost, stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
   for (int i = 0; i < total_gpu; ++i) {
     int shard_len = h_left[i] == -1 ? 0 : h_right[i] - h_left[i] + 1;
     if (shard_len == 0) {
@@ -928,14 +929,36 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
     CUDA_CHECK(cudaStreamSynchronize(stream));
     platform::CUDAPlace place = platform::CUDAPlace(resource_->dev_id(gpu_id));
     platform::CUDADeviceGuard guard(resource_->dev_id(gpu_id));
-
-    thrust::device_vector<int> t_actual_sample_size(len);
-    thrust::copy(actual_sample_size,
-                 actual_sample_size + len,
-                 t_actual_sample_size.begin());
-    int total_sample_size = thrust::reduce(t_actual_sample_size.begin(),
-                                           t_actual_sample_size.end());
-
+    size_t temp_storage_bytes = 0;
+    int total_sample_size = 0;
+    auto cumsum_actual_sample_size = memory::Alloc(
+      place,
+      (len + 1) * sizeof(int),
+      phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+    int *cumsum_actual_sample_size_p = reinterpret_cast<int *>(cumsum_actual_sample_size->ptr());
+    CUDA_CHECK(cudaMemsetAsync(cumsum_actual_sample_size_p, 0, sizeof(int), stream));
+    CUDA_CHECK(cub::DeviceScan::InclusiveSum(NULL,
+                                           temp_storage_bytes,
+                                           actual_sample_size,
+                                           cumsum_actual_sample_size_p + 1,
+                                           len,
+                                           stream));
+    auto d_temp_storage = memory::Alloc(
+      place,
+      temp_storage_bytes,
+      phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+    CUDA_CHECK(cub::DeviceScan::InclusiveSum(d_temp_storage->ptr(),
+                                           temp_storage_bytes,
+                                           actual_sample_size,
+                                           cumsum_actual_sample_size_p + 1,
+                                           len,
+                                           stream));
+    CUDA_CHECK(cudaMemcpyAsync(&total_sample_size,
+                  cumsum_actual_sample_size_p + len,
+                  sizeof(int),
+                  cudaMemcpyDeviceToHost,
+                  stream));
+    CUDA_CHECK(cudaStreamSynchronize(stream));
     result.actual_val_mem = memory::AllocShared(
         place,
         total_sample_size * sizeof(uint64_t),
@@ -943,16 +966,11 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
     result.actual_val = (uint64_t*)(result.actual_val_mem)->ptr();
 
     result.set_total_sample_size(total_sample_size);
-    thrust::device_vector<int> cumsum_actual_sample_size(len);
-    thrust::exclusive_scan(t_actual_sample_size.begin(),
-                           t_actual_sample_size.end(),
-                           cumsum_actual_sample_size.begin(),
-                           0);
     fill_actual_vals<<<grid_size, block_size_, 0, stream>>>(
         val,
         result.actual_val,
         actual_sample_size,
-        thrust::raw_pointer_cast(cumsum_actual_sample_size.data()),
+        cumsum_actual_sample_size_p,
         sample_size,
         len);
   }
