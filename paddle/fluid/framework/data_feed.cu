@@ -881,6 +881,16 @@ void GraphDataGenerator::DoWalk() {
   }
 }
 
+void GraphDataGenerator::clear_gpu_mem() {
+    d_len_per_row_.reset();
+    d_sample_keys_.reset();
+    d_prefix_sum_.reset();
+    for(size_t i = 0; i < d_sampleidx2rows_.size(); i++) {
+      d_sampleidx2rows_[i].reset();
+    }
+    delete table_;
+}
+
 int GraphDataGenerator::FillInferBuf() {
   platform::CUDADeviceGuard guard(gpuid_);
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
@@ -1291,12 +1301,6 @@ int GraphDataGenerator::FillWalkBuf() {
     }
   }
   return total_row_ != 0;
-}
-
-GraphDataGenerator::~GraphDataGenerator() {
-  if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
-    delete table_;
-  }
 }
 
 void GraphDataGenerator::SetFeedVec(std::vector<LoDTensor *> feed_vec) {

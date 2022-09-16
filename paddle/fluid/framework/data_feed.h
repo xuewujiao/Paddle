@@ -930,6 +930,7 @@ class GraphDataGenerator {
   }
   int InsertTable(const unsigned long* d_keys, unsigned long len);
   std::vector<uint64_t>& GetHostVec() { return host_vec_; }
+  void clear_gpu_mem();
 
  protected:
   HashTable<uint64_t, uint64_t>* table_;
@@ -1065,6 +1066,12 @@ class DataFeed {
     return gpu_graph_data_generator_.GetHostVec();
   }
 #endif
+
+  virtual void clear_gpu_mem() {
+#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETEPS)
+    gpu_graph_data_generator_.clear_gpu_mem();
+#endif
+  }
   virtual void SetGpuGraphMode(int gpu_graph_mode) {
     gpu_graph_mode_ = gpu_graph_mode;
   }
