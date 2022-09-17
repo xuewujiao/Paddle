@@ -1068,7 +1068,7 @@ class DataFeed {
 #endif
 
   virtual void clear_gpu_mem() {
-#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETEPS)
+#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
     gpu_graph_data_generator_.clear_gpu_mem();
 #endif
   }
