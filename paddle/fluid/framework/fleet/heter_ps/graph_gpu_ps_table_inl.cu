@@ -129,7 +129,7 @@ __global__ void neighbor_sample_kernel(GpuPsCommGraph graph,
   int i = blockIdx.x * TILE_SIZE + threadIdx.y;
   const int last_idx = min(static_cast<int>(blockIdx.x + 1) * TILE_SIZE, n);
   curandState rng;
-  curand_init(blockIdx.x, threadIdx.y * WARP_SIZE + threadIdx.x, 0, &rng);
+  curand_init(clock64(), threadIdx.y * WARP_SIZE + threadIdx.x, 0, &rng);
   while (i < last_idx) {
     if (node_info_list[i].neighbor_size == 0) {
       actual_size[i] = default_value;
@@ -204,9 +204,9 @@ __global__ void neighbor_sample_kernel2(GpuPsCommGraph graph,
         }
         for (int idx = split; idx <= neighbor_len - 1; idx++) {
           const int num = curand(&rng) % (idx + 1);
-          tmp = data[data_offset + num];
-          data[data_offset + num] = data[data_offset + idx];
-          data[data_offset + idx] = tmp;
+          data[data_offset + idx] =
+              atomicExch(reinterpret_cast<unsigned long long int*>(data + data_offset + num),
+                         static_cast<unsigned long long int>(data[data_offset + idx]));
         }
         for (int idx = 0; idx < sample_len; idx++) {
           res[offset + idx] = data[data_offset + begin + idx];
@@ -260,9 +260,9 @@ __global__ void neighbor_sample_kernel3(GpuPsCommGraph* graphs,
         }
         for (int idx = split; idx <= neighbor_len - 1; idx++) {
           const int num = curand(&rng) % (idx + 1);
-          tmp = data[data_offset + num];
-          data[data_offset + num] = data[data_offset + idx];
-          data[data_offset + idx] = tmp;
+          data[data_offset + idx] =
+              atomicExch(reinterpret_cast<unsigned long long int*>(data + data_offset + num),
+                         static_cast<unsigned long long int>(data[data_offset + idx]));
         }
         for (int idx = 0; idx < sample_len; idx++) {
           sample_array[offset + idx] = data[data_offset + begin + idx];
@@ -994,9 +994,14 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
     int* actual_size_array = (int*)(node_info_list + shard_len);
     uint64_t* sample_array =
         (uint64_t*)(actual_size_array + shard_len + shard_len % 2);
-    int grid_size_ = (shard_len - 1) / block_size_ + 1;
-    neighbor_sample_kernel2<<<
-        grid_size_, block_size_, 0, resource_->remote_stream(i, gpu_id)>>>(
+
+    constexpr int WARP_SIZE = 32;
+    constexpr int BLOCK_WARPS = 128 / WARP_SIZE;
+    constexpr int TILE_SIZE = BLOCK_WARPS * 16;
+    const dim3 block(WARP_SIZE, BLOCK_WARPS);
+    const dim3 grid((shard_len + TILE_SIZE - 1) / TILE_SIZE);
+    neighbor_sample_kernel<WARP_SIZE, BLOCK_WARPS, TILE_SIZE>
+        <<<grid, block, 0, resource_->remote_stream(i, gpu_id)>>>(
             graph,
             node_info_list,
             actual_size_array,
