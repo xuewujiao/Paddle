@@ -116,13 +116,18 @@ __global__ void get_features_kernel(GpuPsCommGraphFea graph,
 }
 
 template <int WARP_SIZE, int BLOCK_WARPS, int TILE_SIZE>
-__global__ void neighbor_sample_kernel(GpuPsCommGraph graph,
-                                       GpuPsNodeInfo* node_info_list,
-                                       int* actual_size,
-                                       uint64_t* res,
-                                       int sample_len,
-                                       int n,
-                                       int default_value) {
+__global__ void neighbor_sample_kernel_walking(GpuPsCommGraph graph,
+                                               GpuPsNodeInfo* node_info_list,
+                                               int* actual_size,
+                                               uint64_t* res,
+                                               int sample_len,
+                                               int n,
+                                               int default_value) {
+  // graph: The corresponding edge table.
+  // node_info_list: The input node query, duplicate nodes allowed.
+  // actual_size: The actual sample size of the input nodes.
+  // res: The output sample neighbors of the input nodes.
+  // sample_len: The fix sample size.
   assert(blockDim.x == WARP_SIZE);
   assert(blockDim.y == BLOCK_WARPS);
 
@@ -168,13 +173,18 @@ __global__ void neighbor_sample_kernel(GpuPsCommGraph graph,
   }
 }
 
-__global__ void neighbor_sample_kernel2(GpuPsCommGraph graph,
-                                        GpuPsNodeInfo* node_info_list,
-                                        int* actual_size,
-                                        uint64_t* res,
-                                        int sample_len,
-                                        int n,
-                                        int default_value) {
+__global__ void neighbor_sample_kernel_inplace(GpuPsCommGraph graph,
+                                               GpuPsNodeInfo* node_info_list,
+                                               int* actual_size,
+                                               uint64_t* res,
+                                               int sample_len,
+                                               int n,
+                                               int default_value) {
+  // graph: The corresponding edge table.
+  // node_info_list: The input node query, must be unique, otherwise the randomness gets worse.
+  // actual_size: The actual sample size of the input nodes.
+  // res: The output sample neighbors of the input nodes.
+  // sample_len: The fix sample size.
   curandState rng;
   curand_init(blockIdx.x, threadIdx.x, 0, &rng);
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -216,14 +226,19 @@ __global__ void neighbor_sample_kernel2(GpuPsCommGraph graph,
   }
 }
 
-__global__ void neighbor_sample_kernel3(GpuPsCommGraph* graphs,
-                                        GpuPsNodeInfo* node_info_base,
-                                        int* actual_size_base,
-                                        uint64_t* sample_array_base,
-                                        int sample_len,
-                                        int n, // edge_type * shard_len
-                                        int default_value,
-                                        int shard_len) {
+__global__ void neighbor_sample_kernel_all_edge_type(GpuPsCommGraph* graphs,
+                                                     GpuPsNodeInfo* node_info_base,
+                                                     int* actual_size_base,
+                                                     uint64_t* sample_array_base,
+                                                     int sample_len,
+                                                     int n, // edge_type * shard_len
+                                                     int default_value,
+                                                     int shard_len) {
+  // graph: All edge tables.
+  // node_info_list: The input node query, must be unique, otherwise the randomness gets worse.
+  // actual_size_base: The begin position of actual sample size of the input nodes.
+  // sample_array_base: The begin position of sample neighbors of the input nodes.
+  // sample_len: The fix sample size.
   curandState rng;
   curand_init(blockIdx.x, threadIdx.x, 0, &rng);
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1000,7 +1015,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
     constexpr int TILE_SIZE = BLOCK_WARPS * 16;
     const dim3 block(WARP_SIZE, BLOCK_WARPS);
     const dim3 grid((shard_len + TILE_SIZE - 1) / TILE_SIZE);
-    neighbor_sample_kernel<WARP_SIZE, BLOCK_WARPS, TILE_SIZE>
+    neighbor_sample_kernel_walking<WARP_SIZE, BLOCK_WARPS, TILE_SIZE>
         <<<grid, block, 0, resource_->remote_stream(i, gpu_id)>>>(
             graph,
             node_info_list,
@@ -1283,7 +1298,7 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
     uint64_t* sample_array_base = (uint64_t*)(actual_size_base +
         shard_len * edge_type_len + (shard_len * edge_type_len) % 2);
     int grid_size_ = (shard_len * edge_type_len - 1) / block_size_ + 1;
-    neighbor_sample_kernel3<<<
+    neighbor_sample_kernel_all_edge_type<<<
         grid_size_, block_size_, 0, resource_->remote_stream(i, gpu_id)>>>(
             d_commgraph_ptr,
             node_info_base,
