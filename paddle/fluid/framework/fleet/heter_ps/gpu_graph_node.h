@@ -170,6 +170,7 @@ struct NeighborSampleResult {
   uint64_t *actual_val;
   int *actual_sample_size, sample_size, key_size;
   int total_sample_size;
+  cudaStream_t stream=0;
   std::shared_ptr<memory::Allocation> val_mem, actual_sample_size_mem;
   std::shared_ptr<memory::Allocation> actual_val_mem;
   uint64_t *get_val() { return val; }
@@ -179,18 +180,30 @@ struct NeighborSampleResult {
   int get_key_size() { return key_size; }
   void set_total_sample_size(int s) { total_sample_size = s; }
   int get_len() { return total_sample_size; }
+  void set_stream(cudaStream_t stream_t) {
+      stream = stream_t;
+  }
   void initialize(int _sample_size, int _key_size, int dev_id) {
     sample_size = _sample_size;
     key_size = _key_size;
     platform::CUDADeviceGuard guard(dev_id);
     platform::CUDAPlace place = platform::CUDAPlace(dev_id);
-    val_mem =
-        memory::AllocShared(place, _sample_size * _key_size * sizeof(uint64_t));
+    if (stream != 0) {
+      val_mem =
+          memory::AllocShared(place, _sample_size * _key_size * sizeof(uint64_t),  phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+      actual_sample_size_mem =
+          memory::AllocShared(place, _key_size * sizeof(int),  phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+    }
+    else {
+      val_mem =
+          memory::AllocShared(place, _sample_size * _key_size * sizeof(uint64_t));
+      actual_sample_size_mem =
+          memory::AllocShared(place, _key_size * sizeof(int));
+    }
     val = (uint64_t *)val_mem->ptr();
-    actual_sample_size_mem =
-        memory::AllocShared(place, _key_size * sizeof(int));
     actual_sample_size = (int *)actual_sample_size_mem->ptr();
   }
+
   void display() {
     VLOG(0) << "in node sample result display ------------------";
     int64_t *res = new int64_t[sample_size * key_size];
