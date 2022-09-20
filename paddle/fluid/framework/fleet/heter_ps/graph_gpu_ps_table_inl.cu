@@ -679,6 +679,8 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
     int len,
     bool cpu_query_switch) {
   NeighborSampleResult result;
+  auto stream = resource_->local_stream(gpu_id, 0);
+  result.set_stream(stream);
   result.initialize(sample_size, len, resource_->dev_id(gpu_id));
 
   if (len == 0) {
@@ -691,7 +693,6 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
   int* actual_sample_size = result.actual_sample_size;
   uint64_t* val = result.val;
   int total_gpu = resource_->total_device();
-  auto stream = resource_->local_stream(gpu_id, 0);
 
   int grid_size = (len - 1) / block_size_ + 1;
 
