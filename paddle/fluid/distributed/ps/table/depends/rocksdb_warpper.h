@@ -230,6 +230,17 @@ class RocksDBHandler {
     return 0;
   }
 
+  Uint64Comparator* get_comparator() { return &_comparator; }
+
+  int ingest_externel_file(int id,
+                           const std::vector<std::string>& sst_filelist) {
+    rocksdb::IngestExternalFileOptions ifo;
+    ifo.move_files = true;
+    rocksdb::Status s = _dbs[id]->IngestExternalFile(sst_filelist, ifo);
+    assert(s.ok());
+    return 0;
+  }
+
  private:
   std::vector<rocksdb::ColumnFamilyHandle*> _handles;
   // rocksdb::DB* _db;

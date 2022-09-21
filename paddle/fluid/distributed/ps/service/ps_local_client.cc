@@ -264,7 +264,8 @@ int32_t PsLocalClient::Initialize() {
                                                     char** select_values,
                                                     size_t table_id,
                                                     const uint64_t* keys,
-                                                    size_t num) {
+                                                    size_t num,
+                                                    uint16_t pass_id) {
   // FIXME
   // auto timer =
   // std::make_shared<CostTimer>("pslib_downpour_client_pull_sparse");
@@ -280,10 +281,33 @@ int32_t PsLocalClient::Initialize() {
   table_context.use_ptr = true;
   table_context.num = num;
   table_context.shard_id = shard_id;
+  table_context.pass_id = pass_id;
 
   //  table_ptr->PullSparsePtr(select_values, keys, num);
   table_ptr->Pull(table_context);
 
+  return done();
+}
+
+::std::future<int32_t> PsLocalClient::PrintTableStat(uint32_t table_id) {
+  auto* table_ptr = GetTable(table_id);
+  std::pair<int64_t, int64_t> ret = table_ptr->PrintTableStat();
+  VLOG(0) << "table id: " << table_id << ", feasign size: " << ret.first
+          << ", mf size: " << ret.second;
+  return done();
+}
+
+::std::future<int32_t> PsLocalClient::SaveCacheTable(uint32_t table_id,
+                                                     uint16_t pass_id,
+                                                     size_t threshold) {
+  auto* table_ptr = GetTable(table_id);
+  std::pair<int64_t, int64_t> ret = table_ptr->PrintTableStat();
+  VLOG(0) << "table id: " << table_id << ", feasign size: " << ret.first
+          << ", mf size: " << ret.second;
+  if (ret.first > threshold) {
+    VLOG(0) << "run cache table";
+    table_ptr->CacheTable(pass_id);
+  }
   return done();
 }
 
