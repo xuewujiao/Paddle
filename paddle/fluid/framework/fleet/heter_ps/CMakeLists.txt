@@ -56,8 +56,7 @@ if(WITH_GPU)
            hashtable_kernel
            heter_ps
            ${HETERPS_DEPS}
-           graph_gpu_ps
-           graph_gpu_wrapper)
+           graph_gpu_ps)
     #ADD_EXECUTABLE(test_sample_rate test_sample_rate.cu)
     #target_link_libraries(test_sample_rate heter_comm table heter_comm_kernel hashtable_kernel heter_ps ${HETERPS_DEPS})
     #nv_test(test_sample_rate SRCS test_sample_rate.cu DEPS heter_comm table heter_comm_kernel hashtable_kernel heter_ps ${HETERPS_DEPS})

@@ -18,7 +18,6 @@
 #include <vector>
 
 #include "paddle/fluid/distributed/ps/table/common_graph_table.h"
-#include "paddle/fluid/framework/fleet/heter_ps/gpu_graph_node.h"
 namespace paddle {
 namespace framework {
 #ifdef PADDLE_WITH_HETERPS

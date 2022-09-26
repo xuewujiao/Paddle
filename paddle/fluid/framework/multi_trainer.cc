@@ -21,9 +21,13 @@ limitations under the License. */
 #if defined PADDLE_WITH_PSCORE
 #include "paddle/fluid/distributed/ps/service/communicator/communicator.h"
 #endif
+#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
+#include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_wrapper.h"
+#endif
 
 namespace paddle {
 namespace framework {
+class GraphGpuWrapper;
 
 extern Barrier g_barrier;
 
@@ -77,6 +81,24 @@ void MultiTrainer::Initialize(const TrainerDesc& trainer_desc,
     workers_[i]->SetDataFeed(readers[i]);
     workers_[i]->SetThreadNum(thread_num_);
   }
+
+#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
+  auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
+  auto node_to_id = gpu_graph_ptr->feature_to_id;
+  int cnt = 0;
+  std::vector<std::vector<std::vector<uint64_t>>>& vec_data =
+      dataset->GetGraphAllTypeTotalKeys();
+  size_t total_len = vec_data.size();
+  VLOG(0) << "Multitrainer Initialize GetGraphAllTypeTotalKeys: " << total_len;
+  for (auto& iter : node_to_id) {
+    int node_idx = iter.second;
+    for (int i = 0; i < thread_num_; ++i) {
+      readers[i]->SetDeviceKeys(&vec_data[cnt][i], node_idx);
+      readers[i]->SetGpuGraphMode(dataset->GetGpuGraphMode());
+    }
+    cnt++;
+  }
+#endif
 
   // set debug here
   SetDebug(trainer_desc.debug());

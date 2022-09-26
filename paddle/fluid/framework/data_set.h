@@ -169,6 +169,9 @@ class Dataset {
 
   virtual void SetGpuGraphMode(int is_graph_mode) = 0;
   virtual int GetGpuGraphMode() = 0;
+  virtual std::vector<uint64_t>& GetGpuGraphTotalKeys() = 0;
+  virtual std::vector<std::vector<std::vector<uint64_t>>>&
+  GetGraphAllTypeTotalKeys() = 0;
 
  protected:
   virtual int ReceiveFromClient(int msg_type,
@@ -283,6 +286,11 @@ class DatasetImpl : public Dataset {
   std::vector<uint64_t>& GetGpuGraphTotalKeys() {
     return gpu_graph_total_keys_;
   }
+
+  std::vector<std::vector<std::vector<uint64_t>>>& GetGraphAllTypeTotalKeys() {
+    return graph_all_type_total_keys_;
+  }
+
   Channel<T>& GetInputChannelRef() { return input_channel_; }
 
  protected:
