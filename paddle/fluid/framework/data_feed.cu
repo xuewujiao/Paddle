@@ -931,8 +931,8 @@ int GraphDataGenerator::GenerateBatch() {
     }
     if (sage_mode_) {
       size_t temp_storage_bytes = slot_instance * slot_num_ * sizeof(uint64_t);
+      // No need to allocate a new d_feature_buf_ if the old one is enough.
       if (d_feature_buf_->size() < temp_storage_bytes) {
-        d_feature_buf_ = NULL;
         d_feature_buf_ = memory::AllocShared(place_, temp_storage_bytes);
       }
     }
