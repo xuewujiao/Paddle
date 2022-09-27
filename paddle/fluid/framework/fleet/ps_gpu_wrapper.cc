@@ -384,7 +384,8 @@ void PSGPUWrapper::BuildPull(std::shared_ptr<HeterContext> gpu_task) {
   timeline.Start();
 
   auto ptl_dynamic_mf_func =
-      [this, &local_dim_keys, &local_dim_ptr, &fleet_ptr](int i, int j) {
+      [this, &local_dim_keys, &local_dim_ptr, &fleet_ptr, &gpu_task](int i,
+                                                                     int j) {
         size_t key_size = local_dim_keys[i][j].size();
         int32_t status = -1;
         int32_t cnt = 0;
@@ -429,7 +430,8 @@ void PSGPUWrapper::BuildPull(std::shared_ptr<HeterContext> gpu_task) {
               reinterpret_cast<char**>(local_dim_ptr[i][j].data()),
               this->table_id_,
               local_dim_keys[i][j].data(),
-              key_size);
+              key_size,
+              gpu_task->pass_id_);
           bool flag = true;
 
           tt.wait();
@@ -966,6 +968,7 @@ void PSGPUWrapper::LoadIntoMemory(bool is_shuffle) {
   if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
     std::shared_ptr<HeterContext> gpu_task = gpu_task_pool_.Get();
     gpu_task->Reset();
+    gpu_task->pass_id_ = (uint16_t)(dataset_->GetPassID());
     data_ready_channel_->Put(gpu_task);
   } else if (hbm_sparse_table_initialized_ == false) {
     SparseTableToHbm();
@@ -1099,6 +1102,7 @@ void PSGPUWrapper::SparseTableToHbm() {
   gpu_task->Reset();
   size_t device_num = heter_devices_.size();
   gpu_task->init(thread_keys_shard_num_, device_num, multi_mf_dim_);
+  gpu_task->pass_id_ = (uint16_t)(dataset_->GetPassID());
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   auto node_to_id = gpu_graph_ptr->feature_to_id;
   auto edge_to_id = gpu_graph_ptr->edge_to_id;

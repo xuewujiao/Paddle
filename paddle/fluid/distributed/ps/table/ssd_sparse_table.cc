@@ -49,7 +49,8 @@ int32_t SSDSparseTable::Pull(TableContext& context) {
   if (context.use_ptr) {
     char** pull_values = context.pull_context.ptr_values;
     const uint64_t* keys = context.pull_context.keys;
-    return PullSparsePtr(context.shard_id, pull_values, keys, context.num);
+    return PullSparsePtr(
+        context.shard_id, pull_values, keys, context.num, context.pass_id);
   } else {
     float* pull_values = context.pull_context.values;
     const PullSparseValue& pull_value = context.pull_context.pull_value;
@@ -179,7 +180,8 @@ int32_t SSDSparseTable::PullSparse(float* pull_values,
 int32_t SSDSparseTable::PullSparsePtr(int shard_id,
                                       char** pull_values,
                                       const uint64_t* pull_keys,
-                                      size_t num) {
+                                      size_t num,
+                                      uint16_t pass_id) {
   CostTimer timer("pserver_ssd_sparse_select_all");
   size_t value_size = _value_accesor->GetAccessorInfo().size / sizeof(float);
   size_t mf_value_size =
@@ -243,6 +245,7 @@ int32_t SSDSparseTable::PullSparsePtr(int shard_id,
                 _db->del_data(shard_id, (char*)&cur_key, sizeof(uint64_t));
                 ret = &feature_value;
               }
+              _value_accesor->UpdatePassId(ret->data(), pass_id);
               int pull_data_idx = cur_ctx->batch_index[idx];
               pull_values[pull_data_idx] = (char*)ret;
             }
@@ -254,6 +257,7 @@ int32_t SSDSparseTable::PullSparsePtr(int shard_id,
       } else {
         ret = itr.value_ptr();
         // int pull_data_idx = keys[i].second;
+        _value_accesor->UpdatePassId(ret->data(), pass_id);
         pull_values[i] = (char*)ret;
       }
     }
@@ -301,7 +305,7 @@ int32_t SSDSparseTable::PullSparsePtr(int shard_id,
           _db->del_data(shard_id, (char*)&cur_key, sizeof(uint64_t));
           ret = &feature_value;
         }
-        // pull时，内存和ssd里使用到的feasign均修正show、click和unseenday
+        _value_accesor->UpdatePassId(ret->data(), pass_id);
         int pull_data_idx = cur_ctx->batch_index[idx];
         pull_values[pull_data_idx] = (char*)ret;
       }
@@ -1214,6 +1218,165 @@ int32_t SSDSparseTable::Load(size_t start_idx,
             << " to " << file_list[end_idx - 1];
 
   _cache_tk_size = LocalSize() * _config.sparse_table_cache_rate();
+  return 0;
+}
+
+std::pair<int64_t, int64_t> SSDSparseTable::PrintTableStat() {
+  int64_t feasign_size = LocalSize();
+  return {feasign_size, -1};
+}
+
+int32_t SSDSparseTable::CacheTable(uint16_t pass_id) {
+  // acquire_table_mutex();
+  VLOG(0) << "cache_table";
+  std::atomic<uint32_t> count{0};
+  auto thread_num = _real_local_shard_num;
+  std::vector<std::future<int>> tasks;
+
+  double show_threshold = 10000000;
+
+  //保证cache数据不被淘汰掉
+  if (_config.enable_sparse_table_cache()) {
+    if (_local_show_threshold < show_threshold) {
+      show_threshold = _local_show_threshold;
+    }
+  }
+
+  if (show_threshold < 500) {
+    show_threshold = 500;
+  }
+  VLOG(0) << " show_threshold:" << show_threshold
+          << " ; local_show_threshold:" << _local_show_threshold;
+  VLOG(0) << "Table>> origin mem feasign size:" << LocalSize();
+  static int cache_table_count = 0;
+  ++cache_table_count;
+  for (size_t shard_id = 0; shard_id < _real_local_shard_num; ++shard_id) {
+    // from mem to ssd
+    auto fut = _shards_task_pool[shard_id % _shards_task_pool.size()]->enqueue(
+        [shard_id, this, &count, show_threshold, pass_id]() -> int {
+          rocksdb::Options options;
+          options.comparator = _db->get_comparator();
+          rocksdb::BlockBasedTableOptions bbto;
+          bbto.format_version = 5;
+          bbto.use_delta_encoding = false;
+          bbto.block_size = 4 * 1024;
+          bbto.block_restart_interval = 6;
+          bbto.cache_index_and_filter_blocks = false;
+          bbto.filter_policy.reset(rocksdb::NewBloomFilterPolicy(15, false));
+          bbto.whole_key_filtering = true;
+          options.table_factory.reset(rocksdb::NewBlockBasedTableFactory(bbto));
+          options.OptimizeLevelStyleCompaction();
+          options.keep_log_file_num = 100;
+          options.max_log_file_size = 50 * 1024 * 1024;  // 50MB
+          options.create_if_missing = true;
+          options.use_direct_reads = true;
+          options.write_buffer_size = 64 * 1024 * 1024;  // 256MB
+          options.max_write_buffer_number = 4;
+          options.max_bytes_for_level_base =
+              options.max_write_buffer_number * options.write_buffer_size;
+          options.min_write_buffer_number_to_merge = 1;
+          options.target_file_size_base = 1024 * 1024 * 1024;  // 1024MB
+          options.memtable_prefix_bloom_size_ratio = 0.02;
+          options.num_levels = 4;
+          options.max_open_files = -1;
+
+          options.compression = rocksdb::kNoCompression;
+
+          auto& shard = _local_shards[shard_id];
+          if (1) {
+            using DataType = shard_type::map_type::iterator;
+            std::vector<DataType> datas;
+            datas.reserve(shard.size() * 0.8);
+            size_t idx = 0;
+            for (auto it = shard.begin(); it != shard.end(); ++it) {
+              if (!_value_accesor->SaveMemCache(
+                      it.value().data(), 0, show_threshold, pass_id)) {
+                datas.emplace_back(it.it);
+              }
+            }
+            count.fetch_add(datas.size(), std::memory_order_relaxed);
+            VLOG(0) << "datas size:  " << datas.size();
+            {
+              // sst文件写入必须有序
+              uint64_t show_begin = butil::gettimeofday_ms();
+              std::sort(datas.begin(),
+                        datas.end(),
+                        [](const DataType& a, const DataType& b) {
+                          return a->first < b->first;
+                        });
+              VLOG(0) << "sort shard " << shard_id << ": "
+                      << butil::gettimeofday_ms() - show_begin
+                      << " ms, num: " << datas.size();
+            }
+
+            //必须做空判断，否则sst_writer.Finish会core掉
+            if (datas.size() != 0) {
+              rocksdb::SstFileWriter sst_writer(rocksdb::EnvOptions(), options);
+              std::string filename =
+                  paddle::string::format_string("%s_%d/cache-%05d.sst",
+                                                FLAGS_rocksdb_path.c_str(),
+                                                shard_id,
+                                                cache_table_count);
+              rocksdb::Status status = sst_writer.Open(filename);
+              if (!status.ok()) {
+                VLOG(0) << "sst writer open " << filename << "failed"
+                        << ", " << status.getState();
+                abort();
+              }
+              VLOG(0) << "sst writer open " << filename;
+
+              uint64_t show_begin = butil::gettimeofday_ms();
+              for (auto& data : datas) {
+                uint64_t tmp_key = data->first;
+                FixedFeatureValue& tmp_value =
+                    *((FixedFeatureValue*)(void*)(data->second));
+                status = sst_writer.Put(
+                    rocksdb::Slice((char*)(&(tmp_key)), sizeof(uint64_t)),
+                    rocksdb::Slice((char*)(tmp_value.data()),
+                                   tmp_value.size() * sizeof(float)));
+                if (!status.ok()) {
+                  VLOG(0) << "fatal in Put file: " << filename << ", "
+                          << status.getState();
+                  abort();
+                }
+              }
+              status = sst_writer.Finish();
+              if (!status.ok()) {
+                VLOG(0) << "fatal in finish file: " << filename << ", "
+                        << status.getState();
+                abort();
+              }
+              VLOG(0) << "write sst_file shard " << shard_id << ": "
+                      << butil::gettimeofday_ms() - show_begin << " ms";
+              int ret = _db->ingest_externel_file(shard_id, {filename});
+              if (ret) {
+                VLOG(0) << "ingest file failed"
+                        << ", " << status.getState();
+                abort();
+              }
+            }
+
+            for (auto it = shard.begin(); it != shard.end();) {
+              if (!_value_accesor->SaveMemCache(
+                      it.value().data(), 0, show_threshold, pass_id)) {
+                it = shard.erase(it);
+              } else {
+                ++it;
+              }
+            }
+          }
+          return 0;
+        });
+    tasks.push_back(std::move(fut));
+  }
+  for (size_t i = 0; i < tasks.size(); ++i) {
+    tasks[i].wait();
+  }
+  tasks.clear();
+
+  VLOG(0) << "Table>> cache ssd count: " << count.load();
+  VLOG(0) << "Table>> after update, mem feasign size:" << LocalSize();
+  // release_table_mutex();
   return 0;
 }
 

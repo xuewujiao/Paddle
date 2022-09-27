@@ -86,6 +86,7 @@ class HeterContext {
   int multi_mf_dim_ = 0;
 
   uint32_t shard_num_ = 37;
+  uint16_t pass_id_ = 0;
   uint64_t size() {
     uint64_t total_size = 0;
     for (auto& keys : feature_keys_) {
