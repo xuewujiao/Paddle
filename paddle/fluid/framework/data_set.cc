@@ -36,6 +36,7 @@
 #endif
 
 USE_INT_STAT(STAT_total_feasign_num_in_mem);
+USE_INT_STAT(STAT_epoch_finish);
 DECLARE_bool(graph_get_neighbor_id);
 DECLARE_int32(gpugraph_storage_mode);
 
@@ -461,6 +462,17 @@ void DatasetImpl<T>::LoadIntoMemory() {
     for (size_t i = 0; i < readers_.size(); i++) {
       readers_[i]->SetGpuGraphMode(gpu_graph_mode_);
     }
+    if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
+      if (STAT_GET(STAT_epoch_finish) == 1){
+        VLOG(0) << "get epoch finish true";
+        STAT_RESET(STAT_epoch_finish, 0);
+        for (size_t i = 0; i < readers_.size(); i++) {
+          readers_[i]->ResetPathNum();
+          readers_[i]->ResetEpochFinish();
+        }
+        return;
+      }
+    }
 
     for (int64_t i = 0; i < thread_num_; ++i) {
       load_threads.push_back(
@@ -483,6 +495,10 @@ void DatasetImpl<T>::LoadIntoMemory() {
     }
 
     if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
+      if (GetEpochFinish() == true) {
+        VLOG(0) << "epoch finish, set stat!";
+        STAT_RESET(STAT_epoch_finish, 1);
+      }
       for (size_t i = 0; i < readers_.size(); i++) {
         readers_[i]->clear_gpu_mem();
       }
@@ -1095,6 +1111,17 @@ int64_t DatasetImpl<T>::GetMemoryDataSize() {
   } else {
     return input_channel_->Size();
   }
+}
+
+template <typename T>
+bool DatasetImpl<T>::GetEpochFinish() {
+  bool is_epoch_finish = true;
+  if (gpu_graph_mode_) {
+    for (int i = 0; i < thread_num_; i++) {
+      is_epoch_finish = is_epoch_finish & readers_[i]->get_epoch_finish();
+    }
+  }
+  return is_epoch_finish;
 }
 
 template <typename T>

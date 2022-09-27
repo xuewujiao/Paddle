@@ -992,9 +992,16 @@ int GraphDataGenerator::FillWalkBuf() {
     int tmp_len = start + once_sample_startid_len_ > device_key_size
                       ? device_key_size - start
                       : once_sample_startid_len_;
+    bool update = true;
     if (tmp_len == 0) {
       finish_node_type.insert(node_type);
       if (finish_node_type.size() == node_type_start.size()) {
+        finish_node_type.clear();
+        for (auto iter = node_type_start.begin(); iter != node_type_start.end(); iter++) {
+          iter->second = 0;
+        }
+        cursor = 0;
+        epoch_finish_ = true;
         break;
       }
       cursor += 1;
@@ -1027,12 +1034,14 @@ int GraphDataGenerator::FillWalkBuf() {
 
     if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
       if (InsertTable(d_type_keys + start, tmp_len) != 0) {
-        VLOG(2) << "table is full";
+        VLOG(2) << "in step 0, insert key stage, table is full";
+        update = false;
         break;
       }
       if (InsertTable(sample_res.actual_val, sample_res.total_sample_size) !=
           0) {
-        VLOG(2) << "table is full";
+        VLOG(2) << "in step 0, insert sample res stage, table is full";
+        update = false;
         break;
       }
     }
@@ -1075,7 +1084,8 @@ int GraphDataGenerator::FillWalkBuf() {
         // d_uniq_node_num, sample_stream_);
         if (InsertTable(sample_res.actual_val, sample_res.total_sample_size) !=
             0) {
-          VLOG(2) << "table is full";
+          VLOG(2) << "in step: " << step << ", table is full";
+          update = false;
           break;
         }
       }
@@ -1095,10 +1105,14 @@ int GraphDataGenerator::FillWalkBuf() {
       }
     }
     // 此时更新全局采样状态
-    node_type_start[node_type] = tmp_len + start;
-    i += jump_rows_ * walk_len_;
-    total_row_ += jump_rows_;
-    cursor += 1;
+    if (update == true) {
+      node_type_start[node_type] = tmp_len + start;
+      i += jump_rows_ * walk_len_;
+      total_row_ += jump_rows_;
+      cursor += 1;
+    } else {
+      VLOG(2) << ";table is full, not update stat!";
+    }
   }
   buf_state_.Reset(total_row_);
   int *d_random_row = reinterpret_cast<int *>(d_random_row_->ptr());
@@ -1443,6 +1457,7 @@ void GraphDataGenerator::SetConfig(
       once_sample_startid_len_ * walk_len_ * walk_degree_ * repeat_time_;
   train_table_cap_ = graph_config.train_table_cap();
   infer_table_cap_ = graph_config.infer_table_cap();
+  epoch_finish_ = false;
   VLOG(0) << "Confirm GraphConfig, walk_degree : " << walk_degree_
           << ", walk_len : " << walk_len_ << ", window : " << window_
           << ", once_sample_startid_len : " << once_sample_startid_len_
