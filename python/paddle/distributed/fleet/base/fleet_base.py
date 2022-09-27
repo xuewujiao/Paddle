@@ -908,7 +908,10 @@ class Fleet(object):
 
     @is_non_distributed_check
     @inited_runtime_handler
-    def save_cache_table(self, table_id, pass_id, mem_cache_key_threshold):
+    def save_cache_table(self,
+                         table_id,
+                         pass_id,
+                         mem_cache_key_threshold=4000000000):
         return self._runtime_handle._save_cache_table(table_id, pass_id,
                                                       mem_cache_key_threshold)
 
