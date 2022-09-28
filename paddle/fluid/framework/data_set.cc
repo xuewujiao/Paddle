@@ -496,8 +496,11 @@ void DatasetImpl<T>::LoadIntoMemory() {
 
     if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
       if (GetEpochFinish() == true) {
-        VLOG(0) << "epoch finish, set stat!";
+        VLOG(0) << "epoch finish, set stat and clear sample stat!";
         STAT_RESET(STAT_epoch_finish, 1);
+        for (size_t i = 0; i < readers_.size(); i++) {
+          readers_[i]->ClearSampleState();
+        }
       }
       for (size_t i = 0; i < readers_.size(); i++) {
         readers_[i]->clear_gpu_mem();

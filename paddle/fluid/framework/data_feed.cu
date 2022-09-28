@@ -933,6 +933,16 @@ int GraphDataGenerator::FillInferBuf() {
   return 0;
 }
 
+void GraphDataGenerator::ClearSampleState() {
+  auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
+  auto &finish_node_type = gpu_graph_ptr->finish_node_type_[gpuid_];
+  auto &node_type_start = gpu_graph_ptr->node_type_start_[gpuid_];
+  finish_node_type.clear();
+  for (auto iter = node_type_start.begin(); iter != node_type_start.end(); iter++) {
+    iter->second = 0;
+  }
+}
+
 int GraphDataGenerator::FillWalkBuf() {
   platform::CUDADeviceGuard guard(gpuid_);
   size_t once_max_sample_keynum = walk_degree_ * once_sample_startid_len_;
@@ -996,10 +1006,6 @@ int GraphDataGenerator::FillWalkBuf() {
     if (tmp_len == 0) {
       finish_node_type.insert(node_type);
       if (finish_node_type.size() == node_type_start.size()) {
-        finish_node_type.clear();
-        for (auto iter = node_type_start.begin(); iter != node_type_start.end(); iter++) {
-          iter->second = 0;
-        }
         cursor = 0;
         epoch_finish_ = true;
         break;
@@ -1111,7 +1117,8 @@ int GraphDataGenerator::FillWalkBuf() {
       total_row_ += jump_rows_;
       cursor += 1;
     } else {
-      VLOG(2) << ";table is full, not update stat!";
+      VLOG(2) << "table is full, not update stat!";
+      break;
     }
   }
   buf_state_.Reset(total_row_);

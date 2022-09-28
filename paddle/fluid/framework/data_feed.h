@@ -926,6 +926,7 @@ class GraphDataGenerator {
   int GetPathNum() { return total_row_; }
   void ResetPathNum() {total_row_ = 0; }
   void ResetEpochFinish() {epoch_finish_ = false; }
+  void ClearSampleState();
   void SetDeviceKeys(std::vector<uint64_t>* device_keys, int type) {
     // type_to_index_[type] = h_device_keys_.size();
     // h_device_keys_.push_back(device_keys);
@@ -1108,6 +1109,12 @@ class DataFeed {
   virtual void ResetPathNum() {
 #if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
     gpu_graph_data_generator_.ResetPathNum();
+#endif
+  }
+  
+  virtual void ClearSampleState() {
+#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
+    gpu_graph_data_generator_.ClearSampleState();
 #endif
   }
 
