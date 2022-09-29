@@ -169,6 +169,7 @@ class Dataset {
 
   virtual void SetGpuGraphMode(int is_graph_mode) = 0;
   virtual int GetGpuGraphMode() = 0;
+  virtual bool GetEpochFinish() = 0;
 
   virtual void SetPassId(uint32_t pass_id) = 0;
   virtual uint32_t GetPassID() = 0;
@@ -266,6 +267,7 @@ class DatasetImpl : public Dataset {
   virtual void DynamicAdjustReadersNum(int thread_num);
   virtual void SetFleetSendSleepSeconds(int seconds);
   virtual std::vector<std::string> GetSlots();
+  virtual bool GetEpochFinish();
 
   std::vector<paddle::framework::Channel<T>>& GetMultiOutputChannel() {
     return multi_output_channel_;
