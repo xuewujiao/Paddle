@@ -112,8 +112,17 @@ class GpuPsGraphTable
         }
       }
     }
+    device_mutex_.resize(gpu_num);
+    for (int i = 0; i < gpu_num; i++) {
+      device_mutex_[i] = new std::mutex();
+    }
   }
-  ~GpuPsGraphTable() {}
+  ~GpuPsGraphTable() {
+    for (size_t i = 0; i < device_mutex_.size(); ++i) {
+      delete device_mutex_[i];
+    }
+    device_mutex_.clear();
+  }
   void build_graph_on_single_gpu(const GpuPsCommGraph &g, int gpu_id, int idx);
   void build_graph_fea_on_single_gpu(const GpuPsCommGraphFea &g, int gpu_id);
   void clear_graph_info(int gpu_id, int index);
@@ -167,6 +176,7 @@ class GpuPsGraphTable
   std::shared_ptr<paddle::distributed::GraphTable> cpu_graph_table_;
   std::shared_ptr<pthread_rwlock_t> rw_lock;
   mutable std::mutex mutex_;
+  std::vector<std::mutex *> device_mutex_;
   std::condition_variable cv_;
   int cpu_table_status;
 };

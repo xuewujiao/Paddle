@@ -928,7 +928,13 @@ class GraphDataGenerator {
     // type_to_index_[type] = h_device_keys_.size();
     // h_device_keys_.push_back(device_keys);
   }
-  int InsertTable(const unsigned long* d_keys, unsigned long len);
+  int InsertTable(const unsigned long* d_keys,
+                  unsigned long len,
+                  std::shared_ptr<phi::Allocation> d_uniq_node_num);
+  std::shared_ptr<phi::Allocation> GetTableKeys(
+      std::shared_ptr<phi::Allocation> d_uniq_node_num,
+      uint64_t& h_uniq_node_num);
+  void CopyFeaFromTable(std::shared_ptr<phi::Allocation> d_uniq_fea_num);
   std::vector<uint64_t>& GetHostVec() { return host_vec_; }
   void clear_gpu_mem();
 

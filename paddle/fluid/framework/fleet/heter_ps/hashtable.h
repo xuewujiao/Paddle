@@ -158,11 +158,9 @@ class HashTable {
 
   template <typename StreamType>
   void dump_to_cpu(int devid, StreamType stream);
-  
+
   template <typename StreamType>
-  void get_keys(KeyType* d_out,
-                uint64_t* global_cursor,
-                StreamType stream);
+  void get_keys(KeyType* d_out, uint64_t* global_cursor, StreamType stream);
 
 #if defined(PADDLE_WITH_CUDA)
 
@@ -208,6 +206,8 @@ class HashTable {
   int prefetch(const int dev_id, cudaStream_t stream = 0) {
     return container_->prefetch(dev_id, stream);
   }
+
+  void clear(cudaStream_t stream = 0) { container_->clear_async(stream); }
 
   void show_collision(int id) { return container_->print_collision(id); }
 
