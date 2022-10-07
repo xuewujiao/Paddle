@@ -38,11 +38,11 @@ __global__ void InitializeHashTable(T* tensor, int len) {
   CUDA_KERNEL_LOOP(idx, len) { tensor[idx] = -1; }
 }
 
-template <typename T, typename S, typename Context>
+template <typename T1, typename T, typename Context>
 std::pair<std::shared_ptr<phi::Allocation>, std::shared_ptr<phi::Allocation>>
 FillHashTableWithAttachedData(const Context& dev_ctx,
                               const T* input,
-                              const S* attached,
+                              const T1* attached,
                               int num_input,
                               int64_t len_hashtable,
                               T* keys,
@@ -81,9 +81,9 @@ FillHashTableWithAttachedData(const Context& dev_ctx,
   T* unique_items_data = reinterpret_cast<T*>(unique_items->ptr());
 
   auto unique_attached_items =
-      paddle::memory::AllocShared(place, total_unique_items * sizeof(T));
-  S* unique_attached_items_data =
-      reinterpret_cast<T*>(unique_attached_items->ptr());
+      paddle::memory::AllocShared(place, total_unique_items * sizeof(T1));
+  T1* unique_attached_items_data =
+      reinterpret_cast<T1*>(unique_attached_items->ptr());
 
   *final_nodes_len = total_unique_items;
 
@@ -99,7 +99,7 @@ FillHashTableWithAttachedData(const Context& dev_ctx,
       values,
       key_index);
   */
-  FillUniqueItemsWithAttachedData<T, S><<<grid, block, 0, dev_ctx.stream()>>>(
+  FillUniqueItemsWithAttachedData<T, T1><<<grid, block, 0, dev_ctx.stream()>>>(
       input,
       attached,
       num_input,

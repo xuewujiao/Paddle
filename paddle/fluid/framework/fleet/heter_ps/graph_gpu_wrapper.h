@@ -109,8 +109,8 @@ class GraphGpuWrapper {
       uint64_t* key,
       int sample_size,
       int len,
-      std::vector<std::shared_ptr<phi::Allocation>>& edge_type_graphs int*
-          node_types,
+      std::vector<std::shared_ptr<phi::Allocation>>& edge_type_graphs,
+      int* node_types,
       int node_type_num,
       int& edges_len,
       std::vector<int>& edges_split_num);

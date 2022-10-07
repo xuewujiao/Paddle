@@ -335,21 +335,21 @@ GraphGpuWrapper::sample_neighbor_with_node_type(
     uint64_t *key,
     int sample_size,
     int len,
-    std::vector<std::shared_ptr<phi::Allocation>> &edge_type_graphs int
-        *node_types,
+    std::vector<std::shared_ptr<phi::Allocation>> &edge_type_graphs,
+    int *node_types,
     int node_type_num,
     int &edges_len,
     std::vector<int> &edges_split_num) {
   return ((GpuPsGraphTable *)graph_table)
-      ->graph_neighbor_sample_all_edge_type(gpu_id,
-                                            key,
-                                            sample_size,
-                                            len,
-                                            edge_type_graphs,
-                                            node_types,
-                                            node_type_num,
-                                            edges_len,
-                                            edges_split_num);
+      ->sample_neighbor_with_node_type(gpu_id,
+                                       key,
+                                       sample_size,
+                                       len,
+                                       edge_type_graphs,
+                                       node_types,
+                                       node_type_num,
+                                       edges_len,
+                                       edges_split_num);
 }
 std::vector<std::shared_ptr<phi::Allocation>>
 GraphGpuWrapper::get_edge_type_graph(int gpu_id, int edge_type_len) {

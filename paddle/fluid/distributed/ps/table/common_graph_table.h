@@ -728,7 +728,7 @@ class GraphTable : public Table {
   mutable std::mutex mutex_;
   bool build_sampler_on_cpu;
   bool is_load_reverse_edge = false;
-  std::vetor<std::vector<int>> node_id_to_edge_types, edge_type_outputs;
+  std::vector<std::vector<int>> node_id_to_edge_types, edge_type_outputs;
   std::shared_ptr<pthread_rwlock_t> rw_lock;
 #ifdef PADDLE_WITH_HETERPS
   // paddle::framework::GpuPsGraphTable gpu_graph_table;

@@ -350,7 +350,7 @@ __global__ void GraphFillIdKernel(uint64_t *id_tensor,
 __global__ void GraphFillIdKernelWithType(uint64_t *id_tensor,
                                           int *id_types,
                                           int *row_meta_path,
-                                          int *meth_path_types,
+                                          int *meta_path_types,
                                           int *fill_ins_num,
                                           uint64_t *walk,
                                           int *row,
@@ -480,7 +480,7 @@ int GraphDataGenerator::FillInsBuf() {
 
   uint64_t *walk = reinterpret_cast<uint64_t *>(d_walk_->ptr());
   uint64_t *ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_->ptr());
-  int *d_ins_type_buf = reinterpret_cast<uint64_t *>(d_ins_type_buf_->ptr());
+  int *d_ins_type_buf = reinterpret_cast<int *>(d_ins_type_buf_->ptr());
   int *random_row = reinterpret_cast<int *>(d_random_row_->ptr());
   int *d_pair_num = reinterpret_cast<int *>(d_pair_num_->ptr());
 
@@ -506,6 +506,7 @@ int GraphDataGenerator::FillInsBuf() {
     */
   GraphFillIdKernelWithType<<<GET_BLOCKS(len), CUDA_NUM_THREADS, 0, stream_>>>(
       ins_buf + ins_buf_pair_len_ * 2,
+      d_ins_type_buf,
       d_shuffled_meta_row,
       d_meta_path_node_types,
       d_pair_num,
@@ -638,11 +639,11 @@ GraphDataGenerator::SampleNeighbors(int64_t *uniq_nodes,
   return sample_results;
 }
 
-std::shared_ptr<phi::Allocation>
+std::pair<std::shared_ptr<phi::Allocation>, std::shared_ptr<phi::Allocation>>
 GraphDataGenerator::GetReindexResultWithTypeInfo(int64_t *reindex_src_data,
                                                  const int64_t *center_nodes,
                                                  int *src_types,
-                                                 int *centor_node_types,
+                                                 int *center_node_types,
                                                  int *final_nodes_len,
                                                  int node_len,
                                                  int64_t neighbor_len) {
@@ -692,7 +693,7 @@ GraphDataGenerator::GetReindexResultWithTypeInfo(int64_t *reindex_src_data,
              cudaMemcpyDeviceToDevice);
 
   cudaMemcpy(all_types_data,
-             center_nodes_types,
+             center_node_types,
              sizeof(int) * node_len,
              cudaMemcpyDeviceToDevice);
   cudaMemcpy(all_types_data + node_len,
@@ -702,11 +703,11 @@ GraphDataGenerator::GetReindexResultWithTypeInfo(int64_t *reindex_src_data,
 
   cudaStreamSynchronize(stream_);
   VLOG(2) << gpuid_ << ": Run phi::FillHashTable";
-  auto res = phi::FillHashTableWithAttachedData<int64_t, phi::GPUContext>(
+  auto res = phi::FillHashTableWithAttachedData<int, int64_t, phi::GPUContext>(
       dev_ctx_,
       all_nodes_data,
       all_types_data,
-      node_len + neighbor_len,
+      (int)(node_len + neighbor_len),
       reindex_table_size_,
       d_reindex_table_key_ptr,
       d_reindex_table_value_ptr,
@@ -804,12 +805,12 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GetReindexResult(
           d_reindex_table_value_ptr);
   return final_nodes;
 }
-std::shared_ptr<phi::Allocation> GenerateSampleGraphWithTypeInfo(
-    uint64_t *node_ids,
-    int *node_types,
-    int len,
-    int *uniq_len,
-    phi::DenseTensor *inverse) {
+std::shared_ptr<phi::Allocation>
+GraphDataGenerator::GenerateSampleGraphWithTypeInfo(uint64_t *node_ids,
+                                                    int *node_types,
+                                                    int len,
+                                                    int *final_len,
+                                                    phi::DenseTensor *inverse) {
   const phi::GPUContext &dev_ctx_ = *(static_cast<phi::GPUContext *>(
       platform::DeviceContextPool::Instance().Get(place_)));
 
@@ -852,7 +853,6 @@ std::shared_ptr<phi::Allocation> GenerateSampleGraphWithTypeInfo(
   int64_t *edges_src_tensor_ptr_[len_samples];
   int64_t *edges_dst_tensor_ptr_[len_samples];
   int *edges_split_tensor_ptr_[len_samples];
-  auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   int node_type_size = (int)gpu_graph_ptr->feature_to_id.size();
   VLOG(2) << "Sample Neighbors and Reindex";
   std::vector<int> edges_split_num;
@@ -866,16 +866,16 @@ std::shared_ptr<phi::Allocation> GenerateSampleGraphWithTypeInfo(
     int neighbors_len = 0;
     if (i == 0) {
       neighbors_len = 0;
-      auto sample_results =
-          gpu_graph_ptr->sample_neighbor_with_node_type(gpuid_,
-                                                        uniq_nodes_data,
-                                                        sample_size,
-                                                        uniq_len,
-                                                        edge_type_graph_,
-                                                        unique_node_types_ptr,
-                                                        node_type_size,
-                                                        neighbors_len,
-                                                        edges_split_num);
+      auto sample_results = gpu_graph_ptr->sample_neighbor_with_node_type(
+          gpuid_,
+          (uint64_t *)uniq_nodes_data,
+          samples_[i],
+          uniq_len,
+          edge_type_graph_,
+          unique_node_types_ptr,
+          node_type_size,
+          neighbors_len,
+          edges_split_num);
       /*auto sample_results =
           SampleNeighbors(uniq_nodes_data, uniq_len, samples_[i],
          edges_split_num, &neigzahbors_len);*/
@@ -894,8 +894,8 @@ std::shared_ptr<phi::Allocation> GenerateSampleGraphWithTypeInfo(
       neighbors_len = 0;
       auto sample_results = gpu_graph_ptr->sample_neighbor_with_node_type(
           gpuid_,
-          final_nodes_data,
-          sample_size,
+          (uint64_t *)final_nodes_data,
+          samples_[i],
           final_nodes_len_vec[i - 1],
           edge_type_graph_,
           unique_node_types_ptr,
@@ -921,13 +921,13 @@ std::shared_ptr<phi::Allocation> GenerateSampleGraphWithTypeInfo(
           reindex_src_data,
           uniq_nodes_data,
           reinterpret_cast<int *>(type_info->ptr()),
-          unique_types_ptr,
+          unique_node_types_ptr,
           &final_nodes_len,
           uniq_len,
           neighbors_len);
-      final_nodes_vec.emplace_back(res[0]);
+      final_nodes_vec.emplace_back(res.first);
       final_nodes_len_vec.emplace_back(final_nodes_len);
-      final_node_types.emplace_back(res[1]);
+      final_node_types.emplace_back(res.second);
     } else {
       int64_t *final_nodes_data =
           reinterpret_cast<int64_t *>(final_nodes_vec[i - 1]->ptr());
@@ -940,13 +940,13 @@ std::shared_ptr<phi::Allocation> GenerateSampleGraphWithTypeInfo(
           reindex_src_data,
           final_nodes_data,
           reinterpret_cast<int *>(type_info->ptr()),
-          unique_types_ptr,
+          unique_node_types_ptr,
           &final_nodes_len,
           uniq_len,
           neighbors_len);
-      final_nodes_vec.emplace_back(res[0]);
+      final_nodes_vec.emplace_back(res.first);
       final_nodes_len_vec.emplace_back(final_nodes_len);
-      final_node_types.emplace_back(res[1]);
+      final_node_types.emplace_back(res.second);
       /*
       final_nodes_vec.emplace_back(tmp_final_nodes);
       final_nodes_len_vec.emplace_back(final_nodes_len);
@@ -1924,7 +1924,7 @@ void GraphDataGenerator::AllocResource(const paddle::platform::Place &place,
       cudaMemcpy(d_meta_path_node_types + i * walk_len_,
                  meta_path_to_node_type_[i].data(),
                  meta_path_to_node_type_[i].size() * sizeof(int),
-                 cudaMemcpyDeviceToHost)
+                 cudaMemcpyDeviceToHost);
     }
   }
   if (sage_mode_) {
@@ -1990,6 +1990,7 @@ void GraphDataGenerator::SetConfig(
   VLOG(2) << "node_types: " << first_node_type;
   finish_node_type_.clear();
   node_type_start_.clear();
+  int meta_index = 0;
   for (auto &type : node_types) {
     auto iter = node_to_id.find(type);
     PADDLE_ENFORCE_NE(
@@ -1999,7 +2000,7 @@ void GraphDataGenerator::SetConfig(
     VLOG(2) << "node_to_id[" << type << "] = " << iter->second;
     first_node_type_.push_back(iter->second);
     node_type_start_[iter->second] = 0;
-    meta_path_to_node_type_.push_back(iter->second);
+    meta_path_to_node_type_[meta_index].push_back(iter->second);
   }
   auto meta_paths = paddle::string::split_string<std::string>(meta_path, ";");
   for (size_t i = 0; i < meta_paths.size(); i++) {
@@ -2018,21 +2019,19 @@ void GraphDataGenerator::SetConfig(
                         2,
                         platform::errors::NotFound(
                             "(%s) doesn't contain two node_types", node));
-      auto type_iter =
-          node_to_id.find(node_types[1])
+      auto type_iter = node_to_id.find(node_types[1]);
 
-              PADDLE_ENFORCE_NE(
-                  type_iter,
-                  node_to_id.end(),
-                  platform::errors::NotFound("(%s) is not found feature_to_id.",
-                                             node_types[0]));
+      PADDLE_ENFORCE_NE(type_iter,
+                        node_to_id.end(),
+                        platform::errors::NotFound(
+                            "(%s) is not found feature_to_id.", node_types[0]));
       meta_path_to_node_type_[i].push_back(type_iter->second);
     }
     if (meta_path_to_node_type_[i].size() > 0) {
       size_t meta_len = meta_path_to_node_type_[i].size();
-      for (size_t t = meta_len; t < walk_len; t++) {
+      for (size_t t = meta_len; t < walk_len_; t++) {
         meta_path_to_node_type_[i].push_back(
-            meta_path_to_node_type_[i - meta_len + 1]);
+            meta_path_to_node_type_[i][t - meta_len + 1]);
       }
     }
   }

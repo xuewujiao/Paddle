@@ -937,6 +937,14 @@ class GraphDataGenerator {
       int len,
       int* uniq_len,
       phi::DenseTensor* inverse);
+  std::pair<std::shared_ptr<phi::Allocation>, std::shared_ptr<phi::Allocation>>
+  GetReindexResultWithTypeInfo(int64_t* reindex_src_data,
+                               const int64_t* center_nodes,
+                               int* src_types,
+                               int* center_node_types,
+                               int* final_nodes_len,
+                               int node_len,
+                               int64_t neighbor_len);
 
  protected:
   int walk_degree_;
@@ -993,6 +1001,7 @@ class GraphDataGenerator {
   std::shared_ptr<phi::Allocation> d_reindex_table_value_;
   std::shared_ptr<phi::Allocation> d_reindex_table_index_;
   std::shared_ptr<phi::Allocation> d_meta_path_node_types_;
+  std::shared_ptr<phi::Allocation> d_shuffle_row_meta_path_;
   std::vector<std::shared_ptr<phi::Allocation>> edge_type_graph_;
   int64_t reindex_table_size_;
   int ins_buf_pair_len_;

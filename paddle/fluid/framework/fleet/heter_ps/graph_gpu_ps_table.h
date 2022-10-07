@@ -163,6 +163,7 @@ class GpuPsGraphTable
                                       int *left,
                                       int *right,
                                       int dev_num,
+                                      int *node_type,
                                       int node_type_num);
   void move_result_to_source_gpu(int gpu_id,
                                  int gpu_num,
@@ -185,14 +186,14 @@ class GpuPsGraphTable
       uint64_t *key,
       int sample_size,
       int len,
-      std::vector<std::shared_ptr<phi::Allocation>> &edge_type_graphs int
-          *node_types,
+      std::vector<std::shared_ptr<phi::Allocation>> &edge_type_graphs,
+      int *node_types,
       int node_type_num,
       int &edges_len,
       std::vector<int> &edges_split_num);
   int init_cpu_table(const paddle::distributed::GraphParameter &graph);
-  void set_edge_in_type(vector<int> edge_in_type);
-  void set_edge_out_type(vector<int> edge_out_type);
+  void set_edge_in_type(std::vector<int> &edge_in_type);
+  void set_edge_out_type(std::vector<int> &edge_out_type);
   int gpu_num;
   int graph_table_num_, feature_table_num_;
   std::vector<GpuPsCommGraph> gpu_graph_list_;

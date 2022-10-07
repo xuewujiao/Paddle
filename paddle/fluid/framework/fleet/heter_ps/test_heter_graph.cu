@@ -31,19 +31,20 @@ struct Edge {
   uint64_t from, to;
 };
 struct EdgeLess {
-  bool operator<(const Edge &a, const Edge &b) {
+  bool operator()(const Edge &a, const Edge &b) {
     return a.from < b.from || a.from == b.from && a.to < b.to;
   }
-} void put_edges_to_file(std::string name, std::vector<Edge> &e) {
+};
+void put_edges_to_file(std::string name, std::vector<Edge> &e) {
   printf("%s\n", name.c_str());
   for (int i = 0; i < e.size(); i++) {
-    printf("%d %d\n", e.from, e.to);
+    printf("%d %d\n", e[i].from, e[i].to);
   }
   std::ofstream ofile;
-  std::file_name = "./" + name + ".txt";
-  ofile.open(file_name);
+  std::string file_name = "./" + name + ".txt";
+  ofile.open(file_name.c_str());
   for (auto edge : e) {
-    ofile << e.from << "\t" << e.to << std::endl;
+    ofile << edge.from << "\t" << edge.to << std::endl;
   }
   ofile.close();
 }
