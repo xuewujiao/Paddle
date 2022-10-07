@@ -48,6 +48,17 @@ if(WITH_GPU)
            ${HETERPS_DEPS}
            graph_gpu_ps)
     nv_test(
+      test_heter_graph
+      SRCS test_heter_graph.cu
+      DEPS heter_comm
+           table
+           heter_comm_kernel
+           hashtable_kernel
+           heter_ps
+           ${HETERPS_DEPS}
+           graph_gpu_ps
+           graph_gpu_wrapper)
+    nv_test(
       test_cpu_query
       SRCS test_cpu_query.cu
       DEPS heter_comm

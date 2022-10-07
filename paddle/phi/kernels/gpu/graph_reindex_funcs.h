@@ -152,6 +152,27 @@ __global__ void FillUniqueItems(const T* items,
   }
 }
 
+template <typename T, typename S>
+__global__ void FillUniqueItemsWithAttachedData(const T* items,
+                                                S* attached_items,
+                                                int num_items,
+                                                int64_t size,
+                                                T* unique_items,
+                                                S* unique_attached_items,
+                                                const int* item_count,
+                                                const T* keys,
+                                                int* values,
+                                                int* key_index) {
+  CUDA_KERNEL_LOOP(i, num_items) {
+    int64_t pos = Search(items[i], keys, size);
+    if (key_index[pos] == i) {
+      values[pos] = item_count[i];
+      unique_items[item_count[i]] = items[i];
+      unique_attached_items[item_count[i]] = attached_items[i];
+    }
+  }
+}
+
 template <typename T>
 __global__ void FillUniqueItems(const T* items,
                                 int num_items,

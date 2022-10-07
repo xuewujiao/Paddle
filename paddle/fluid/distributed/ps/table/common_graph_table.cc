@@ -1079,16 +1079,19 @@ std::string GraphTable::get_inverse_etype(std::string &etype) {
   return res;
 }
 
-int32_t GraphTable::parse_type_to_typepath(std::string &type2files,
-                                           std::string graph_data_local_path,
-                                           std::vector<std::string> &res_type,
-                                           std::unordered_map<std::string, std::string> &res_type2path) {
-  auto type2files_split = paddle::string::split_string<std::string>(type2files, ",");
+int32_t GraphTable::parse_type_to_typepath(
+    std::string &type2files,
+    std::string graph_data_local_path,
+    std::vector<std::string> &res_type,
+    std::unordered_map<std::string, std::string> &res_type2path) {
+  auto type2files_split =
+      paddle::string::split_string<std::string>(type2files, ",");
   if (type2files_split.size() == 0) {
     return -1;
   }
   for (auto one_type2file : type2files_split) {
-    auto one_type2file_split = paddle::string::split_string<std::string>(one_type2file, ":");
+    auto one_type2file_split =
+        paddle::string::split_string<std::string>(one_type2file, ":");
     auto type = one_type2file_split[0];
     auto type_dir = one_type2file_split[1];
     res_type.push_back(type);
@@ -1104,14 +1107,16 @@ int32_t GraphTable::load_node_and_edge_file(std::string etype2files,
                                             bool reverse) {
   std::vector<std::string> etypes;
   std::unordered_map<std::string, std::string> edge_to_edgedir;
-  int res = parse_type_to_typepath(etype2files, graph_data_local_path, etypes, edge_to_edgedir);
+  int res = parse_type_to_typepath(
+      etype2files, graph_data_local_path, etypes, edge_to_edgedir);
   if (res != 0) {
     VLOG(0) << "parse edge type and edgedir failed!";
     return -1;
   }
   std::vector<std::string> ntypes;
   std::unordered_map<std::string, std::string> node_to_nodedir;
-  res = parse_type_to_typepath(ntype2files, graph_data_local_path, ntypes, node_to_nodedir);
+  res = parse_type_to_typepath(
+      ntype2files, graph_data_local_path, ntypes, node_to_nodedir);
   if (res != 0) {
     VLOG(0) << "parse node type and nodedir failed!";
     return -1;
@@ -2196,6 +2201,7 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
   auto edge_types = graph.edge_types();
   VLOG(0) << "got " << edge_types.size() << "edge types in total";
   feat_id_map.resize(node_types.size());
+  // std::vetor<std::vector<int>> node_id_to_edge_types, edge_type_outputs;
   for (int k = 0; k < edge_types.size(); k++) {
     VLOG(0) << "in initialize: get a edge_type " << edge_types[k];
     edge_to_id[edge_types[k]] = k;
@@ -2226,6 +2232,30 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
       VLOG(0) << "init graph table feat conf name:" << f_name
               << " shape:" << f_shape << " dtype:" << f_dtype;
     }
+  }
+  node_id_to_edge_types.resize(node_types.size());
+  edge_type_outputs.resize(node_types.size());
+  for (int i = 0; i < edge_types.size(); i++) {
+    auto str_types =
+        paddle::string::split_string<std::string>(edge_types[i], "2");
+    PADDLE_ENFORCE_EQ(
+        str_types.size(),
+        2,
+        platform::errors::NotFound(
+            "edge_types (%s) doesn't following the str2str convention.",
+            edge_types[i]));
+    auto iter_start = feature_to_id.find(str_types[0]);
+    PADDLE_ENFORCE_NE(iter_start,
+                      feature_to_id.end(),
+                      platform::errors::NotFound(
+                          "(%s) is not found in node_to_id.", str_types[0]));
+    auto iter_end = feature_to_id.find(str_types[1]);
+    PADDLE_ENFORCE_NE(iter_end,
+                      feature_to_id.end(),
+                      platform::errors::NotFound(
+                          "(%s) is not found in node_to_id.", str_types[1]));
+    node_id_to_edge_types[iter_start->second].push_back(i);
+    edge_type_outputs[iter_start->second].push_back(iter_end->second);
   }
   // this->table_name = common.table_name();
   // this->table_type = common.name();

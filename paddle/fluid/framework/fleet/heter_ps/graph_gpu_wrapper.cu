@@ -85,6 +85,33 @@ void GraphGpuWrapper::set_up_types(std::vector<std::string> &edge_types,
     int res = feature_to_id.size();
     feature_to_id[node_types[table_id]] = res;
   }
+  edge_in_type.resize(edge_to_id.size());
+  edge_out_type.resize(edge_to_id.size());
+  for (auto p : edge_to_id) {
+    auto str_types = paddle::string::split_string<std::string>(p.first, "2");
+    int id = p.second;
+    PADDLE_ENFORCE_EQ(
+        str_types.size(),
+        2,
+        platform::errors::NotFound(
+            "edge_types (%s) doesn't following the str2str convention.",
+            p.first));
+    auto iter_end = feature_to_id.find(str_types[1]);
+    PADDLE_ENFORCE_NE(iter_end,
+                      feature_to_id.end(),
+                      platform::errors::NotFound(
+                          "(%s) is not found in node_to_id.", str_types[1]));
+    edge_out_type[id] = iter_end->second;
+    auto iter_first = feature_to_id.find(str_types[0]);
+    PADDLE_ENFORCE_NE(iter_first,
+                      feature_to_id.end(),
+                      platform::errors::NotFound(
+                          "(%s) is not found in node_to_id.", str_types[0]));
+    edge_in_type[id] = iter_first->second;
+  }
+  ((GpuPsGraphTable *)graph_table)->set_edge_in_type(edge_in_type);
+  ((GpuPsGraphTable *)graph_table)->set_edge_out_type(edge_out_type);
+
   table_feat_mapping.resize(node_types.size());
   this->table_feat_conf_feat_name.resize(node_types.size());
   this->table_feat_conf_feat_dtype.resize(node_types.size());
@@ -160,9 +187,9 @@ void GraphGpuWrapper::load_node_and_edge(std::string etype2files,
                                          std::string graph_data_local_path,
                                          int part_num,
                                          bool reverse) {
-    ((GpuPsGraphTable *)graph_table)
-        ->cpu_graph_table_->load_node_and_edge_file(
-            etype2files, ntype2files, graph_data_local_path, part_num, reverse);
+  ((GpuPsGraphTable *)graph_table)
+      ->cpu_graph_table_->load_node_and_edge_file(
+          etype2files, ntype2files, graph_data_local_path, part_num, reverse);
 }
 
 void GraphGpuWrapper::add_table_feat_conf(std::string table_name,
@@ -291,15 +318,41 @@ NeighborSampleResult GraphGpuWrapper::graph_neighbor_sample_v3(
 }
 
 NeighborSampleResultV2 GraphGpuWrapper::graph_neighbor_sample_all_edge_type(
-    int gpu_id, int edge_type_len, uint64_t* key, int sample_size, int len,
+    int gpu_id,
+    int edge_type_len,
+    uint64_t *key,
+    int sample_size,
+    int len,
     std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs) {
   return ((GpuPsGraphTable *)graph_table)
-      ->graph_neighbor_sample_all_edge_type(gpu_id, edge_type_len, key,
-                                            sample_size, len, edge_type_graphs);
+      ->graph_neighbor_sample_all_edge_type(
+          gpu_id, edge_type_len, key, sample_size, len, edge_type_graphs);
 }
 
-std::vector<std::shared_ptr<phi::Allocation>> GraphGpuWrapper::get_edge_type_graph(
-    int gpu_id, int edge_type_len) {
+std::vector<std::shared_ptr<phi::Allocation>>
+GraphGpuWrapper::sample_neighbor_with_node_type(
+    int gpu_id,
+    uint64_t *key,
+    int sample_size,
+    int len,
+    std::vector<std::shared_ptr<phi::Allocation>> &edge_type_graphs int
+        *node_types,
+    int node_type_num,
+    int &edges_len,
+    std::vector<int> &edges_split_num) {
+  return ((GpuPsGraphTable *)graph_table)
+      ->graph_neighbor_sample_all_edge_type(gpu_id,
+                                            key,
+                                            sample_size,
+                                            len,
+                                            edge_type_graphs,
+                                            node_types,
+                                            node_type_num,
+                                            edges_len,
+                                            edges_split_num);
+}
+std::vector<std::shared_ptr<phi::Allocation>>
+GraphGpuWrapper::get_edge_type_graph(int gpu_id, int edge_type_len) {
   return ((GpuPsGraphTable *)graph_table)
       ->get_edge_type_graph(gpu_id, edge_type_len);
 }
