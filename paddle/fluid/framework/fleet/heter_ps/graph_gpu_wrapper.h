@@ -109,19 +109,32 @@ class GraphGpuWrapper {
       uint64_t* key,
       int sample_size,
       int len,
-      std::vector<std::shared_ptr<phi::Allocation>>& edge_type_graphs int*
-          node_types,
+      std::vector<std::shared_ptr<phi::Allocation>>& edge_type_graphs,
+      int* node_types,
       int node_type_num,
       int& edges_len,
       std::vector<int>& edges_split_num);
+  std::vector<std::shared_ptr<phi::Allocation>> SampleNeighbors(
+      int gpu_id_,
+      int64_t* uniq_nodes,
+      int len,
+      int sample_size,
+      std::vector<int>& edges_split_num,
+      int64_t* neighbor_len,
+      int edge_to_id_len_,
+      std::vector<std::shared_ptr<phi::Allocation>>& edge_type_graph_);
   std::vector<std::shared_ptr<phi::Allocation>> get_edge_type_graph(
       int gpu_id, int edge_type_len);
+  std::vector<int> slot_feature_num_map() const ;
   void set_feature_separator(std::string ch);
+  void set_slot_feature_separator(std::string ch);
   int get_feature_of_nodes(int gpu_id,
                            uint64_t* d_walk,
                            uint64_t* d_offset,
                            uint32_t size,
-                           int slot_num);
+                           int slot_num,
+                           int* d_slot_feature_num_map,
+                           int fea_num_per_node);
 
   std::unordered_map<std::string, int> edge_to_id, feature_to_id;
   std::vector<std::string> id_to_feature, id_to_edge;
@@ -137,6 +150,7 @@ class GraphGpuWrapper {
   int upload_num = 8;
   std::shared_ptr<::ThreadPool> upload_task_pool;
   std::string feature_separator_ = std::string(" ");
+  std::string slot_feature_separator_ = std::string(" ");
 };
 #endif
 }  // namespace framework
