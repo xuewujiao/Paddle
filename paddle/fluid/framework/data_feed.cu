@@ -24,6 +24,7 @@ limitations under the License. */
 #include <sstream>
 #include "cub/cub.cuh"
 #include "paddle/fluid/framework/fleet/heter_ps/gpu_graph_node.h"
+#include "paddle/fluid/framework/fleet/heter_ps/gpu_graph_utils.h"
 #include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_wrapper.h"
 #include "paddle/fluid/framework/fleet/heter_ps/hashtable.h"
 #include "paddle/fluid/framework/fleet/ps_gpu_wrapper.h"
@@ -874,11 +875,14 @@ int GraphDataGenerator::InsertTable(const unsigned long *d_keys,
 }
 
 void GraphDataGenerator::DoWalk() {
+  int device_id = place_.GetDeviceId();
+  debug_gpu_memory_info(device_id, "DoWalk start");
   if (gpu_graph_training_) {
     FillWalkBuf();
   } else {
     FillInferBuf();
   }
+  debug_gpu_memory_info(device_id, "DoWalk end");
 }
 
 void GraphDataGenerator::clear_gpu_mem() {
@@ -967,6 +971,7 @@ int GraphDataGenerator::FillWalkBuf() {
   cudaMemsetAsync(walk, 0, buf_size_ * sizeof(uint64_t), sample_stream_);
   // cudaMemsetAsync(
   //     len_per_row, 0, once_max_sample_keynum * sizeof(int), sample_stream_);
+  int sample_times = 0;
   int i = 0;
   total_row_ = 0;
 
@@ -980,6 +985,7 @@ int GraphDataGenerator::FillWalkBuf() {
   size_t node_type_len = first_node_type.size();
   int remain_size =
       buf_size_ - walk_degree_ * once_sample_startid_len_ * walk_len_;
+  int total_samples = 0;
 
   while (i <= remain_size) {
     int cur_node_idx = cursor % node_type_len;
@@ -1028,6 +1034,7 @@ int GraphDataGenerator::FillWalkBuf() {
     int step = 1;
     VLOG(2) << "sample edge type: " << path[0] << " step: " << 1;
     jump_rows_ = sample_res.total_sample_size;
+    total_samples += sample_res.total_sample_size;
     VLOG(2) << "i = " << i << " start = " << start << " tmp_len = " << tmp_len
             << " cursor = " << node_type << " cur_node_idx = " << cur_node_idx
             << " jump row: " << jump_rows_;
@@ -1066,11 +1073,16 @@ int GraphDataGenerator::FillWalkBuf() {
         VLOG(2) << "h_walk[" << xx << "]: " << h_walk[xx];
       }
     }
+
+    VLOG(2) << "sample, step=" << step << " sample_keys=" << tmp_len
+        << " sample_res_len=" << sample_res.total_sample_size;
+
     /////////
     step++;
     size_t path_len = path.size();
     for (; step < walk_len_; step++) {
       if (sample_res.total_sample_size == 0) {
+        VLOG(2) << "sample finish, step=" << step;
         break;
       }
       auto sample_key_mem = sample_res.actual_val_mem;
@@ -1085,9 +1097,8 @@ int GraphDataGenerator::FillWalkBuf() {
                    sample_res.total_sample_size);
       int sample_key_len =  sample_res.total_sample_size;
       sample_res = gpu_graph_ptr->graph_neighbor_sample_v3(q, false);
+      total_samples += sample_res.total_sample_size;
       if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
-        // table_->insert(sample_res.actual_val, sample_res.total_sample_size,
-        // d_uniq_node_num, sample_stream_);
         if (InsertTable(sample_res.actual_val, sample_res.total_sample_size) !=
             0) {
           VLOG(2) << "in step: " << step << ", table is full";
@@ -1109,6 +1120,9 @@ int GraphDataGenerator::FillWalkBuf() {
           VLOG(2) << "h_walk[" << xx << "]: " << h_walk[xx];
         }
       }
+
+      VLOG(2) << "sample, step=" << step << " sample_keys=" << sample_key_len
+          << " sample_res_len=" << sample_res.total_sample_size;
     }
     // 此时更新全局采样状态
     if (update == true) {
@@ -1116,6 +1130,7 @@ int GraphDataGenerator::FillWalkBuf() {
       i += jump_rows_ * walk_len_;
       total_row_ += jump_rows_;
       cursor += 1;
+      sample_times++;
     } else {
       VLOG(2) << "table is full, not update stat!";
       break;
@@ -1133,7 +1148,6 @@ int GraphDataGenerator::FillWalkBuf() {
                        thrust::device_pointer_cast(d_random_row),
                        engine);
 
-  VLOG(2) << "FillWalkBuf: " << total_row_;
   cudaStreamSynchronize(sample_stream_);
   shuffle_seed_ = engine();
 
@@ -1197,7 +1211,6 @@ int GraphDataGenerator::FillWalkBuf() {
     cudaStreamSynchronize(sample_stream_);
 
     host_vec_.resize(h_uniq_node_num);
-    VLOG(0) << "uniq node num: " << h_uniq_node_num;
     cudaMemcpyAsync(host_vec_.data(),
                     d_uniq_node_ptr,
                     sizeof(uint64_t) * h_uniq_node_num,
@@ -1320,6 +1333,13 @@ int GraphDataGenerator::FillWalkBuf() {
                       sample_stream_);
       cudaStreamSynchronize(sample_stream_);
     }
+
+    VLOG(0) << "sample_times:" << sample_times
+        << ", d_walk_size:" << buf_size_
+        << ", d_walk_offset:" << i
+        << ", total_rows:" << total_row_
+        << ", total_samples:" << total_samples
+        << ", h_uniq_node_num:" << h_uniq_node_num;
   }
   return total_row_ != 0;
 }
@@ -1333,6 +1353,7 @@ void GraphDataGenerator::AllocResource(int thread_id,
   gpuid_ = gpu_graph_ptr->device_id_mapping[thread_id];
   thread_id_ = thread_id;
   place_ = platform::CUDAPlace(gpuid_);
+  debug_gpu_memory_info(gpuid_, "AllocResource start");
 
   platform::CUDADeviceGuard guard(gpuid_);
   if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
@@ -1443,6 +1464,8 @@ void GraphDataGenerator::AllocResource(int thread_id,
       memory::AllocShared(place_, slot_num_ * sizeof(uint64_t *));
 
   cudaStreamSynchronize(sample_stream_);
+
+  debug_gpu_memory_info(gpuid_, "AllocResource end");
 }
 
 void GraphDataGenerator::SetConfig(
@@ -1475,7 +1498,9 @@ void GraphDataGenerator::SetConfig(
   std::string first_node_type = graph_config.first_node_type();
   std::string meta_path = graph_config.meta_path();
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
+  debug_gpu_memory_info("init_conf start");
   gpu_graph_ptr->init_conf(first_node_type, meta_path);
+  debug_gpu_memory_info("init_conf end");
 };
 
 }  // namespace framework
