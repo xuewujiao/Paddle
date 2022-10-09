@@ -20,6 +20,7 @@
 #include <thrust/scan.h>
 #include <thrust/sequence.h>
 
+#include "cub/cub.cuh"
 #include "paddle/fluid/memory/memory.h"
 #include "paddle/phi/backends/gpu/gpu_context.h"
 #include "paddle/phi/core/kernel_registry.h"
@@ -122,6 +123,8 @@ std::shared_ptr<phi::Allocation> FillHashTable(const Context& dev_ctx,
                                                int* values,
                                                int* key_index,
                                                int* final_nodes_len) {
+  const auto place = dev_ctx.GetPlace();
+
 #ifdef PADDLE_WITH_HIP
   int block = 256;
 #else
@@ -135,35 +138,41 @@ std::shared_ptr<phi::Allocation> FillHashTable(const Context& dev_ctx,
       input, num_input, len_hashtable, keys, key_index);
 
   // Get item index count.
-  thrust::device_vector<int> item_count(num_input + 1, 0);
+  auto item_count = paddle::memory::Alloc(place, (num_input + 1) * sizeof(int));
+  int* item_count_ptr = reinterpret_cast<int*>(item_count->ptr());
+  cudaMemset(item_count_ptr, 0, sizeof(int) * (num_input + 1));
   GetItemIndexCount<T><<<grid, block, 0, dev_ctx.stream()>>>(
-      input,
-      thrust::raw_pointer_cast(item_count.data()),
-      num_input,
-      len_hashtable,
-      keys,
-      key_index);
+      input, item_count_ptr, num_input, len_hashtable, keys, key_index);
 
-  thrust::exclusive_scan(
-      item_count.begin(), item_count.end(), item_count.begin());
-  int total_unique_items = item_count[num_input];
+  size_t temp_storage_bytes = 0;
+  cub::DeviceScan::ExclusiveSum(
+      NULL, temp_storage_bytes, item_count_ptr, item_count_ptr, num_input + 1);
+  auto d_temp_storage = paddle::memory::Alloc(place, temp_storage_bytes);
+  cub::DeviceScan::ExclusiveSum(d_temp_storage->ptr(),
+                                temp_storage_bytes,
+                                item_count_ptr,
+                                item_count_ptr,
+                                num_input + 1);
+  int total_unique_items = 0;
+  cudaMemcpy(&total_unique_items,
+             item_count_ptr + num_input,
+             sizeof(int),
+             cudaMemcpyDeviceToHost);
 
-  const auto place = dev_ctx.GetPlace();
   auto unique_items =
       paddle::memory::AllocShared(place, total_unique_items * sizeof(T));
   T* unique_items_data = reinterpret_cast<T*>(unique_items->ptr());
   *final_nodes_len = total_unique_items;
 
   // Get unique items
-  FillUniqueItems<T><<<grid, block, 0, dev_ctx.stream()>>>(
-      input,
-      num_input,
-      len_hashtable,
-      unique_items_data,
-      thrust::raw_pointer_cast(item_count.data()),
-      keys,
-      values,
-      key_index);
+  FillUniqueItems<T><<<grid, block, 0, dev_ctx.stream()>>>(input,
+                                                           num_input,
+                                                           len_hashtable,
+                                                           unique_items_data,
+                                                           item_count_ptr,
+                                                           keys,
+                                                           values,
+                                                           key_index);
   return unique_items;
 }
 

@@ -980,6 +980,9 @@ class GraphDataGenerator {
   std::shared_ptr<phi::Allocation> d_random_row_;
   std::shared_ptr<phi::Allocation> d_row_meta_path_;
   std::shared_ptr<phi::Allocation> d_shuffled_row_meta_path_;
+  std::shared_ptr<phi::Allocation> d_slot_feature_num_map_;
+  std::shared_ptr<phi::Allocation> d_actual_slot_id_map_;
+  std::shared_ptr<phi::Allocation> d_fea_offset_map_;
   //
   std::vector<std::shared_ptr<phi::Allocation>> d_sampleidx2rows_;
   int cur_sampleidx2row_;
@@ -1012,6 +1015,8 @@ class GraphDataGenerator {
   BufState buf_state_;
   int batch_size_;
   int slot_num_;
+  std::vector<int> h_slot_feature_num_map_;
+  int fea_num_per_node_;
   int shuffle_seed_;
   int debug_mode_;
   std::vector<int> first_node_type_;
