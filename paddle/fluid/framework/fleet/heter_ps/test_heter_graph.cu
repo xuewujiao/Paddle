@@ -36,10 +36,10 @@ struct EdgeLess {
   }
 };
 void put_edges_to_file(std::string name, std::vector<Edge> &e) {
-  printf("%s\n", name.c_str());
-  for (int i = 0; i < e.size(); i++) {
-    printf("%d %d\n", e[i].from, e[i].to);
-  }
+  // printf("%s\n", name.c_str());
+  // for (int i = 0; i < e.size(); i++) {
+  //   printf("%d %d\n", e[i].from, e[i].to);
+  // }
   std::ofstream ofile;
   std::string file_name = "./" + name + ".txt";
   ofile.open(file_name.c_str());
@@ -49,92 +49,88 @@ void put_edges_to_file(std::string name, std::vector<Edge> &e) {
   ofile.close();
 }
 void generate_random_edge_input(std::vector<std::string> &edge_type,
+                                std::vector<std::string> &node_type,
                                 int node_each,
                                 int edge_num,
                                 std::map<Edge, int, EdgeLess> &edge_map,
-                                std::vector<Edge> &edge_list) {
+                                std::vector<std::vector<Edge>> &edge_list) {
   srand(time(0));
   int s = 0;
-  std::vector<Edge> edge_list;
   std::vector<int> from_type, to_type;
-  std::map<std::string, int> node_type_set;
-  for (auto str : edge_type) {
-    auto pos = edge_type.find("2");
-    auto from_part = edge_type.substr(0, pos);
-    auto to_part = edge_type.substr(pos + 1, edge_type.size() - pos - 1);
-    if (node_type_set.find(from_part) == node_type_set.end())
-      node_type_set[from_part] = node_type_set.size();
-    if (node_type_set.find(to_part) == node_type_set.end())
-      node_type_set[to_part] = node_type_set.size();
-    from_type.push_back(node_type_set[from_part]);
-    to_type.push_back(node_type_set[to_part]);
+  std::map<std::string, int> node_type_map;
+  for (int i = 0; i < node_type.size(); i++) {
+    node_type_map[node_type[i]] = i;
   }
-  s = node_type_set.size();
-  int total_num = node_each * s;
-  if (s == 0) return;
-  std::set<Edge, EdgeLess> edge_set;
-  edge_list.resize(s);
-  int empty_set_num = s;
+  for (auto str : edge_type) {
+    auto pos = str.find("2");
+    auto from_part = str.substr(0, pos);
+    auto to_part = str.substr(pos + 1, str.size() - pos - 1);
+    from_type.push_back(node_type_map[from_part]);
+    to_type.push_back(node_type_map[to_part]);
+  }
+  int node_type_size = node_type_map.size();
+  int edge_type_size = edge_type.size();
+  int total_num = node_each * node_type_size;
+  if (node_type_size == 0) return;
+  edge_list.resize(edge_type_size);
+  int empty_set_num = edge_type_size;
   int type_index;
   while (edge_num > 0 || empty_set_num != 0) {
     Edge temp;
-    do {
-      type_index = rand() % s;
-      temp.from = from[type_index] * node_each + rand() % node_each;
-      temp.to = to[type_index] * node_each + rand() % node_each;
 
-        }while(edge_set.find(temp) != edge_set.end()));
-        edge_set[temp] = type_index;
-        edge_list[type_index].push_back(temp);
-        if (edge_list[type_index].size() == 1) empyt_set_num--;
-        edge_num--;
+    type_index = rand() % edge_type_size;
+    temp.from = from_type[type_index] * node_each + rand() % node_each;
+    temp.to = to_type[type_index] * node_each + rand() % node_each;
+
+    if (edge_map.find(temp) != edge_map.end()) continue;
+    edge_map[temp] = type_index;
+    edge_list[type_index].push_back(temp);
+    if (edge_list[type_index].size() == 1) empty_set_num--;
+    edge_num--;
   }
-  for (int i = 0; i < edge_type.size(); i++) {
+  for (int i = 0; i < edge_type_size; i++) {
     put_edges_to_file(edge_type[i], edge_list[i]);
   }
 }
 
-char edge_file_name[] = "edges1.txt";
-
-char node_file_name[] = "nodes.txt";
-void prepare_file(char *file_name, bool load_edge) {
-  std::ofstream ofile;
-  ofile.open(file_name);
-  if (load_edge) {
-    for (auto x : edges) {
-      ofile << x << std::endl;
-    }
-  } else {
-    for (auto x : nodes) {
-      ofile << x << std::endl;
-    }
-  }
-  ofile.close();
-}
 TEST(TEST_FLEET, test_heter_graph) {
   auto iter = paddle::framework::GraphGpuWrapper::GetInstance();
   std::vector<int> device;
-  device.push_back(0);
-  device.push_back(1);
+  int device_num = 2;
+  for (int i = 0; i < device_num; i++) device.push_back(i);
   iter->set_device(device);
-  std::vector < std::string >> edge_types = {"a2b", "a2c", "b2c", "b2b"};
-  std::vector < std::string >> node_types = {"a", "b", "c"};
-  int node_each = 3;
-  std::set<Edge, EdgeLess> edge_map;
-  std::vector<Edge> edge_list;
-  generate_random_edge_input(edge_types, node_each, 20, edge_map, edge_list);
+  std::string edge_type_strs[4] = {"a2b", "a2c", "b2c", "b2b"};
+  std::string node_type_strs[3] = {"a", "b", "c"};
+  std::vector<std::string> edge_types(edge_type_strs, edge_type_strs + 4);
+  std::vector<std::string> node_types(node_type_strs, node_type_strs + 3);
+  int node_each = 1000;
+  int sample_size = 10;
+  int edge_num = node_each * node_each * edge_types.size() * 0.1;
+  std::map<Edge, int, EdgeLess> edge_map;
+  std::vector<std::vector<Edge>> edge_list;
+  generate_random_edge_input(
+      edge_types, node_types, node_each, edge_num, edge_map, edge_list);
+  std::cerr << "begin to set up types" << std::endl;
   iter->set_up_types(edge_types, node_types);
+  std::cerr << "init_service" << std::endl;
   iter->init_service();
-  auto edge_type_graph_ =
-      gpu_graph_ptr->get_edge_type_graph(gpuid_, edge_to_id_len_);
+  std::cerr << "init_service_over" << std::endl;
+  for (int i = 0; i < edge_types.size(); i++)
+    iter->load_edge_file(edge_types[i], "./" + edge_types[i] + ".txt", false);
+  for (int i = 0; i < edge_types.size(); i++) {
+    VLOG(0) << "upload edge_type " << edge_types[i];
+    iter->upload_batch(0, i, device_num, edge_types[i]);
+    VLOG(0) << "upload edge_type done " << edge_types[i];
+  }
+  auto edge_type_graph_ = iter->get_edge_type_graph(0, edge_types.size());
   srand(time(0));
 
   std::vector<uint64_t> key_vec;
   std::vector<int> node_type_vec;
-  for (int i = 0; i < 9; i++) {
+  for (int i = 0; i < node_types.size() * node_each; i++) {
     if (rand() % 2) {
       key_vec.push_back(i);
-      node_type_vec.push_back(i / 3);
+      node_type_vec.push_back(i / node_each);
     }
   }
   if (key_vec.size() == 0) {
@@ -146,43 +142,44 @@ TEST(TEST_FLEET, test_heter_graph) {
   uint64_t *key;
   cudaMalloc((void **)&key, sizeof(uint64_t) * key_vec.size());
   cudaMemcpy(key,
-             key_vec.begin(),
+             key_vec.data(),
              sizeof(uint64_t) * key_vec.size(),
              cudaMemcpyHostToDevice);
-  int *node_types;
-  cudaMalloc((void **)&node_types, sizeof(int) * node_type_vec.size());
-  cudaMemcpy(node_types,
-             node_type_vec.begin(),
+  int *d_node_types;
+  cudaMalloc((void **)&d_node_types, sizeof(int) * node_type_vec.size());
+  cudaMemcpy(d_node_types,
+             node_type_vec.data(),
              sizeof(int) * node_type_vec.size(),
              cudaMemcpyHostToDevice);
-  q1.initialize(i, 0, (uint64_t)key, 2, 1);
 
-  auto res = gpu_graph_ptr->sample_neighbor_with_node_type(0,
-                                                           key,
-                                                           2,
-                                                           key_vec.size(),
-                                                           edge_type_graphs,
-                                                           node_types,
-                                                           3,
-                                                           edges_len,
-                                                           edges_split_num);
-  int64_t *d_neighbors_ptr = reinterpret_cast<int *>(res[0]->ptr());
-  int64_t *d_index_ptr = reinterpret_cast<int *>(res[1]->ptr());
+  VLOG(0) << "begin to sample";
+  auto res = iter->sample_neighbor_with_node_type(0,
+                                                  key,
+                                                  sample_size,
+                                                  key_vec.size(),
+                                                  edge_type_graph_,
+                                                  d_node_types,
+                                                  node_types.size(),
+                                                  edges_len,
+                                                  edges_split_num);
+  // ASSERT_EQ(res.size(),0);
+  int64_t *d_neighbors_ptr = reinterpret_cast<int64_t *>(res[0]->ptr());
+  int64_t *d_index_ptr = reinterpret_cast<int64_t *>(res[1]->ptr());
   int *d_type_ptr = reinterpret_cast<int *>(res[2]->ptr());
   std::vector<uint64_t> h_neighbors, h_index;
-  vector<int> h_node_type;
+  std::vector<int> h_node_type;
   h_neighbors.resize(edges_len);
   h_index.resize(edges_len);
   h_node_type.resize(edges_len);
-  CudaMemcpy(h_neighbors.data(),
+  cudaMemcpy(h_neighbors.data(),
              d_neighbors_ptr,
              edges_len * sizeof(int64_t),
              cudaMemcpyDeviceToHost);
-  CudaMemcpy(h_index.data(),
+  cudaMemcpy(h_index.data(),
              d_index_ptr,
              edges_len * sizeof(int64_t),
              cudaMemcpyDeviceToHost);
-  CudaMemcpy(h_node_type.data(),
+  cudaMemcpy(h_node_type.data(),
              d_type_ptr,
              edges_len * sizeof(int),
              cudaMemcpyDeviceToHost);
@@ -198,7 +195,6 @@ TEST(TEST_FLEET, test_heter_graph) {
     int edge_type = edge_map[e];
     int tmp_type = e.to / node_each;
     ASSERT_GE(edge_type, last_edge_type);
-    ASSERT_LT(edge_type, edge_types.size());
     last_edge_type = edge_type;
     ASSERT_LT(i, edges_split_num[edge_type]);
     if (edge_type != 0) {
@@ -208,5 +204,4 @@ TEST(TEST_FLEET, test_heter_graph) {
     ASSERT_EQ(query_edge_set.find(e), query_edge_set.end());
     query_edge_set.insert(e);
   }
-  return 0;
 }

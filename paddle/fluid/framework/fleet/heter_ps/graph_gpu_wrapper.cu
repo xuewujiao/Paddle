@@ -75,6 +75,7 @@ int GraphGpuWrapper::get_node_embedding_ids(
 
 void GraphGpuWrapper::set_up_types(std::vector<std::string> &edge_types,
                                    std::vector<std::string> &node_types) {
+  VLOG(2) << "enter setup_types";
   id_to_edge = edge_types;
   for (size_t table_id = 0; table_id < edge_types.size(); table_id++) {
     int res = edge_to_id.size();
@@ -109,9 +110,6 @@ void GraphGpuWrapper::set_up_types(std::vector<std::string> &edge_types,
                           "(%s) is not found in node_to_id.", str_types[0]));
     edge_in_type[id] = iter_first->second;
   }
-  ((GpuPsGraphTable *)graph_table)->set_edge_in_type(edge_in_type);
-  ((GpuPsGraphTable *)graph_table)->set_edge_out_type(edge_out_type);
-
   table_feat_mapping.resize(node_types.size());
   this->table_feat_conf_feat_name.resize(node_types.size());
   this->table_feat_conf_feat_dtype.resize(node_types.size());
@@ -249,6 +247,8 @@ void GraphGpuWrapper::init_service() {
   g->cpu_graph_table_->set_feature_separator(feature_separator_);
   graph_table = (char *)g;
   upload_task_pool.reset(new ::ThreadPool(upload_num));
+  ((GpuPsGraphTable *)graph_table)->set_edge_in_type(edge_in_type);
+  ((GpuPsGraphTable *)graph_table)->set_edge_out_type(edge_out_type);
 }
 
 void GraphGpuWrapper::finalize() {
