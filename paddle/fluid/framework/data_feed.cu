@@ -1536,7 +1536,7 @@ void GraphDataGenerator::AllocResource(const paddle::platform::Place &place,
   if (slot_num_ > 0) {
     if (!sage_mode_) {
       d_feature_buf_ = memory::AllocShared(
-          place_, (batch_size_ * 2 * 2) * slot_num_ * sizeof(uint64_t));
+          place_, (batch_size_ * 2 * 2) * fea_num_per_node_ * sizeof(uint64_t));
     }
   }
   d_pair_num_ = memory::AllocShared(place_, sizeof(int));
