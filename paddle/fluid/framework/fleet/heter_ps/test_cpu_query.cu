@@ -13,8 +13,10 @@
 // limitations under the License.
 
 #include <gtest/gtest.h>
+
 #include <algorithm>
 #include <vector>
+
 #include "paddle/fluid/framework/fleet/heter_ps/feature_value.h"
 #include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_ps_table.h"
 #include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_wrapper.h"
@@ -27,11 +29,21 @@ using namespace paddle::framework;
 namespace platform = paddle::platform;
 
 std::string edges[] = {
-    std::string("0\t1"), std::string("0\t9"), std::string("1\t2"),
-    std::string("1\t0"), std::string("2\t1"), std::string("2\t3"),
-    std::string("3\t2"), std::string("3\t4"), std::string("4\t3"),
-    std::string("4\t5"), std::string("5\t4"), std::string("5\t6"),
-    std::string("6\t5"), std::string("6\t7"), std::string("7\t6"),
+    std::string("0\t1"),
+    std::string("0\t9"),
+    std::string("1\t2"),
+    std::string("1\t0"),
+    std::string("2\t1"),
+    std::string("2\t3"),
+    std::string("3\t2"),
+    std::string("3\t4"),
+    std::string("4\t3"),
+    std::string("4\t5"),
+    std::string("5\t4"),
+    std::string("5\t6"),
+    std::string("6\t5"),
+    std::string("6\t7"),
+    std::string("7\t6"),
     std::string("7\t8"),
 };
 char edge_file_name[] = "edges1.txt";
@@ -56,8 +68,8 @@ std::string nodes[] = {
 char node_file_name[] = "nodes.txt";
 std::vector<std::string> user_feature_name = {"a", "b", "c", "d"};
 std::vector<std::string> item_feature_name = {"a"};
-std::vector<std::string> user_feature_dtype = {"float32", "int32", "string",
-                                               "string"};
+std::vector<std::string> user_feature_dtype = {
+    "float32", "int32", "string", "string"};
 std::vector<std::string> item_feature_dtype = {"float32"};
 std::vector<int> user_feature_shape = {1, 2, 1, 1};
 std::vector<int> item_feature_shape = {1};
@@ -162,10 +174,10 @@ TEST(TEST_FLEET, test_cpu_cache) {
       }
       cur += node_query_res.get_len();
       NeighborSampleQuery query;
-      query.initialize(i, 0, node_query_res.get_val(), 1,
-                       node_query_res.get_len());
+      query.initialize(
+          i, 0, node_query_res.get_val(), 1, node_query_res.get_len());
       query.display();
-      auto c = g.graph_neighbor_sample_v3(query, false);
+      auto c = g.graph_neighbor_sample_v3(query, false, true);
       c.display();
     }
   }
@@ -207,7 +219,7 @@ TEST(TEST_FLEET, test_cpu_cache) {
         query.initialize(i, 0, node_query_res.get_val(), 4,
                          node_query_res.get_len());
         query.display();
-        auto c = g.graph_neighbor_sample_v3(query, true);
+        auto c = g.graph_neighbor_sample_v3(query, true, true);
         c.display();
         platform::CUDADeviceGuard guard(i);
         uint64_t *key;
@@ -217,7 +229,7 @@ TEST(TEST_FLEET, test_cpu_cache) {
         uint64_t t_key = 1;
         cudaMemcpy(key, &t_key, sizeof(uint64_t), cudaMemcpyHostToDevice);
         q1.initialize(i, 0, (uint64_t)key, 2, 1);
-        auto d = g.graph_neighbor_sample_v3(q1, true);
+        auto d = g.graph_neighbor_sample_v3(q1, true, true);
         d.display();
         cudaFree(key);
         g.cpu_graph_table_->set_search_level(1);
