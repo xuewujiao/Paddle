@@ -154,7 +154,7 @@ __global__ void FillUniqueItems(const T* items,
 
 template <typename T, typename S>
 __global__ void FillUniqueItemsWithAttachedData(const T* items,
-                                                S* attached_items,
+                                                const S* attached_items,
                                                 int num_items,
                                                 int64_t size,
                                                 T* unique_items,
@@ -172,6 +172,18 @@ __global__ void FillUniqueItemsWithAttachedData(const T* items,
     }
   }
 }
+
+// template __global__ void FillUniqueItemsWithAttachedData<int64_t,int>(const
+// int64_t* items,
+//                                                 const int* attached_items,
+//                                                 int num_items,
+//                                                 int64_t size,
+//                                                 int64_t* unique_items,
+//                                                 int* unique_attached_items,
+//                                                 const int* item_count,
+//                                                 const int64_t* keys,
+//                                                 int* values,
+//                                                 int* key_index);
 
 template <typename T>
 __global__ void FillUniqueItems(const T* items,

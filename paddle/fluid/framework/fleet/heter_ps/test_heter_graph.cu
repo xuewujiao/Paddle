@@ -13,8 +13,8 @@
 // limitations under the License.
 
 #include <gtest/gtest.h>
-
 #include <algorithm>
+#include <chrono>
 #include <vector>
 
 #include "paddle/fluid/framework/fleet/heter_ps/feature_value.h"
@@ -99,13 +99,18 @@ TEST(TEST_FLEET, test_heter_graph) {
   int device_num = 2;
   for (int i = 0; i < device_num; i++) device.push_back(i);
   iter->set_device(device);
-  std::string edge_type_strs[4] = {"a2b", "a2c", "b2c", "b2b"};
-  std::string node_type_strs[3] = {"a", "b", "c"};
-  std::vector<std::string> edge_types(edge_type_strs, edge_type_strs + 4);
-  std::vector<std::string> node_types(node_type_strs, node_type_strs + 3);
-  int node_each = 1000;
-  int sample_size = 10;
-  int edge_num = node_each * node_each * edge_types.size() * 0.1;
+  const int edge_type_num = 9;
+  const int node_type_num = 4;
+  std::string edge_type_strs[edge_type_num] = {
+      "a2b", "a2c", "b2c", "b2b", "c2a", "c2c", "d2a", "d2c", "d2d"};
+  std::string node_type_strs[node_type_num] = {"a", "b", "c", "d"};
+  std::vector<std::string> edge_types(edge_type_strs,
+                                      edge_type_strs + edge_type_num);
+  std::vector<std::string> node_types(node_type_strs,
+                                      node_type_strs + node_type_num);
+  int node_each = 50000;
+  int sample_size = 5;
+  int edge_num = (int64_t)node_each * node_each * edge_types.size() * 0.001;
   std::map<Edge, int, EdgeLess> edge_map;
   std::vector<std::vector<Edge>> edge_list;
   generate_random_edge_input(
@@ -127,15 +132,20 @@ TEST(TEST_FLEET, test_heter_graph) {
 
   std::vector<uint64_t> key_vec;
   std::vector<int> node_type_vec;
+  int total_range = node_types.size() * node_each;
   for (int i = 0; i < node_types.size() * node_each; i++) {
-    if (rand() % 2) {
-      key_vec.push_back(i);
-      node_type_vec.push_back(i / node_each);
-    }
+    key_vec.push_back(i);
+    node_type_vec.push_back(i / node_each);
   }
-  if (key_vec.size() == 0) {
-    key_vec.push_back(0);
-    node_type_vec.push_back(0);
+
+  // if (key_vec.size() == 0) {
+  //   key_vec.push_back(0);
+  //   node_type_vec.push_back(0);
+  // }
+  for (int i = 0; i < total_range; i++) {
+    int r = rand() % (total_range - i);
+    std::swap(key_vec[i], key_vec[i + r]);
+    std::swap(node_type_vec[i], node_type_vec[i + r]);
   }
   std::vector<int> edges_split_num;
   int edges_len;
@@ -204,4 +214,71 @@ TEST(TEST_FLEET, test_heter_graph) {
     ASSERT_EQ(query_edge_set.find(e), query_edge_set.end());
     query_edge_set.insert(e);
   }
+
+  // hot_start
+  for (int i = 0; i < 100; i++) {
+    edges_split_num.clear();
+    int64_t neighbor_len = 0;
+    iter->SampleNeighbors(0,
+                          (int64_t *)key,
+                          key_vec.size(),
+                          sample_size,
+                          edges_split_num,
+                          &neighbor_len,
+                          edge_types.size(),
+                          edge_type_graph_);
+  }
+  for (int i = 0; i < 100; i++) {
+    edges_split_num.clear();
+    edges_len = 0;
+    iter->sample_neighbor_with_node_type(0,
+                                         key,
+                                         sample_size,
+                                         key_vec.size(),
+                                         edge_type_graph_,
+                                         d_node_types,
+                                         node_types.size(),
+                                         edges_len,
+                                         edges_split_num);
+  }
+
+  auto start2 = std::chrono::steady_clock::now();
+  for (int i = 0; i < 100; i++) {
+    edges_split_num.clear();
+    int64_t neighbor_len = 0;
+    iter->SampleNeighbors(0,
+                          (int64_t *)key,
+                          key_vec.size(),
+                          sample_size,
+                          edges_split_num,
+                          &neighbor_len,
+                          edge_types.size(),
+                          edge_type_graph_);
+  }
+  auto end2 = std::chrono::steady_clock::now();
+  auto tt =
+      std::chrono::duration_cast<std::chrono::microseconds>(end2 - start2);
+  std::cerr << "total time cost with all type query is " << tt.count() << " us"
+            << std::endl;
+
+  auto start1 = std::chrono::steady_clock::now();
+  for (int i = 0; i < 100; i++) {
+    edges_split_num.clear();
+    edges_len = 0;
+    iter->sample_neighbor_with_node_type(0,
+                                         key,
+                                         sample_size,
+                                         key_vec.size(),
+                                         edge_type_graph_,
+                                         d_node_types,
+                                         node_types.size(),
+                                         edges_len,
+                                         edges_split_num);
+  }
+
+  auto end1 = std::chrono::steady_clock::now();
+  auto tt1 =
+      std::chrono::duration_cast<std::chrono::microseconds>(end1 - start1);
+  std::cerr << "total time cost with type info query is " << tt1.count()
+            << " us" << std::endl;
 }

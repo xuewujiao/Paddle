@@ -41,6 +41,25 @@ int GraphGpuWrapper::get_all_neighbor_id(
       ->cpu_graph_table_->get_all_neighbor_id(type, slice_num, output);
 }
 
+std::vector<std::shared_ptr<phi::Allocation>> GraphGpuWrapper::SampleNeighbors(
+    int gpu_id_,
+    int64_t *uniq_nodes,
+    int len,
+    int sample_size,
+    std::vector<int> &edges_split_num,
+    int64_t *neighbor_len,
+    int edge_to_id_len_,
+    std::vector<std::shared_ptr<phi::Allocation>> &edge_type_graph_) {
+  return ((GpuPsGraphTable *)graph_table)
+      ->SampleNeighbors(gpu_id_,
+                        uniq_nodes,
+                        len,
+                        sample_size,
+                        edges_split_num,
+                        neighbor_len,
+                        edge_to_id_len_,
+                        edge_type_graph_);
+}
 int GraphGpuWrapper::get_all_id(int type,
                                 int idx,
                                 int slice_num,

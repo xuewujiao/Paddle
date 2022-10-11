@@ -39,6 +39,12 @@ for ith node in index, actual_size[i] = min(node i's neighbor size, sample size)
 sample_result is to save the neighbor sampling result, its size is len *
 sample_size;
 */
+// CUDA: use 512 threads per block
+const int CUDA_NUM_THREADS = 512;
+// CUDA: number of blocks for threads.
+inline int GET_BLOCKS(const int N) {
+  return (N + CUDA_NUM_THREADS - 1) / CUDA_NUM_THREADS;
+}
 
 __global__ void get_cpu_id_index(uint64_t* key,
                                  int* actual_sample_size,
@@ -866,6 +872,112 @@ GpuPsGraphTable::get_edge_type_graph(int gpu_id, int edge_type_len) {
   return graphs_vec;
 }
 
+__global__ void fill_actual_neighbors_all_type(int64_t* vals,
+                                               int64_t* actual_vals,
+                                               int64_t* actual_vals_dst,
+                                               int* actual_sample_size,
+                                               int* cumsum_actual_sample_size,
+                                               int sample_size,
+                                               int len,
+                                               int mod) {
+  const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < len) {
+    int offset1 = cumsum_actual_sample_size[i];
+    int offset2 = sample_size * i;
+    int dst_id = i % mod;
+    for (int j = 0; j < actual_sample_size[i]; j++) {
+      actual_vals[offset1 + j] = vals[offset2 + j];
+      actual_vals_dst[offset1 + j] = dst_id;
+    }
+  }
+}
+
+std::vector<std::shared_ptr<phi::Allocation>> GpuPsGraphTable::SampleNeighbors(
+    int gpu_id_,
+    int64_t* uniq_nodes,
+    int len,
+    int sample_size,
+    std::vector<int>& edges_split_num,
+    int64_t* neighbor_len,
+    int edge_to_id_len_,
+    std::vector<std::shared_ptr<phi::Allocation>>& edge_type_graph_) {
+  platform::CUDAPlace place_ = platform::CUDAPlace(resource_->dev_id(gpu_id_));
+  auto stream_ = resource_->local_stream(gpu_id_, 0);
+  auto sample_res = graph_neighbor_sample_all_edge_type(gpu_id_,
+                                                        edge_to_id_len_,
+                                                        (uint64_t*)(uniq_nodes),
+                                                        sample_size,
+                                                        len,
+                                                        edge_type_graph_);
+
+  int* all_sample_count_ptr =
+      reinterpret_cast<int*>(sample_res.actual_sample_size_mem->ptr());
+
+  auto cumsum_actual_sample_size =
+      memory::Alloc(place_, (len * edge_to_id_len_ + 1) * sizeof(int));
+  int* cumsum_actual_sample_size_ptr =
+      reinterpret_cast<int*>(cumsum_actual_sample_size->ptr());
+  cudaMemsetAsync(cumsum_actual_sample_size_ptr,
+                  0,
+                  (len * edge_to_id_len_ + 1) * sizeof(int),
+                  stream_);
+
+  size_t temp_storage_bytes = 0;
+  CUDA_CHECK(cub::DeviceScan::InclusiveSum(NULL,
+                                           temp_storage_bytes,
+                                           all_sample_count_ptr,
+                                           cumsum_actual_sample_size_ptr + 1,
+                                           len * edge_to_id_len_,
+                                           stream_));
+  auto d_temp_storage = memory::Alloc(place_, temp_storage_bytes);
+  CUDA_CHECK(cub::DeviceScan::InclusiveSum(d_temp_storage->ptr(),
+                                           temp_storage_bytes,
+                                           all_sample_count_ptr,
+                                           cumsum_actual_sample_size_ptr + 1,
+                                           len * edge_to_id_len_,
+                                           stream_));
+  cudaStreamSynchronize(stream_);
+
+  edges_split_num.resize(edge_to_id_len_);
+  for (int i = 0; i < edge_to_id_len_; i++) {
+    cudaMemcpyAsync(edges_split_num.data() + i,
+                    cumsum_actual_sample_size_ptr + (i + 1) * len,
+                    sizeof(int),
+                    cudaMemcpyDeviceToHost,
+                    stream_);
+  }
+  CUDA_CHECK(cudaStreamSynchronize(stream_));
+  int all_sample_size = edges_split_num[edge_to_id_len_ - 1];
+  auto final_sample_val =
+      memory::AllocShared(place_, all_sample_size * sizeof(int64_t));
+  auto final_sample_val_dst =
+      memory::AllocShared(place_, all_sample_size * sizeof(int64_t));
+  int64_t* final_sample_val_ptr =
+      reinterpret_cast<int64_t*>(final_sample_val->ptr());
+  int64_t* final_sample_val_dst_ptr =
+      reinterpret_cast<int64_t*>(final_sample_val_dst->ptr());
+  int64_t* all_sample_val_ptr =
+      reinterpret_cast<int64_t*>(sample_res.val_mem->ptr());
+  fill_actual_neighbors_all_type<<<GET_BLOCKS(len * edge_to_id_len_),
+                                   CUDA_NUM_THREADS,
+                                   0,
+                                   stream_>>>(all_sample_val_ptr,
+                                              final_sample_val_ptr,
+                                              final_sample_val_dst_ptr,
+                                              all_sample_count_ptr,
+                                              cumsum_actual_sample_size_ptr,
+                                              sample_size,
+                                              len * edge_to_id_len_,
+                                              len);
+  *neighbor_len = all_sample_size;
+  cudaStreamSynchronize(stream_);
+
+  std::vector<std::shared_ptr<phi::Allocation>> sample_results;
+  sample_results.emplace_back(final_sample_val);
+  sample_results.emplace_back(final_sample_val_dst);
+  return sample_results;
+}
+
 void GpuPsGraphTable::split_node_with_types_to_shard(uint64_t* d_keys,
                                                      int* d_idx_ptr,
                                                      size_t len,
@@ -1453,7 +1565,6 @@ GpuPsGraphTable::sample_neighbor_with_node_type(
   platform::CUDAPlace place = platform::CUDAPlace(resource_->dev_id(gpu_id));
   platform::CUDADeviceGuard guard(resource_->dev_id(gpu_id));
   int total_gpu = resource_->total_device();
-  std::cerr << "total gpu = " << total_gpu << std::endl;
   auto stream = resource_->local_stream(gpu_id, 0);
 
   int total_partition = total_gpu * node_type_num;

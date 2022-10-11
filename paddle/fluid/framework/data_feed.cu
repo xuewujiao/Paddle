@@ -700,6 +700,14 @@ GraphDataGenerator::GetReindexResultWithTypeInfo(int64_t *reindex_src_data,
                   reindex_table_size_ * sizeof(int),
                   stream_);
 
+  // auto final_nodes =
+  //     phi::FillHashTable<int64_t, phi::GPUContext>(dev_ctx_, all_nodes_data,
+  //                                             node_len + neighbor_len,
+  //                                             reindex_table_size_,
+  //                                             d_reindex_table_key_ptr,
+  //                                             d_reindex_table_value_ptr,
+  //                                             d_reindex_table_index_ptr,
+  //                                             final_nodes_len);
   VLOG(2) << gpuid_ << ": Alloc all_nodes";
   auto all_nodes =
       memory::AllocShared(place_, (node_len + neighbor_len) * sizeof(int64_t));
@@ -729,6 +737,8 @@ GraphDataGenerator::GetReindexResultWithTypeInfo(int64_t *reindex_src_data,
 
   cudaStreamSynchronize(stream_);
   VLOG(2) << gpuid_ << ": Run phi::FillHashTable";
+  // std::pair<std::shared_ptr<phi::Allocation>,
+  // std::shared_ptr<phi::Allocation>> res; return res;
   auto res = phi::FillHashTableWithAttachedData<int, int64_t, phi::GPUContext>(
       dev_ctx_,
       all_nodes_data,
@@ -739,16 +749,6 @@ GraphDataGenerator::GetReindexResultWithTypeInfo(int64_t *reindex_src_data,
       d_reindex_table_value_ptr,
       d_reindex_table_index_ptr,
       final_nodes_len);
-  /*
-    auto final_nodes =
-        phi::FillHashTable<int64_t, phi::GPUContext>(dev_ctx_, all_nodes_data,
-                                                node_len + neighbor_len,
-                                                reindex_table_size_,
-                                                d_reindex_table_key_ptr,
-                                                d_reindex_table_value_ptr,
-                                                d_reindex_table_index_ptr,
-                                                final_nodes_len);
-  */
 
   VLOG(2) << gpuid_ << ": Run phi::ReindexSrcOutput";
   phi::ReindexSrcOutput<int64_t>

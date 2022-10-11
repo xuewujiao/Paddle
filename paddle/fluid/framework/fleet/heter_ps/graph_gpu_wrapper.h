@@ -114,6 +114,15 @@ class GraphGpuWrapper {
       int node_type_num,
       int& edges_len,
       std::vector<int>& edges_split_num);
+  std::vector<std::shared_ptr<phi::Allocation>> SampleNeighbors(
+      int gpu_id_,
+      int64_t* uniq_nodes,
+      int len,
+      int sample_size,
+      std::vector<int>& edges_split_num,
+      int64_t* neighbor_len,
+      int edge_to_id_len_,
+      std::vector<std::shared_ptr<phi::Allocation>>& edge_type_graph_);
   std::vector<std::shared_ptr<phi::Allocation>> get_edge_type_graph(
       int gpu_id, int edge_type_len);
   std::vector<int> slot_feature_num_map() const;

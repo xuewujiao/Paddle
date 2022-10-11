@@ -196,6 +196,15 @@ class GpuPsGraphTable
       int node_type_num,
       int &edges_len,
       std::vector<int> &edges_split_num);
+  std::vector<std::shared_ptr<phi::Allocation>> SampleNeighbors(
+      int gpu_id_,
+      int64_t *uniq_nodes,
+      int len,
+      int sample_size,
+      std::vector<int> &edges_split_num,
+      int64_t *neighbor_len,
+      int edge_to_id_len_,
+      std::vector<std::shared_ptr<phi::Allocation>> &edge_type_graph_);
   int init_cpu_table(const paddle::distributed::GraphParameter &graph);
   void set_edge_in_type(std::vector<int> &edge_in_type);
   void set_edge_out_type(std::vector<int> &edge_out_type);
