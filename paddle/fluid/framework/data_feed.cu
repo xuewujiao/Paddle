@@ -22,6 +22,7 @@ limitations under the License. */
 #include <thrust/device_vector.h>
 #include <thrust/random.h>
 #include <thrust/shuffle.h>
+#include <curand_kernel.h>
 #include <sstream>
 #include "cub/cub.cuh"
 #include "paddle/fluid/framework/fleet/heter_ps/gpu_graph_node.h"
@@ -84,6 +85,18 @@ __global__ void FillSlotValueOffsetKernel(const int ins_num,
     }
   }
 }
+
+__global__ void shuffle_array(uint64_t* keys,
+                              size_t len) {
+  const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  curandState rng;
+  curand_init(clock64(), threadIdx.x, 0, &rng);
+  if (i < len) {
+     const size_t j = curand(&rng) % len;
+     keys[i] = atomicExch(reinterpret_cast<unsigned long long int*>(keys + j),
+                          static_cast<unsigned long long int>(keys[i]));
+  }  
+} 
 
 __global__ void fill_actual_neighbors(int64_t* vals,
                                       int64_t* actual_vals,
@@ -1491,6 +1504,18 @@ void GraphDataGenerator::AllocResource(const paddle::platform::Place &place,
   // CUDA_CHECK(cudaMemcpyAsync(d_device_keys_->ptr(), h_device_keys_->data(),
   //                           device_key_size_ * sizeof(int64_t),
   //                           cudaMemcpyHostToDevice, stream_));
+
+  // Shuffle start_nodes(d_device_keys_) when training.
+  if (gpu_graph_training_) {
+    for (size_t i = 0; i < h_device_keys_.size(); i++) {
+      uint64_t* device_ptr = reinterpret_cast<uint64_t*>(d_device_keys_[i]->ptr());
+      shuffle_array<<<GET_BLOCKS(h_device_keys_[i]->size()),
+                      CUDA_NUM_THREADS,
+                      0,
+                      stream_>>>(device_ptr, h_device_keys_[i]->size());
+    }
+  }
+
   size_t once_max_sample_keynum = walk_degree_ * once_sample_startid_len_;
   d_prefix_sum_ =
       memory::AllocShared(place_, (once_max_sample_keynum + 1) * sizeof(int));

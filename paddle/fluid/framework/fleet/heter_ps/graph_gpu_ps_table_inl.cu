@@ -143,7 +143,7 @@ __global__ void neighbor_sample_kernel_walking(GpuPsCommGraph graph,
   int i = blockIdx.x * TILE_SIZE + threadIdx.y;
   const int last_idx = min(static_cast<int>(blockIdx.x + 1) * TILE_SIZE, n);
   curandState rng;
-  curand_init(blockIdx.x, threadIdx.y * WARP_SIZE + threadIdx.x, 0, &rng);
+  curand_init(clock64(), threadIdx.y * WARP_SIZE + threadIdx.x, 0, &rng);
   while (i < last_idx) {
     if (node_info_list[i].neighbor_size == 0) {
       actual_size[i] = default_value;
