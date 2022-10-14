@@ -37,6 +37,9 @@ message GraphConfig {
   optional int32 debug_mode = 7 [ default = 0 ];
   optional string first_node_type = 8;
   optional string meta_path = 9;
+  optional bool gpu_graph_training = 10 [ default = true ];
+  optional int64 train_table_cap = 11 [ default = 80000 ];
+  optional int64 infer_table_cap = 12 [ default = 80000 ];
 }
 
 message DataFeedDesc {

@@ -43,6 +43,7 @@ limitations under the License. */
 #include "paddle/fluid/platform/timer.h"
 #include "paddle/fluid/string/string_helper.h"
 #if defined(PADDLE_WITH_CUDA)
+#include "paddle/fluid/framework/fleet/heter_ps/gpu_graph_utils.h"
 #include "paddle/fluid/platform/cuda_device_guard.h"
 #include "paddle/fluid/platform/device/gpu/gpu_info.h"
 #endif
@@ -59,6 +60,8 @@ class Scope;
 class Variable;
 class NeighborSampleResult;
 class NodeQueryResult;
+template <typename KeyType, typename ValType>
+class HashTable;
 }  // namespace framework
 }  // namespace paddle
 
@@ -397,7 +400,8 @@ class CustomParser {
   virtual void Init(const std::vector<SlotConf>& slots) = 0;
   virtual bool Init(const std::vector<AllSlotInfo>& slots) = 0;
   virtual void ParseOneInstance(const char* str, Record* instance) = 0;
-  virtual int ParseInstance(int len, const char* str,
+  virtual int ParseInstance(int len,
+                            const char* str,
                             std::vector<Record>* instances) {
     return 0;
   };
@@ -422,7 +426,6 @@ struct UsedSlotGpuType {
 };
 
 #if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_HETERPS)
-#define CUDA_CHECK(val) CHECK(val == gpuSuccess)
 template <typename T>
 struct CudaBuffer {
   T* cu_buffer;
@@ -479,7 +482,8 @@ struct HostBuffer {
   void malloc(size_t len) {
     buf_size = len;
     CUDA_CHECK(cudaHostAlloc(reinterpret_cast<void**>(&host_buffer),
-                             buf_size * sizeof(T), cudaHostAllocDefault));
+                             buf_size * sizeof(T),
+                             cudaHostAllocDefault));
     CHECK(host_buffer != NULL);
   }
   void free() {
@@ -599,8 +603,8 @@ class MiniBatchGpuPack {
       return;
     }
     buf->resize(size);
-    CUDA_CHECK(cudaMemcpyAsync(buf->data(), val, size * sizeof(T),
-                               cudaMemcpyHostToDevice, stream_));
+    CUDA_CHECK(cudaMemcpyAsync(
+        buf->data(), val, size * sizeof(T), cudaMemcpyHostToDevice, stream_));
   }
   template <typename T>
   void copy_host2device(CudaBuffer<T>* buf, const HostBuffer<T>& val) {
@@ -779,6 +783,7 @@ class DLManager {
 
 struct engine_wrapper_t {
   std::default_random_engine engine;
+#if !defined(_WIN32)
   engine_wrapper_t() {
     struct timespec tp;
     clock_gettime(CLOCK_REALTIME, &tp);
@@ -787,6 +792,7 @@ struct engine_wrapper_t {
     std::seed_seq sseq = {x++, x++, x++, (uint64_t)(cur_time * 1000)};
     engine.seed(sseq);
   }
+#endif
 };
 
 struct BufState {
@@ -807,7 +813,8 @@ struct BufState {
   BufState() {}
   ~BufState() {}
 
-  void Init(int graph_batch_size, int graph_walk_len,
+  void Init(int graph_batch_size,
+            int graph_walk_len,
             std::vector<int>* graph_window) {
     batch_size = graph_batch_size;
     walk_len = graph_walk_len;
@@ -873,6 +880,9 @@ struct BufState {
 
   int GetNextBatch() {
     cursor += len;
+    if (row_num - cursor < 0) {
+      return 0;
+    }
     int tmp_len = cursor + batch_size > row_num ? row_num - cursor : batch_size;
     if (tmp_len == 0) {
       return 0;
@@ -890,23 +900,50 @@ class GraphDataGenerator {
   GraphDataGenerator(){};
   virtual ~GraphDataGenerator(){};
   void SetConfig(const paddle::framework::DataFeedDesc& data_feed_desc);
-  void AllocResource(const paddle::platform::Place& place,
-                     std::vector<LoDTensor*> feed_vec);
+  void AllocResource(int thread_id, std::vector<LoDTensor*> feed_vec);
+  void SetFeedVec(std::vector<LoDTensor*> feed_vec);
   int AcquireInstance(BufState* state);
   int GenerateBatch();
-  int FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk);
+  int FillWalkBuf();
+  int FillInferBuf();
+  void DoWalk();
+  int FillFeatureBuf(uint64_t* d_walk, uint64_t* d_feature, size_t key_num);
   int FillFeatureBuf(std::shared_ptr<phi::Allocation> d_walk,
-          std::shared_ptr<phi::Allocation> d_feature);
-  void FillOneStep(uint64_t* start_ids, uint64_t* walk, int len,
-                   NeighborSampleResult& sample_res, int cur_degree, int step,
+                     std::shared_ptr<phi::Allocation> d_feature);
+  void FillOneStep(uint64_t* start_ids,
+                   uint64_t* walk,
+                   int len,
+                   NeighborSampleResult& sample_res,
+                   int cur_degree,
+                   int step,
                    int* len_per_row);
   int FillInsBuf();
+  int FillIdShowClkTensor(int total_instance,
+                          bool gpu_graph_training,
+                          size_t cursor = 0);
+  int FillGraphSlotFeature(int total_instance, bool gpu_graph_training);
+  int MakeInsPair();
+  int GetPathNum() { return total_row_; }
+  void ResetPathNum() {total_row_ = 0; }
+  void ResetEpochFinish() {epoch_finish_ = false; }
+  void ClearSampleState();
   void SetDeviceKeys(std::vector<uint64_t>* device_keys, int type) {
-    type_to_index_[type] = h_device_keys_.size();
-    h_device_keys_.push_back(device_keys);
+    // type_to_index_[type] = h_device_keys_.size();
+    // h_device_keys_.push_back(device_keys);
   }
+  int InsertTable(const unsigned long* d_keys,
+                  unsigned long len,
+                  std::shared_ptr<phi::Allocation> d_uniq_node_num);
+  std::shared_ptr<phi::Allocation> GetTableKeys(
+      std::shared_ptr<phi::Allocation> d_uniq_node_num,
+      uint64_t& h_uniq_node_num);
+  void CopyFeaFromTable(std::shared_ptr<phi::Allocation> d_uniq_fea_num);
+  std::vector<uint64_t>& GetHostVec() { return host_vec_; }
+  bool get_epoch_finish() {return epoch_finish_; }
+  void clear_gpu_mem();
 
  protected:
+  HashTable<uint64_t, uint64_t>* table_;
   int walk_degree_;
   int walk_len_;
   int window_;
@@ -914,16 +951,14 @@ class GraphDataGenerator {
   int gpuid_;
   // start ids
   // int64_t* device_keys_;
-  // size_t device_key_size_;
-  std::vector<std::vector<uint64_t>*> h_device_keys_;
-  std::unordered_map<int, int> type_to_index_;
-  // point to device_keys_
   size_t cursor_;
+  int thread_id_;
   size_t jump_rows_;
   int64_t* id_tensor_ptr_;
   int64_t* show_tensor_ptr_;
   int64_t* clk_tensor_ptr_;
-  cudaStream_t stream_;
+  cudaStream_t train_stream_;
+  cudaStream_t sample_stream_;
   paddle::platform::Place place_;
   std::vector<LoDTensor*> feed_vec_;
   std::vector<size_t> offset_;
@@ -931,9 +966,11 @@ class GraphDataGenerator {
   std::vector<std::shared_ptr<phi::Allocation>> d_device_keys_;
 
   std::shared_ptr<phi::Allocation> d_walk_;
+  std::shared_ptr<phi::Allocation> d_feature_list_;
   std::shared_ptr<phi::Allocation> d_feature_;
   std::shared_ptr<phi::Allocation> d_len_per_row_;
   std::shared_ptr<phi::Allocation> d_random_row_;
+  std::shared_ptr<phi::Allocation> d_uniq_node_num_;
   //
   std::vector<std::shared_ptr<phi::Allocation>> d_sampleidx2rows_;
   int cur_sampleidx2row_;
@@ -941,12 +978,11 @@ class GraphDataGenerator {
   std::shared_ptr<phi::Allocation> d_sample_keys_;
   int sample_keys_len_;
 
-  std::set<int> finish_node_type_;
-  std::unordered_map<int, size_t> node_type_start_;
-
   std::shared_ptr<phi::Allocation> d_ins_buf_;
   std::shared_ptr<phi::Allocation> d_feature_buf_;
   std::shared_ptr<phi::Allocation> d_pair_num_;
+  std::shared_ptr<phi::Allocation> d_slot_tensor_ptr_;
+  std::shared_ptr<phi::Allocation> d_slot_lod_tensor_ptr_;
   int ins_buf_pair_len_;
   // size of a d_walk buf
   size_t buf_size_;
@@ -957,8 +993,15 @@ class GraphDataGenerator {
   int slot_num_;
   int shuffle_seed_;
   int debug_mode_;
-  std::vector<int> first_node_type_;
-  std::vector<std::vector<int>> meta_path_;
+  bool gpu_graph_training_;
+  bool epoch_finish_;
+  std::vector<uint64_t> host_vec_;
+  std::vector<uint64_t> h_device_keys_len_;
+  uint64_t train_table_cap_;
+  uint64_t infer_table_cap_;
+  int total_row_;
+  size_t infer_node_start_;
+  size_t infer_node_end_;
 };
 
 class DataFeed {
@@ -1023,9 +1066,29 @@ class DataFeed {
   virtual void SetParseLogKey(bool parse_logkey) {}
   virtual void SetEnablePvMerge(bool enable_pv_merge) {}
   virtual void SetCurrentPhase(int current_phase) {}
+  virtual void InitGraphResource() {}
   virtual void SetDeviceKeys(std::vector<uint64_t>* device_keys, int type) {
+#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
     gpu_graph_data_generator_.SetDeviceKeys(device_keys, type);
+#endif
   }
+#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
+  virtual const std::vector<uint64_t>& GetHostVec() {
+    return gpu_graph_data_generator_.GetHostVec();
+  }
+#endif
+
+  virtual void clear_gpu_mem() {
+#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
+    gpu_graph_data_generator_.clear_gpu_mem();
+#endif
+  }
+  virtual bool get_epoch_finish() {
+#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
+    return gpu_graph_data_generator_.get_epoch_finish();
+#endif
+  }
+
   virtual void SetGpuGraphMode(int gpu_graph_mode) {
     gpu_graph_mode_ = gpu_graph_mode;
   }
@@ -1042,9 +1105,39 @@ class DataFeed {
     return ins_content_vec_;
   }
   virtual int GetCurBatchSize() { return batch_size_; }
+  virtual int GetGraphPathNum() {
+#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
+    return gpu_graph_data_generator_.GetPathNum();
+#else
+    return 0;
+#endif
+  }
+  virtual void ResetPathNum() {
+#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
+    gpu_graph_data_generator_.ResetPathNum();
+#endif
+  }
+  
+  virtual void ClearSampleState() {
+#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
+    gpu_graph_data_generator_.ClearSampleState();
+#endif
+  }
+
+  virtual void ResetEpochFinish() {
+#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
+    gpu_graph_data_generator_.ResetEpochFinish();
+#endif
+}
+
+  virtual bool IsTrainMode() { return train_mode_; }
   virtual void LoadIntoMemory() {
     PADDLE_THROW(platform::errors::Unimplemented(
         "This function(LoadIntoMemory) is not implemented."));
+  }
+  virtual void DoWalk() {
+    PADDLE_THROW(platform::errors::Unimplemented(
+        "This function(DoWalk) is not implemented."));
   }
   virtual void SetPlace(const paddle::platform::Place& place) {
     place_ = place;
@@ -1113,7 +1206,10 @@ class DataFeed {
   // The input type of pipe reader, 0 for one sample, 1 for one batch
   int input_type_;
   int gpu_graph_mode_ = 0;
+#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
   GraphDataGenerator gpu_graph_data_generator_;
+#endif
+  bool train_mode_;
 };
 
 // PrivateQueueDataFeed is the base virtual class for ohther DataFeeds.
@@ -1137,7 +1233,8 @@ class PrivateQueueDataFeed : public DataFeed {
   virtual bool ParseOneInstance(T* instance) = 0;
   virtual bool ParseOneInstanceFromPipe(T* instance) = 0;
   // This function is used to put instance to vec_ins
-  virtual void AddInstanceToInsVec(T* vec_ins, const T& instance,
+  virtual void AddInstanceToInsVec(T* vec_ins,
+                                   const T& instance,
                                    int index) = 0;
   // This function is used to put ins_vec to feed_vec
   virtual void PutToFeedVec(const T& ins_vec) = 0;
@@ -1191,9 +1288,11 @@ class InMemoryDataFeed : public DataFeed {
  protected:
   virtual bool ParseOneInstance(T* instance) = 0;
   virtual bool ParseOneInstanceFromPipe(T* instance) = 0;
-  virtual void ParseOneInstanceFromSo(const char* str, T* instance,
+  virtual void ParseOneInstanceFromSo(const char* str,
+                                      T* instance,
                                       CustomParser* parser) {}
-  virtual int ParseInstanceFromSo(int len, const char* str,
+  virtual int ParseInstanceFromSo(int len,
+                                  const char* str,
                                   std::vector<T>* instances,
                                   CustomParser* parser) {
     return 0;
@@ -1336,7 +1435,8 @@ class MultiSlotType {
 
  private:
   void CheckType(const std::string& type) const {
-    PADDLE_ENFORCE_EQ((type == "uint64" || type == "float"), true,
+    PADDLE_ENFORCE_EQ((type == "uint64" || type == "float"),
+                      true,
                       platform::errors::InvalidArgument(
                           "MultiSlotType error, expect type is uint64 or "
                           "float, but received type is %s.",
@@ -1344,13 +1444,15 @@ class MultiSlotType {
   }
   void CheckFloat() const {
     PADDLE_ENFORCE_EQ(
-        type_[0], 'f',
+        type_[0],
+        'f',
         platform::errors::InvalidArgument(
             "MultiSlotType error, add %s value to float slot.", type_));
   }
   void CheckUint64() const {
     PADDLE_ENFORCE_EQ(
-        type_[0], 'u',
+        type_[0],
+        'u',
         platform::errors::InvalidArgument(
             "MultiSlotType error, add %s value to uint64 slot.", type_));
   }
@@ -1469,10 +1571,12 @@ class RecordCandidateList {
   }
   const RecordCandidate& Get(size_t index) const {
     PADDLE_ENFORCE_LT(
-        index, candidate_list_.size(),
+        index,
+        candidate_list_.size(),
         platform::errors::OutOfRange("Your index [%lu] exceeds the number of "
                                      "elements in candidate_list[%lu].",
-                                     index, candidate_list_.size()));
+                                     index,
+                                     candidate_list_.size()));
     return candidate_list_[index];
   }
   void SetSlotIndexToReplace(
@@ -1571,14 +1675,18 @@ class MultiSlotInMemoryDataFeed : public InMemoryDataFeed<Record> {
  protected:
   virtual bool ParseOneInstance(Record* instance);
   virtual bool ParseOneInstanceFromPipe(Record* instance);
-  virtual void ParseOneInstanceFromSo(const char* str, Record* instance,
+  virtual void ParseOneInstanceFromSo(const char* str,
+                                      Record* instance,
                                       CustomParser* parser){};
-  virtual int ParseInstanceFromSo(int len, const char* str,
+  virtual int ParseInstanceFromSo(int len,
+                                  const char* str,
                                   std::vector<Record>* instances,
                                   CustomParser* parser);
   virtual void PutToFeedVec(const std::vector<Record>& ins_vec);
-  virtual void GetMsgFromLogKey(const std::string& log_key, uint64_t* search_id,
-                                uint32_t* cmatch, uint32_t* rank);
+  virtual void GetMsgFromLogKey(const std::string& log_key,
+                                uint64_t* search_id,
+                                uint32_t* cmatch,
+                                uint32_t* rank);
   virtual void PutToFeedVec(const Record* ins_vec, int num);
 };
 
@@ -1605,6 +1713,7 @@ class SlotRecordInMemoryDataFeed : public InMemoryDataFeed<SlotRecord> {
   //                                    CustomParser* parser) {}
   virtual void PutToFeedVec(const std::vector<SlotRecord>& ins_vec) {}
 
+  virtual void InitGraphResource(void);
   virtual void LoadIntoMemoryByCommand(void);
   virtual void LoadIntoMemoryByLib(void);
   virtual void LoadIntoMemoryByLine(void);
@@ -1617,20 +1726,30 @@ class SlotRecordInMemoryDataFeed : public InMemoryDataFeed<SlotRecord> {
   virtual void AssignFeedVar(const Scope& scope);
 #if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_HETERPS)
   void BuildSlotBatchGPU(const int ins_num);
-  void FillSlotValueOffset(const int ins_num, const int used_slot_num,
+  void FillSlotValueOffset(const int ins_num,
+                           const int used_slot_num,
                            size_t* slot_value_offsets,
                            const int* uint64_offsets,
-                           const int uint64_slot_size, const int* float_offsets,
+                           const int uint64_slot_size,
+                           const int* float_offsets,
                            const int float_slot_size,
                            const UsedSlotGpuType* used_slots);
-  void CopyForTensor(const int ins_num, const int used_slot_num, void** dest,
+  void CopyForTensor(const int ins_num,
+                     const int used_slot_num,
+                     void** dest,
                      const size_t* slot_value_offsets,
-                     const uint64_t* uint64_feas, const int* uint64_offsets,
-                     const int* uint64_ins_lens, const int uint64_slot_size,
-                     const float* float_feas, const int* float_offsets,
-                     const int* float_ins_lens, const int float_slot_size,
+                     const uint64_t* uint64_feas,
+                     const int* uint64_offsets,
+                     const int* uint64_ins_lens,
+                     const int uint64_slot_size,
+                     const float* float_feas,
+                     const int* float_offsets,
+                     const int* float_ins_lens,
+                     const int float_slot_size,
                      const UsedSlotGpuType* used_slots);
 #endif
+  virtual void DoWalk();
+
   float sample_rate_ = 1.0f;
   int use_slot_size_ = 0;
   int float_use_slot_size_ = 0;

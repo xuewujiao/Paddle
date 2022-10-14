@@ -33,29 +33,23 @@ class SSDSparseTable : public MemorySparseTable {
   // exchange data
   int32_t UpdateTable();
 
-  int32_t Pull(TableContext& context) override {
-    CHECK(context.value_type == Sparse);
-    float* pull_values = context.pull_context.values;
-    const PullSparseValue& pull_value = context.pull_context.pull_value;
-    return PullSparse(pull_values, pull_value.feasigns_, pull_value.numel_);
-  }
+  int32_t Pull(TableContext& context) override;
 
-  int32_t Push(TableContext& context) override {
-    const uint64_t* keys = context.push_context.keys;
-    const float* values = context.push_context.values;
-    size_t num = context.num;
-    return PushSparse(keys, values, num);
-  }
+  int32_t Push(TableContext& context) override;
 
-  virtual int32_t PullSparse(float* pull_values, const uint64_t* keys,
-                             size_t num);
-  virtual int32_t PushSparse(const uint64_t* keys, const float* values,
-                             size_t num);
+  int32_t PullSparse(float* pull_values, const uint64_t* keys, size_t num);
+  int32_t PullSparsePtr(int shard_id,
+                        char** pull_values,
+                        const uint64_t* keys,
+                        size_t num,
+                        uint16_t pass_id);
+  int32_t PushSparse(const uint64_t* keys, const float* values, size_t num);
+  int32_t PushSparse(const uint64_t* keys, const float** values, size_t num);
 
   int32_t Flush() override { return 0; }
   virtual int32_t Shrink(const std::string& param) override;
   virtual void Clear() override {
-    for (size_t i = 0; i < _real_local_shard_num; ++i) {
+    for (int i = 0; i < _real_local_shard_num; ++i) {
       _local_shards[i].clear();
     }
   }
@@ -63,15 +57,17 @@ class SSDSparseTable : public MemorySparseTable {
   virtual int32_t Save(const std::string& path,
                        const std::string& param) override;
   virtual int32_t SaveCache(
-      const std::string& path, const std::string& param,
+      const std::string& path,
+      const std::string& param,
       paddle::framework::Channel<std::pair<uint64_t, std::string>>&
           shuffled_channel) override;
   virtual double GetCacheThreshold() override { return _local_show_threshold; }
   virtual int64_t CacheShuffle(
-      const std::string& path, const std::string& param, double cache_threshold,
-      std::function<std::future<int32_t>(int msg_type, int to_pserver_id,
-                                         std::string& msg)>
-          send_msg_func,
+      const std::string& path,
+      const std::string& param,
+      double cache_threshold,
+      std::function<std::future<int32_t>(
+          int msg_type, int to_pserver_id, std::string& msg)> send_msg_func,
       paddle::framework::Channel<std::pair<uint64_t, std::string>>&
           shuffled_channel,
       const std::vector<Table*>& table_ptrs) override;
@@ -79,15 +75,21 @@ class SSDSparseTable : public MemorySparseTable {
   virtual int32_t Load(const std::string& path,
                        const std::string& param) override;
   //加载path目录下数据[start_idx, end_idx)
-  virtual int32_t Load(size_t start_idx, size_t end_idx,
+  virtual int32_t Load(size_t start_idx,
+                       size_t end_idx,
                        const std::vector<std::string>& file_list,
                        const std::string& param);
   int64_t LocalSize();
+
+  std::pair<int64_t, int64_t> PrintTableStat() override;
+
+  int32_t CacheTable(uint16_t pass_id) override;
 
  private:
   RocksDBHandler* _db;
   int64_t _cache_tk_size;
   double _local_show_threshold{0.0};
+  std::vector<paddle::framework::Channel<std::string>> _fs_channel;
 };
 
 }  // namespace distributed

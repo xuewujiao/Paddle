@@ -14,27 +14,37 @@
 
 #pragma once
 #include <thrust/host_vector.h>
+
 #include <chrono>
+
 #include "heter_comm.h"
 #include "paddle/fluid/distributed/ps/table/common_graph_table.h"
 #include "paddle/fluid/framework/fleet/heter_ps/gpu_graph_node.h"
 #include "paddle/fluid/framework/fleet/heter_ps/heter_comm_kernel.h"
 #include "paddle/fluid/platform/enforce.h"
 #ifdef PADDLE_WITH_HETERPS
+
+DECLARE_double(gpugraph_hbm_table_load_factor);
+
 namespace paddle {
 namespace framework {
 enum GraphTableType { EDGE_TABLE, FEATURE_TABLE };
-class GpuPsGraphTable : public HeterComm<uint64_t, int64_t, int> {
+class GpuPsGraphTable
+    : public HeterComm<uint64_t, uint64_t, int, CommonFeatureValueAccessor> {
  public:
   int get_table_offset(int gpu_id, GraphTableType type, int idx) const {
     int type_id = type;
     return gpu_id * (graph_table_num_ + feature_table_num_) +
            type_id * graph_table_num_ + idx;
   }
-  GpuPsGraphTable(std::shared_ptr<HeterPsResource> resource, int topo_aware,
+  GpuPsGraphTable(std::shared_ptr<HeterPsResource> resource,
+                  int topo_aware,
                   int graph_table_num)
-      : HeterComm<uint64_t, int64_t, int>(1, resource) {
-    load_factor_ = 0.25;
+      : HeterComm<uint64_t, uint64_t, int, CommonFeatureValueAccessor>(
+            1, resource) {
+    load_factor_ = FLAGS_gpugraph_hbm_table_load_factor;
+    VLOG(0) << "load_factor = " << load_factor_;
+
     rw_lock.reset(new pthread_rwlock_t());
     this->graph_table_num_ = graph_table_num;
     this->feature_table_num_ = 1;
@@ -102,44 +112,60 @@ class GpuPsGraphTable : public HeterComm<uint64_t, int64_t, int> {
         }
       }
     }
+    device_mutex_.resize(gpu_num);
+    for (int i = 0; i < gpu_num; i++) {
+      device_mutex_[i] = new std::mutex();
+    }
   }
   ~GpuPsGraphTable() {
-    // if (cpu_table_status != -1) {
-    //   end_graph_sampling();
-    // }
+    for (size_t i = 0; i < device_mutex_.size(); ++i) {
+      delete device_mutex_[i];
+    }
+    device_mutex_.clear();
   }
-  void build_graph_on_single_gpu(GpuPsCommGraph &g, int gpu_id, int idx);
-  void build_graph_fea_on_single_gpu(GpuPsCommGraphFea &g, int gpu_id);
+  void build_graph_on_single_gpu(const GpuPsCommGraph &g, int gpu_id, int idx);
+  void build_graph_fea_on_single_gpu(const GpuPsCommGraphFea &g, int gpu_id);
   void clear_graph_info(int gpu_id, int index);
   void clear_graph_info(int index);
   void clear_feature_info(int gpu_id, int index);
   void clear_feature_info(int index);
-  void build_graph_from_cpu(std::vector<GpuPsCommGraph> &cpu_node_list,
+  void build_graph_from_cpu(const std::vector<GpuPsCommGraph> &cpu_node_list,
                             int idx);
-  void build_graph_fea_from_cpu(std::vector<GpuPsCommGraphFea> &cpu_node_list,
-                                int idx);
+  void build_graph_fea_from_cpu(
+      const std::vector<GpuPsCommGraphFea> &cpu_node_list, int idx);
   NodeQueryResult graph_node_sample(int gpu_id, int sample_size);
   NeighborSampleResult graph_neighbor_sample_v3(NeighborSampleQuery q,
                                                 bool cpu_switch);
-  NeighborSampleResult graph_neighbor_sample(int gpu_id, uint64_t *key,
-                                             int sample_size, int len);
-  NeighborSampleResult graph_neighbor_sample_v2(int gpu_id, int idx,
-                                                uint64_t *key, int sample_size,
-                                                int len, bool cpu_query_switch);
+  NeighborSampleResult graph_neighbor_sample(int gpu_id,
+                                             uint64_t *key,
+                                             int sample_size,
+                                             int len);
+  NeighborSampleResult graph_neighbor_sample_v2(int gpu_id,
+                                                int idx,
+                                                uint64_t *key,
+                                                int sample_size,
+                                                int len,
+                                                bool cpu_query_switch);
 
-  int get_feature_of_nodes(int gpu_id,
-                    std::shared_ptr<phi::Allocation> d_walk,
-                    std::shared_ptr<phi::Allocation> d_offset, int size, int slot_num);
+  int get_feature_of_nodes(
+      int gpu_id, uint64_t *d_walk, uint64_t *d_offset, int size, int slot_num);
 
-  NodeQueryResult query_node_list(int gpu_id, int idx, int start,
+  NodeQueryResult query_node_list(int gpu_id,
+                                  int idx,
+                                  int start,
                                   int query_size);
   void display_sample_res(void *key, void *val, int len, int sample_len);
-  void move_result_to_source_gpu(int gpu_id, int gpu_num,
-                                                 int sample_size, int *h_left,
-                                                 int *h_right,
-                                                 uint64_t *src_sample_res,
-                                                 int *actual_sample_size);
+  void move_result_to_source_gpu(int gpu_id,
+                                 int gpu_num,
+                                 int sample_size,
+                                 int *h_left,
+                                 int *h_right,
+                                 uint64_t *src_sample_res,
+                                 int *actual_sample_size);
   int init_cpu_table(const paddle::distributed::GraphParameter &graph);
+  gpuStream_t get_local_stream(int gpu_id) {
+    return resource_->local_stream(gpu_id, 0);
+  }
   int gpu_num;
   int graph_table_num_, feature_table_num_;
   std::vector<GpuPsCommGraph> gpu_graph_list_;
@@ -150,10 +176,11 @@ class GpuPsGraphTable : public HeterComm<uint64_t, int64_t, int> {
   std::shared_ptr<paddle::distributed::GraphTable> cpu_graph_table_;
   std::shared_ptr<pthread_rwlock_t> rw_lock;
   mutable std::mutex mutex_;
+  std::vector<std::mutex *> device_mutex_;
   std::condition_variable cv_;
   int cpu_table_status;
 };
-}
-};
+}  // namespace framework
+};  // namespace paddle
 //#include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_ps_table_inl.h"
 #endif
