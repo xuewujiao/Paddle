@@ -108,9 +108,9 @@ TEST(TEST_FLEET, test_heter_graph) {
                                       edge_type_strs + edge_type_num);
   std::vector<std::string> node_types(node_type_strs,
                                       node_type_strs + node_type_num);
-  int node_each = 50000;
-  int sample_size = 5;
-  int edge_num = (int64_t)node_each * node_each * edge_types.size() * 0.001;
+  int node_each = 5;
+  int sample_size = 2;
+  int edge_num = (int64_t)node_each * node_each * edge_types.size();
   std::map<Edge, int, EdgeLess> edge_map;
   std::vector<std::vector<Edge>> edge_list;
   generate_random_edge_input(
@@ -138,10 +138,6 @@ TEST(TEST_FLEET, test_heter_graph) {
     node_type_vec.push_back(i / node_each);
   }
 
-  // if (key_vec.size() == 0) {
-  //   key_vec.push_back(0);
-  //   node_type_vec.push_back(0);
-  // }
   for (int i = 0; i < total_range; i++) {
     int r = rand() % (total_range - i);
     std::swap(key_vec[i], key_vec[i + r]);
@@ -162,123 +158,131 @@ TEST(TEST_FLEET, test_heter_graph) {
              sizeof(int) * node_type_vec.size(),
              cudaMemcpyHostToDevice);
 
-  VLOG(0) << "begin to sample";
-  auto res = iter->sample_neighbor_with_node_type(0,
-                                                  key,
-                                                  sample_size,
-                                                  key_vec.size(),
-                                                  edge_type_graph_,
-                                                  d_node_types,
-                                                  node_types.size(),
-                                                  edges_len,
-                                                  edges_split_num);
-  // ASSERT_EQ(res.size(),0);
-  int64_t *d_neighbors_ptr = reinterpret_cast<int64_t *>(res[0]->ptr());
-  int64_t *d_index_ptr = reinterpret_cast<int64_t *>(res[1]->ptr());
-  int *d_type_ptr = reinterpret_cast<int *>(res[2]->ptr());
-  std::vector<uint64_t> h_neighbors, h_index;
-  std::vector<int> h_node_type;
-  h_neighbors.resize(edges_len);
-  h_index.resize(edges_len);
-  h_node_type.resize(edges_len);
-  cudaMemcpy(h_neighbors.data(),
-             d_neighbors_ptr,
-             edges_len * sizeof(int64_t),
-             cudaMemcpyDeviceToHost);
-  cudaMemcpy(h_index.data(),
-             d_index_ptr,
-             edges_len * sizeof(int64_t),
-             cudaMemcpyDeviceToHost);
-  cudaMemcpy(h_node_type.data(),
-             d_type_ptr,
-             edges_len * sizeof(int),
-             cudaMemcpyDeviceToHost);
-  std::set<Edge, EdgeLess> query_edge_set;
-  int last_edge_type = -1;
-  for (int i = 0; i < edges_len; i++) {
-    ASSERT_LT((size_t)h_index[i], key_vec.size());
-    uint64_t from = key_vec[h_index[i]];
-    Edge e;
-    e.from = from;
-    e.to = h_neighbors[i];
-    ASSERT_NE(edge_map.find(e), edge_map.end());
-    int edge_type = edge_map[e];
-    int tmp_type = e.to / node_each;
-    ASSERT_GE(edge_type, last_edge_type);
-    last_edge_type = edge_type;
-    ASSERT_LT(i, edges_split_num[edge_type]);
-    if (edge_type != 0) {
-      ASSERT_GE(i, edges_split_num[edge_type - 1]);
+  for (int x = 0; x < 100; x++) {
+    auto res = iter->sample_neighbor_with_node_type(0,
+                                                    key,
+                                                    sample_size,
+                                                    key_vec.size(),
+                                                    edge_type_graph_,
+                                                    d_node_types,
+                                                    node_types.size(),
+                                                    edges_len,
+                                                    edges_split_num);
+    // ASSERT_EQ(res.size(),0);
+    int64_t *d_neighbors_ptr = reinterpret_cast<int64_t *>(res[0]->ptr());
+    int64_t *d_index_ptr = reinterpret_cast<int64_t *>(res[1]->ptr());
+    int *d_type_ptr = reinterpret_cast<int *>(res[2]->ptr());
+    std::vector<uint64_t> h_neighbors, h_index;
+    std::vector<int> h_node_type;
+    h_neighbors.resize(edges_len);
+    h_index.resize(edges_len);
+    h_node_type.resize(edges_len);
+    cudaMemcpy(h_neighbors.data(),
+               d_neighbors_ptr,
+               edges_len * sizeof(int64_t),
+               cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_index.data(),
+               d_index_ptr,
+               edges_len * sizeof(int64_t),
+               cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_node_type.data(),
+               d_type_ptr,
+               edges_len * sizeof(int),
+               cudaMemcpyDeviceToHost);
+    std::set<Edge, EdgeLess> query_edge_set;
+    std::vector<int> ranges = edges_split_num;
+    for (int i = 1; i < edge_type_num; i++) {
+      ranges[i] += ranges[i - 1];
     }
-    ASSERT_EQ(tmp_type, h_node_type[i]);
-    ASSERT_EQ(query_edge_set.find(e), query_edge_set.end());
-    query_edge_set.insert(e);
+    int last_edge_type = -1;
+    for (int i = 0; i < edges_len; i++) {
+      ASSERT_LT((size_t)h_index[i], key_vec.size());
+      uint64_t from = key_vec[h_index[i]];
+      Edge e;
+      e.from = from;
+      e.to = h_neighbors[i];
+      ASSERT_NE(edge_map.find(e), edge_map.end());
+      int edge_type = edge_map[e];
+      int tmp_type = e.to / node_each;
+      ASSERT_GE(edge_type, last_edge_type);
+      last_edge_type = edge_type;
+      ASSERT_LT(i, ranges[edge_type]);
+      if (edge_type != 0) {
+        ASSERT_GE(i, ranges[edge_type - 1]);
+      }
+      ASSERT_EQ(tmp_type, h_node_type[i]);
+      ASSERT_EQ(query_edge_set.find(e), query_edge_set.end());
+      query_edge_set.insert(e);
+    }
   }
 
-  // hot_start
-  for (int i = 0; i < 100; i++) {
-    edges_split_num.clear();
-    int64_t neighbor_len = 0;
-    iter->SampleNeighbors(0,
-                          (int64_t *)key,
-                          key_vec.size(),
-                          sample_size,
-                          edges_split_num,
-                          &neighbor_len,
-                          edge_types.size(),
-                          edge_type_graph_);
-  }
-  for (int i = 0; i < 100; i++) {
-    edges_split_num.clear();
-    edges_len = 0;
-    iter->sample_neighbor_with_node_type(0,
-                                         key,
-                                         sample_size,
-                                         key_vec.size(),
-                                         edge_type_graph_,
-                                         d_node_types,
-                                         node_types.size(),
-                                         edges_len,
-                                         edges_split_num);
-  }
+  /*
+    // hot_start
+    for (int i = 0; i < 100; i++) {
+      edges_split_num.clear();
+      int64_t neighbor_len = 0;
+      iter->SampleNeighbors(0,
+                            (int64_t *)key,
+                            key_vec.size(),
+                            sample_size,
+                            edges_split_num,
+                            &neighbor_len,
+                            edge_types.size(),
+                            edge_type_graph_);
+    }
+    for (int i = 0; i < 100; i++) {
+      edges_split_num.clear();
+      edges_len = 0;
+      iter->sample_neighbor_with_node_type(0,
+                                           key,
+                                           sample_size,
+                                           key_vec.size(),
+                                           edge_type_graph_,
+                                           d_node_types,
+                                           node_types.size(),
+                                           edges_len,
+                                           edges_split_num);
+    }
 
-  auto start2 = std::chrono::steady_clock::now();
-  for (int i = 0; i < 100; i++) {
-    edges_split_num.clear();
-    int64_t neighbor_len = 0;
-    iter->SampleNeighbors(0,
-                          (int64_t *)key,
-                          key_vec.size(),
-                          sample_size,
-                          edges_split_num,
-                          &neighbor_len,
-                          edge_types.size(),
-                          edge_type_graph_);
-  }
-  auto end2 = std::chrono::steady_clock::now();
-  auto tt =
-      std::chrono::duration_cast<std::chrono::microseconds>(end2 - start2);
-  std::cerr << "total time cost with all type query is " << tt.count() << " us"
-            << std::endl;
+    auto start2 = std::chrono::steady_clock::now();
+    for (int i = 0; i < 100; i++) {
+      edges_split_num.clear();
+      int64_t neighbor_len = 0;
+      iter->SampleNeighbors(0,
+                            (int64_t *)key,
+                            key_vec.size(),
+                            sample_size,
+                            edges_split_num,
+                            &neighbor_len,
+                            edge_types.size(),
+                            edge_type_graph_);
+    }
+    auto end2 = std::chrono::steady_clock::now();
+    auto tt =
+        std::chrono::duration_cast<std::chrono::microseconds>(end2 - start2);
+    std::cerr << "total time cost with all type query is " << tt.count() << "
+    us"
+              << std::endl;
 
-  auto start1 = std::chrono::steady_clock::now();
-  for (int i = 0; i < 100; i++) {
-    edges_split_num.clear();
-    edges_len = 0;
-    iter->sample_neighbor_with_node_type(0,
-                                         key,
-                                         sample_size,
-                                         key_vec.size(),
-                                         edge_type_graph_,
-                                         d_node_types,
-                                         node_types.size(),
-                                         edges_len,
-                                         edges_split_num);
-  }
+    auto start1 = std::chrono::steady_clock::now();
+    for (int i = 0; i < 100; i++) {
+      edges_split_num.clear();
+      edges_len = 0;
+      iter->sample_neighbor_with_node_type(0,
+                                           key,
+                                           sample_size,
+                                           key_vec.size(),
+                                           edge_type_graph_,
+                                           d_node_types,
+                                           node_types.size(),
+                                           edges_len,
+                                           edges_split_num);
+    }
 
-  auto end1 = std::chrono::steady_clock::now();
-  auto tt1 =
-      std::chrono::duration_cast<std::chrono::microseconds>(end1 - start1);
-  std::cerr << "total time cost with type info query is " << tt1.count()
-            << " us" << std::endl;
+    auto end1 = std::chrono::steady_clock::now();
+    auto tt1 =
+        std::chrono::duration_cast<std::chrono::microseconds>(end1 - start1);
+    std::cerr << "total time cost with type info query is " << tt1.count()
+              << " us" << std::endl;
+  */
 }

@@ -914,6 +914,7 @@ class GraphDataGenerator {
   void SetDeviceKeys(std::vector<uint64_t>* device_keys, int type) {
     type_to_index_[type] = h_device_keys_.size();
     h_device_keys_.push_back(device_keys);
+    key_type.push_back(type);
   }
   std::vector<std::shared_ptr<phi::Allocation>> SampleNeighbors(
       int64_t* uniq_nodes,
@@ -943,8 +944,8 @@ class GraphDataGenerator {
                                int* src_types,
                                int* center_node_types,
                                int* final_nodes_len,
-                               int node_len,
-                               int64_t neighbor_len);
+                               int64_t neighbor_len,
+                               int node_len);
 
  protected:
   int walk_degree_;
@@ -956,6 +957,7 @@ class GraphDataGenerator {
   // int64_t* device_keys_;
   // size_t device_key_size_;
   std::vector<std::vector<uint64_t>*> h_device_keys_;
+  std::vector<int> key_type;
   std::unordered_map<int, int> type_to_index_;
   // point to device_keys_
   size_t cursor_;
@@ -978,8 +980,6 @@ class GraphDataGenerator {
   std::shared_ptr<phi::Allocation> d_feature_;
   std::shared_ptr<phi::Allocation> d_len_per_row_;
   std::shared_ptr<phi::Allocation> d_random_row_;
-  std::shared_ptr<phi::Allocation> d_row_meta_path_;
-  std::shared_ptr<phi::Allocation> d_shuffled_row_meta_path_;
   std::shared_ptr<phi::Allocation> d_slot_feature_num_map_;
   std::shared_ptr<phi::Allocation> d_actual_slot_id_map_;
   std::shared_ptr<phi::Allocation> d_fea_offset_map_;
@@ -1003,8 +1003,9 @@ class GraphDataGenerator {
   std::shared_ptr<phi::Allocation> d_reindex_table_key_;
   std::shared_ptr<phi::Allocation> d_reindex_table_value_;
   std::shared_ptr<phi::Allocation> d_reindex_table_index_;
+  std::shared_ptr<phi::Allocation> d_row_meta_path_;
+  std::shared_ptr<phi::Allocation> d_shuffled_row_meta_path_;
   std::shared_ptr<phi::Allocation> d_meta_path_node_types_;
-  std::shared_ptr<phi::Allocation> d_shuffle_row_meta_path_;
   std::vector<std::shared_ptr<phi::Allocation>> edge_type_graph_;
   int64_t reindex_table_size_;
   int ins_buf_pair_len_;
@@ -1024,6 +1025,7 @@ class GraphDataGenerator {
   bool gpu_graph_training_;
   bool sage_mode_;
   std::vector<int> samples_;
+  bool type_optimization;
 };
 
 class DataFeed {
