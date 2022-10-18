@@ -34,6 +34,7 @@
 DECLARE_bool(graph_load_in_parallel);
 DECLARE_bool(graph_get_neighbor_id);
 DECLARE_int32(gpugraph_storage_mode);
+DECLARE_uint64(gpugraph_slot_feasign_max_num);
 
 namespace paddle {
 namespace distributed {
@@ -2010,8 +2011,8 @@ int GraphTable::parse_feature(int idx,
   thread_local std::vector<paddle::string::str_ptr> fea_fields;
   fea_fields.clear();
   c = feature_separator_.at(0);
-  paddle::string::split_string_ptr(fields[1].ptr, fields[1].len, c, &fea_fields);
-
+  paddle::string::split_string_ptr(fields[1].ptr, fields[1].len, c, &fea_fields, FLAGS_gpugraph_slot_feasign_max_num);
+  
   std::string name = fields[0].to_string();
   auto it = feat_id_map[idx].find(name);
   if (it != feat_id_map[idx].end()) {
