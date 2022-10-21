@@ -901,6 +901,7 @@ class GraphDataGenerator {
   virtual ~GraphDataGenerator(){};
   void SetConfig(const paddle::framework::DataFeedDesc& data_feed_desc);
   void AllocResource(int thread_id, std::vector<LoDTensor*> feed_vec);
+  void AllocTrainResource(int thread_id);
   void SetFeedVec(std::vector<LoDTensor*> feed_vec);
   int AcquireInstance(BufState* state);
   int GenerateBatch();
@@ -934,10 +935,6 @@ class GraphDataGenerator {
   int InsertTable(const unsigned long* d_keys,
                   unsigned long len,
                   std::shared_ptr<phi::Allocation> d_uniq_node_num);
-  std::shared_ptr<phi::Allocation> GetTableKeys(
-      std::shared_ptr<phi::Allocation> d_uniq_node_num,
-      uint64_t& h_uniq_node_num);
-  void CopyFeaFromTable(std::shared_ptr<phi::Allocation> d_uniq_fea_num);
   std::vector<uint64_t>& GetHostVec() { return host_vec_; }
   bool get_epoch_finish() {return epoch_finish_; }
   void clear_gpu_mem();
@@ -1072,6 +1069,7 @@ class DataFeed {
   virtual void SetEnablePvMerge(bool enable_pv_merge) {}
   virtual void SetCurrentPhase(int current_phase) {}
   virtual void InitGraphResource() {}
+  virtual void InitGraphTrainResource() {}
   virtual void SetDeviceKeys(std::vector<uint64_t>* device_keys, int type) {
 #if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
     gpu_graph_data_generator_.SetDeviceKeys(device_keys, type);
@@ -1719,6 +1717,7 @@ class SlotRecordInMemoryDataFeed : public InMemoryDataFeed<SlotRecord> {
   virtual void PutToFeedVec(const std::vector<SlotRecord>& ins_vec) {}
 
   virtual void InitGraphResource(void);
+  virtual void InitGraphTrainResource(void);
   virtual void LoadIntoMemoryByCommand(void);
   virtual void LoadIntoMemoryByLib(void);
   virtual void LoadIntoMemoryByLine(void);

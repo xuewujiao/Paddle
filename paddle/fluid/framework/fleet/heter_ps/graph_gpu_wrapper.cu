@@ -17,6 +17,7 @@
 #include "paddle/fluid/framework/fleet/heter_ps/gpu_graph_utils.h"
 #include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_ps_table.h"
 #include "paddle/fluid/framework/fleet/heter_ps/heter_resource.h"
+DECLARE_int32(gpugraph_storage_mode);
 namespace paddle {
 namespace framework {
 #ifdef PADDLE_WITH_HETERPS
@@ -340,7 +341,7 @@ gpuStream_t GraphGpuWrapper::get_local_stream(int gpuid) {
 }
 
 void GraphGpuWrapper::init_service() {
-  table_proto.set_task_pool_size(24);
+  table_proto.set_task_pool_size(64);
   table_proto.set_shard_num(1000);
   table_proto.set_build_sampler_on_cpu(false);
   table_proto.set_search_level(search_level);
@@ -362,11 +363,14 @@ void GraphGpuWrapper::init_service() {
       std::make_shared<HeterPsResource>(device_id_mapping);
   resource->enable_p2p();
   GpuPsGraphTable *g = new GpuPsGraphTable(resource, 1, id_to_edge.size());
-  g->init_cpu_table(table_proto);
+  size_t gpu_num = device_id_mapping.size();
+  g->init_cpu_table(table_proto, gpu_num);
   g->cpu_graph_table_->set_feature_separator(feature_separator_);
   g->cpu_graph_table_->set_slot_feature_separator(slot_feature_separator_);
   graph_table = (char *)g;
+  upload_num = gpu_num;
   upload_task_pool.reset(new ::ThreadPool(upload_num));
+  
 }
 
 void GraphGpuWrapper::finalize() {
@@ -403,6 +407,10 @@ void GraphGpuWrapper::upload_batch(int type,
 
 // feature table
 void GraphGpuWrapper::upload_batch(int type, int slice_num, int slot_num) {
+  if (type == 1 && (FLAGS_gpugraph_storage_mode == paddle::framework::GpuGraphStorageMode::MEM_EMB_FEATURE_AND_GPU_GRAPH
+          || FLAGS_gpugraph_storage_mode == paddle::framework::GpuGraphStorageMode::SSD_EMB_AND_MEM_FEATURE_GPU_GRAPH)) {
+    return ;
+  } 
   std::vector<std::vector<uint64_t>> node_ids;
   ((GpuPsGraphTable *)graph_table)
       ->cpu_graph_table_->get_all_id(type, slice_num, &node_ids);
@@ -414,7 +422,7 @@ void GraphGpuWrapper::upload_batch(int type, int slice_num, int slot_num) {
       VLOG(0) << "begin make_gpu_ps_graph_fea, node_ids[" << i << "]_size["
               << node_ids[i].size() << "]";
       GpuPsCommGraphFea sub_graph =
-          g->cpu_graph_table_->make_gpu_ps_graph_fea(node_ids[i], slot_num);
+          g->cpu_graph_table_->make_gpu_ps_graph_fea(i, node_ids[i], slot_num);
       // sub_graph.display_on_cpu();
       VLOG(0) << "begin build_graph_fea_on_single_gpu, node_ids[" << i
               << "]_size[" << node_ids[i].size() << "]";
@@ -427,6 +435,32 @@ void GraphGpuWrapper::upload_batch(int type, int slice_num, int slot_num) {
   for (size_t i = 0; i < tasks.size(); i++) tasks[i].get();
   // g->build_graph_from_cpu(vec);
   debug_gpu_memory_info("upload_batch feature end");
+}
+
+//get sub_graph_fea
+std::vector<GpuPsCommGraphFea> GraphGpuWrapper::get_sub_graph_fea(std::vector<std::vector<uint64_t>> &node_ids, int slot_num) {
+  GpuPsGraphTable *g = (GpuPsGraphTable *)graph_table;
+  std::vector<std::future<int>> tasks;
+  std::vector<GpuPsCommGraphFea> sub_graph_feas(node_ids.size());
+  for (int i = 0; i < node_ids.size(); i++) {
+    tasks.push_back(upload_task_pool->enqueue([&, i, this]() -> int {
+      GpuPsGraphTable *g = (GpuPsGraphTable *)graph_table;
+      sub_graph_feas[i] =
+          g->cpu_graph_table_->make_gpu_ps_graph_fea(i, node_ids[i], slot_num);
+      return 0;
+    }));
+  }
+  for (size_t i = 0; i < tasks.size(); i++) tasks[i].get();
+  return sub_graph_feas;
+}
+
+//build_gpu_graph_fea
+void GraphGpuWrapper::build_gpu_graph_fea(GpuPsCommGraphFea &sub_graph_fea, int i) {
+  GpuPsGraphTable *g = (GpuPsGraphTable *)graph_table;
+  g->build_graph_fea_on_single_gpu(sub_graph_fea, i);
+  sub_graph_fea.release_on_cpu();
+  VLOG(0) << "sub graph fea on gpu " << i << " is built";
+  return ; 
 }
 
 NeighborSampleResult GraphGpuWrapper::graph_neighbor_sample_v3(

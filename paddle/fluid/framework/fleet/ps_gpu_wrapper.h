@@ -201,6 +201,7 @@ class PSGPUWrapper {
 
 
   void divide_to_device(std::shared_ptr<HeterContext> gpu_task);
+  void add_slot_feature(std::shared_ptr<HeterContext> gpu_task);
   void BuildGPUTask(std::shared_ptr<HeterContext> gpu_task);
   void PreBuildTask(std::shared_ptr<HeterContext> gpu_task);
   void BuildPull(std::shared_ptr<HeterContext> gpu_task);
@@ -210,6 +211,7 @@ class PSGPUWrapper {
   void EndPass();
   void add_key_to_local(const std::vector<uint64_t> & keys);
   void add_key_to_gputask(std::shared_ptr<HeterContext> gpu_task);
+  void resize_gputask(std::shared_ptr<HeterContext> gpu_task);
   void SparseTableToHbm();
   void HbmToSparseTable();
   void start_build_thread();
@@ -577,6 +579,7 @@ class PSGPUWrapper {
   }
   void SetSlotVector(const std::vector<int>& slot_vector) {
     slot_vector_ = slot_vector;
+    VLOG(0) << "slot_vector size is " << slot_vector_.size();
   }
 
   void SetSlotOffsetVector(const std::vector<int>& slot_offset_vector) {

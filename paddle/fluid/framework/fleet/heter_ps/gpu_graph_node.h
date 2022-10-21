@@ -342,7 +342,7 @@ struct GpuPsCommGraphFea {
   uint8_t *slot_id_list;   // locate on both side
   GpuPsFeaInfo
       *fea_info_list;  // only locate on host side, the list of fea_info
-  uint64_t feature_size, node_size;
+  uint64_t feature_size, node_size, feature_capacity;
   // the size of feature array and graph_node_list array
   GpuPsCommGraphFea()
       : node_list(NULL),
@@ -350,7 +350,8 @@ struct GpuPsCommGraphFea {
         slot_id_list(NULL),
         fea_info_list(NULL),
         feature_size(0),
-        node_size(0) {}
+        node_size(0),
+        feature_capacity(0){}
   GpuPsCommGraphFea(uint64_t *node_list_,
                     uint64_t *feature_list_,
                     uint8_t *slot_id_list_,
