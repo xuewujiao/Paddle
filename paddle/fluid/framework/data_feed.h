@@ -934,10 +934,6 @@ class GraphDataGenerator {
   int InsertTable(const unsigned long* d_keys,
                   unsigned long len,
                   std::shared_ptr<phi::Allocation> d_uniq_node_num);
-  std::shared_ptr<phi::Allocation> GetTableKeys(
-      std::shared_ptr<phi::Allocation> d_uniq_node_num,
-      uint64_t& h_uniq_node_num);
-  void CopyFeaFromTable(std::shared_ptr<phi::Allocation> d_uniq_fea_num);
   std::vector<uint64_t>& GetHostVec() { return host_vec_; }
   bool get_epoch_finish() {return epoch_finish_; }
   void clear_gpu_mem();

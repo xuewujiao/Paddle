@@ -890,56 +890,6 @@ int GraphDataGenerator::InsertTable(
   return 0;
 }
 
-std::shared_ptr<phi::Allocation> GraphDataGenerator::GetTableKeys(
-    std::shared_ptr<phi::Allocation> d_uniq_node_num,
-    uint64_t &h_uniq_node_num) {
-  uint64_t *d_uniq_node_num_ptr =
-      reinterpret_cast<uint64_t *>(d_uniq_node_num->ptr());
-  cudaMemcpyAsync(&h_uniq_node_num,
-                  d_uniq_node_num_ptr,
-                  sizeof(uint64_t),
-                  cudaMemcpyDeviceToHost,
-                  sample_stream_);
-  cudaStreamSynchronize(sample_stream_);
-
-  auto d_uniq_node = memory::AllocShared(
-      place_,
-      h_uniq_node_num * sizeof(uint64_t),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-  uint64_t *d_uniq_node_ptr = reinterpret_cast<uint64_t *>(d_uniq_node->ptr());
-
-  auto d_node_cursor = memory::AllocShared(
-      place_,
-      sizeof(uint64_t),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-
-  uint64_t *d_node_cursor_ptr =
-      reinterpret_cast<uint64_t *>(d_node_cursor->ptr());
-  cudaMemsetAsync(d_node_cursor_ptr, 0, sizeof(uint64_t), sample_stream_);
-  table_->get_keys(d_uniq_node_ptr, d_node_cursor_ptr, sample_stream_);
-
-  cudaStreamSynchronize(sample_stream_);
-  return d_uniq_node;
-}
-
-void GraphDataGenerator::CopyFeaFromTable(
-    std::shared_ptr<phi::Allocation> d_uniq_fea_num) {
-  uint64_t h_uniq_fea_num = 0;
-  auto d_uniq_fea = GetTableKeys(d_uniq_fea_num, h_uniq_fea_num);
-  uint64_t *d_uniq_fea_ptr = reinterpret_cast<uint64_t *>(d_uniq_fea->ptr());
-  size_t host_vec_size = host_vec_.size();
-  host_vec_.resize(host_vec_size + h_uniq_fea_num);
-
-  VLOG(0) << "uniq feature num: " << h_uniq_fea_num;
-
-  cudaMemcpyAsync(host_vec_.data() + host_vec_size,
-                  d_uniq_fea_ptr,
-                  sizeof(uint64_t) * h_uniq_fea_num,
-                  cudaMemcpyDeviceToHost,
-                  sample_stream_);
-  cudaStreamSynchronize(sample_stream_);
-}
-
 void GraphDataGenerator::DoWalk() {
   int device_id = place_.GetDeviceId();
   debug_gpu_memory_info(device_id, "DoWalk start");
@@ -1283,48 +1233,7 @@ int GraphDataGenerator::FillWalkBuf() {
                     cudaMemcpyDeviceToHost,
                     sample_stream_);
     cudaStreamSynchronize(sample_stream_);
-    VLOG(2) << "slot_num: " << slot_num_;
-    if (slot_num_ > 0) {
-      VLOG(2) << "uniq feature";
-      auto d_uniq_fea_num = memory::AllocShared(
-          place_,
-          sizeof(uint64_t),
-          phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-      cudaMemsetAsync(
-          d_uniq_fea_num->ptr(), 0, sizeof(uint64_t), sample_stream_);
-      table_->clear(sample_stream_);
-      size_t cursor = 0;
-      size_t batch = 0;
-      d_feature_list_ = memory::AllocShared(
-          place_,
-          once_sample_startid_len_ * fea_num_per_node_ * sizeof(uint64_t),
-          phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-      uint64_t *d_feature_list_ptr =
-          reinterpret_cast<uint64_t *>(d_feature_list_->ptr());
-      while (cursor < h_uniq_node_num) {
-        batch = (cursor + once_sample_startid_len_ <= h_uniq_node_num)
-                    ? once_sample_startid_len_
-                    : h_uniq_node_num - cursor;
-
-        int ret = gpu_graph_ptr->get_feature_of_nodes(gpuid_,
-                                                      d_uniq_node_ptr + cursor,
-                                                      d_feature_list_ptr,
-                                                      batch,
-                                                      slot_num_,
-                                                      (int*)d_slot_feature_num_map_->ptr(),
-                                                      fea_num_per_node_);
-        if (InsertTable(
-                d_feature_list_ptr, fea_num_per_node_ * batch, d_uniq_fea_num)) {
-          CopyFeaFromTable(d_uniq_fea_num);
-          table_->clear(sample_stream_);
-          cudaMemsetAsync(
-              d_uniq_fea_num->ptr(), 0, sizeof(uint64_t), sample_stream_);
-        }
-        cursor += batch;
-      }
-      CopyFeaFromTable(d_uniq_fea_num);
-    }
-
+    
     VLOG(0) << "sample_times:" << sample_times
         << ", d_walk_size:" << buf_size_
         << ", d_walk_offset:" << i

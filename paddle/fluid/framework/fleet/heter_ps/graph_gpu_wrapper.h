@@ -52,6 +52,8 @@ class GraphGpuWrapper {
                     int slice_num,
                     const std::string& edge_type);
   void upload_batch(int type, int slice_num, int slot_num);
+  std::vector<GpuPsCommGraphFea> get_sub_graph_fea(std::vector<std::vector<uint64_t>> &node_ids, int slot_num);
+  void build_gpu_graph_fea(GpuPsCommGraphFea &sub_graph_fea, int i);
   void add_table_feat_conf(std::string table_name,
                            std::string feat_name,
                            std::string feat_dtype,
