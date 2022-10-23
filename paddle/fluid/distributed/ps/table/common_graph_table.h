@@ -544,11 +544,12 @@ class GraphTable : public Table {
                                   bool reverse);
 
   std::string get_inverse_etype(std::string &etype);
-  
-  int32_t parse_type_to_typepath(std::string &type2files,
-                                 std::string graph_data_local_path,
-                                 std::vector<std::string> &res_type,
-                                 std::unordered_map<std::string, std::string> &res_type2path);
+
+  int32_t parse_type_to_typepath(
+      std::string &type2files,
+      std::string graph_data_local_path,
+      std::vector<std::string> &res_type,
+      std::unordered_map<std::string, std::string> &res_type2path);
 
   int32_t load_edges(const std::string &path,
                      bool reverse,
@@ -680,7 +681,9 @@ class GraphTable : public Table {
   int32_t make_complementary_graph(int idx, int64_t byte_size);
   int32_t dump_edges_to_ssd(int idx);
   int32_t get_partition_num(int idx) { return partitions[idx].size(); }
-  std::vector<int> slot_feature_num_map() const { return slot_feature_num_map_; }
+  std::vector<int> slot_feature_num_map() const {
+    return slot_feature_num_map_;
+  }
   std::vector<uint64_t> get_partition(int idx, int index) {
     if (idx >= (int)partitions.size() || index >= (int)partitions[idx].size())
       return std::vector<uint64_t>();
@@ -729,6 +732,7 @@ class GraphTable : public Table {
   mutable std::mutex mutex_;
   bool build_sampler_on_cpu;
   bool is_load_reverse_edge = false;
+  std::vector<std::vector<int>> node_id_to_edge_types, edge_type_outputs;
   std::shared_ptr<pthread_rwlock_t> rw_lock;
 #ifdef PADDLE_WITH_HETERPS
   // paddle::framework::GpuPsGraphTable gpu_graph_table;

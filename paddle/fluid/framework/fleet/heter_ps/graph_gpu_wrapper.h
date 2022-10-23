@@ -94,15 +94,38 @@ class GraphGpuWrapper {
                                              int walk_degree,
                                              int len);
   NeighborSampleResultV2 graph_neighbor_sample_all_edge_type(
-      int gpu_id, int edge_type_len, uint64_t* key, int sample_size, int len,
+      int gpu_id,
+      int edge_type_len,
+      uint64_t* key,
+      int sample_size,
+      int len,
       std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs);
   std::vector<uint64_t> graph_neighbor_sample(int gpu_id,
                                               int idx,
                                               std::vector<uint64_t>& key,
                                               int sample_size);
+  std::vector<std::shared_ptr<phi::Allocation>> sample_neighbor_with_node_type(
+      int gpu_id,
+      uint64_t* key,
+      int sample_size,
+      int len,
+      std::vector<std::shared_ptr<phi::Allocation>>& edge_type_graphs,
+      int* node_types,
+      int node_type_num,
+      int& edges_len,
+      std::vector<int>& edges_split_num);
+  std::vector<std::shared_ptr<phi::Allocation>> SampleNeighbors(
+      int gpu_id_,
+      int64_t* uniq_nodes,
+      int len,
+      int sample_size,
+      std::vector<int>& edges_split_num,
+      int64_t* neighbor_len,
+      int edge_to_id_len_,
+      std::vector<std::shared_ptr<phi::Allocation>>& edge_type_graph_);
   std::vector<std::shared_ptr<phi::Allocation>> get_edge_type_graph(
       int gpu_id, int edge_type_len);
-  std::vector<int> slot_feature_num_map() const ;
+  std::vector<int> slot_feature_num_map() const;
   void set_feature_separator(std::string ch);
   void set_slot_feature_separator(std::string ch);
   int get_feature_of_nodes(int gpu_id,
@@ -115,6 +138,7 @@ class GraphGpuWrapper {
 
   std::unordered_map<std::string, int> edge_to_id, feature_to_id;
   std::vector<std::string> id_to_feature, id_to_edge;
+  std::vector<int> edge_in_type, edge_out_type;
   std::vector<std::unordered_map<std::string, int>> table_feat_mapping;
   std::vector<std::vector<std::string>> table_feat_conf_feat_name;
   std::vector<std::vector<std::string>> table_feat_conf_feat_dtype;

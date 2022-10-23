@@ -141,18 +141,35 @@ class GpuPsGraphTable
                                                 bool cpu_query_switch,
                                                 bool compress);
   NeighborSampleResultV2 graph_neighbor_sample_all_edge_type(
-      int gpu_id, int edge_type_len, uint64_t* key, int sample_size, int len,
+      int gpu_id,
+      int edge_type_len,
+      uint64_t *key,
+      int sample_size,
+      int len,
       std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs);
-  std::vector<std::shared_ptr<phi::Allocation>> get_edge_type_graph(int gpu_id, int edge_type_len);
-  int get_feature_of_nodes(
-      int gpu_id, uint64_t *d_walk, uint64_t *d_offset, int size, int slot_num,
-      int* d_slot_feature_num_map, int fea_num_per_node);
+  std::vector<std::shared_ptr<phi::Allocation>> get_edge_type_graph(
+      int gpu_id, int edge_type_len);
+  int get_feature_of_nodes(int gpu_id,
+                           uint64_t *d_walk,
+                           uint64_t *d_offset,
+                           int size,
+                           int slot_num,
+                           int *d_slot_feature_num_map,
+                           int fea_num_per_node);
 
   NodeQueryResult query_node_list(int gpu_id,
                                   int idx,
                                   int start,
                                   int query_size);
   void display_sample_res(void *key, void *val, int len, int sample_len);
+  void split_node_with_types_to_shard(uint64_t *d_keys,
+                                      int *d_idx_ptr,
+                                      size_t len,
+                                      int *left,
+                                      int *right,
+                                      int dev_num,
+                                      int *node_type,
+                                      int node_type_num);
   void move_result_to_source_gpu(int gpu_id,
                                  int gpu_num,
                                  int sample_size,
@@ -163,14 +180,34 @@ class GpuPsGraphTable
   void move_result_to_source_gpu_all_edge_type(int gpu_id,
                                                int gpu_num,
                                                int sample_size,
-                                               int* h_left,
-                                               int* h_right,
-                                               uint64_t* src_sample_res,
-                                               int* actual_sample_size,
+                                               int *h_left,
+                                               int *h_right,
+                                               uint64_t *src_sample_res,
+                                               int *actual_sample_size,
                                                int edge_type_len,
                                                int len);
+  std::vector<std::shared_ptr<phi::Allocation>> sample_neighbor_with_node_type(
+      int gpu_id,
+      uint64_t *key,
+      int sample_size,
+      int len,
+      std::vector<std::shared_ptr<phi::Allocation>> &edge_type_graphs,
+      int *node_types,
+      int node_type_num,
+      int &edges_len,
+      std::vector<int> &edges_split_num);
+  std::vector<std::shared_ptr<phi::Allocation>> SampleNeighbors(
+      int gpu_id_,
+      int64_t *uniq_nodes,
+      int len,
+      int sample_size,
+      std::vector<int> &edges_split_num,
+      int64_t *neighbor_len,
+      int edge_to_id_len_,
+      std::vector<std::shared_ptr<phi::Allocation>> &edge_type_graph_);
   int init_cpu_table(const paddle::distributed::GraphParameter &graph);
-
+  void set_edge_in_type(std::vector<int> &edge_in_type);
+  void set_edge_out_type(std::vector<int> &edge_out_type);
   int gpu_num;
   int graph_table_num_, feature_table_num_;
   std::vector<GpuPsCommGraph> gpu_graph_list_;
@@ -182,6 +219,7 @@ class GpuPsGraphTable
   std::shared_ptr<pthread_rwlock_t> rw_lock;
   mutable std::mutex mutex_;
   std::condition_variable cv_;
+  std::vector<int> edge_in_type_, edge_out_type_;
   int cpu_table_status;
 };
 }  // namespace framework
