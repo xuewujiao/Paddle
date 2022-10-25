@@ -113,7 +113,8 @@ class HeterCommKernel {
                         long long len,
                         T* shard_index,
                         int total_devs,
-                        const StreamType& stream);
+                        const StreamType& stream,
+                        const int &node_num = 0);
 
   template <typename KeyType, typename T, typename StreamType>
   void fill_shard_key(KeyType* d_shard_keys,
