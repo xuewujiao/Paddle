@@ -295,6 +295,7 @@ class PSGPUWrapper {
           platform::dynload::ncclCommInitRank(
               &inter_comms_[i], gloo->Size(), inter_ncclids_[i], gloo->Rank());
         }
+        rank_id_ = gloo->Rank();
         node_size_ = gloo->Size();
 #else
         PADDLE_THROW(
@@ -711,6 +712,7 @@ class PSGPUWrapper {
   double time_4 = 0.0;
 
   int multi_node_{0};
+  int rank_id_;
   int node_size_;
   uint64_t table_id_;
   int gpu_graph_mode_ = 0;

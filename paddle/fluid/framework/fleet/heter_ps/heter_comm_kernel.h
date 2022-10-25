@@ -112,7 +112,6 @@ class HeterCommKernel {
   void calc_shard_index(KeyType* d_keys,
                         long long len,
                         T* shard_index,
-
                         int total_devs,
                         const StreamType& stream);
 
@@ -252,6 +251,41 @@ class HeterCommKernel {
                           void* d_vals,
                           size_t val_size,
                           const StreamType& stream);
+
+  template <typename KeyType, typename T, typename StreamType>
+  void calc_node_shard_index(KeyType* d_keys,
+                          long long len,
+                          T* shard_index,
+                          const int &total_devs,
+                          const int &node_num,
+                          const StreamType& stream);
+
+  template <typename KeyType, typename T, typename StreamType>
+  void gather_keys(KeyType* d_shard_keys,
+                   const KeyType* d_keys,
+                   T* idx,
+                   long long len,
+                   const StreamType& stream);
+  template <typename KeyType, typename T, typename StreamType>
+  void scatter_keys(const KeyType* d_shard_keys,
+                    KeyType* d_keys,
+                    T* idx,
+                    long long len,
+                    const StreamType& stream);
+  template <typename T, typename StreamType>
+  void gather_vals(float* d_shard_vals,
+                   const float* d_vals,
+                   T* idx,
+                   long long len,
+                   size_t value_bytes,
+                   const StreamType& stream);
+  template <typename T, typename StreamType>
+  void scatter_vals(const float* d_shard_vals,
+                    float* d_vals,
+                    T* idx,
+                    long long len,
+                    size_t value_bytes,
+                    const StreamType& stream);
 
  private:
   int block_size_{256};

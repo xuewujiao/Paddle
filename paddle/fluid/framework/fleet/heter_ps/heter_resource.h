@@ -114,12 +114,23 @@ class HeterPsResource {
   ppStream local_stream(int dev_num, int stream_num);
   ppStream remote_stream(int dev_num, int stream_num);
   ppStream comm_stream(int dev_num, int stream_num);
+  // rdma
+  bool& need_rdma_trans(void) { return rdma_trans_; }
+  bool is_device_support_rdma(int devid) {
+    if (rdma_status_.empty()) {
+      return true;
+    }
+    return rdma_status_[devid];
+  }
 
   std::vector<std::shared_ptr<DevResource>> resources_;
   std::vector<int> dev_ids_;
   std::map<int, int> devid_2_index_;
   int multi_mf_dim_{0};
   int max_mf_dim_{0};
+  // rdma
+  bool rdma_trans_ = false;
+  std::vector<int> rdma_status_;
 };
 
 }  // end namespace framework
