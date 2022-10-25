@@ -580,6 +580,7 @@ void GraphTable::feature_shrink_to_fit() {
         }));
       }
   }
+  for(size_t i = 0; i < tasks.size(); i++) tasks[i].get(); 
 }
 
 void GraphTable::merge_feature_shard() {
