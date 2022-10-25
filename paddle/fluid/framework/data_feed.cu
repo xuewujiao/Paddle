@@ -890,56 +890,6 @@ int GraphDataGenerator::InsertTable(
   return 0;
 }
 
-std::shared_ptr<phi::Allocation> GraphDataGenerator::GetTableKeys(
-    std::shared_ptr<phi::Allocation> d_uniq_node_num,
-    uint64_t &h_uniq_node_num) {
-  uint64_t *d_uniq_node_num_ptr =
-      reinterpret_cast<uint64_t *>(d_uniq_node_num->ptr());
-  cudaMemcpyAsync(&h_uniq_node_num,
-                  d_uniq_node_num_ptr,
-                  sizeof(uint64_t),
-                  cudaMemcpyDeviceToHost,
-                  sample_stream_);
-  cudaStreamSynchronize(sample_stream_);
-
-  auto d_uniq_node = memory::AllocShared(
-      place_,
-      h_uniq_node_num * sizeof(uint64_t),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-  uint64_t *d_uniq_node_ptr = reinterpret_cast<uint64_t *>(d_uniq_node->ptr());
-
-  auto d_node_cursor = memory::AllocShared(
-      place_,
-      sizeof(uint64_t),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-
-  uint64_t *d_node_cursor_ptr =
-      reinterpret_cast<uint64_t *>(d_node_cursor->ptr());
-  cudaMemsetAsync(d_node_cursor_ptr, 0, sizeof(uint64_t), sample_stream_);
-  table_->get_keys(d_uniq_node_ptr, d_node_cursor_ptr, sample_stream_);
-
-  cudaStreamSynchronize(sample_stream_);
-  return d_uniq_node;
-}
-
-void GraphDataGenerator::CopyFeaFromTable(
-    std::shared_ptr<phi::Allocation> d_uniq_fea_num) {
-  uint64_t h_uniq_fea_num = 0;
-  auto d_uniq_fea = GetTableKeys(d_uniq_fea_num, h_uniq_fea_num);
-  uint64_t *d_uniq_fea_ptr = reinterpret_cast<uint64_t *>(d_uniq_fea->ptr());
-  size_t host_vec_size = host_vec_.size();
-  host_vec_.resize(host_vec_size + h_uniq_fea_num);
-
-  VLOG(0) << "uniq feature num: " << h_uniq_fea_num;
-
-  cudaMemcpyAsync(host_vec_.data() + host_vec_size,
-                  d_uniq_fea_ptr,
-                  sizeof(uint64_t) * h_uniq_fea_num,
-                  cudaMemcpyDeviceToHost,
-                  sample_stream_);
-  cudaStreamSynchronize(sample_stream_);
-}
-
 void GraphDataGenerator::DoWalk() {
   int device_id = place_.GetDeviceId();
   debug_gpu_memory_info(device_id, "DoWalk start");
@@ -1283,48 +1233,7 @@ int GraphDataGenerator::FillWalkBuf() {
                     cudaMemcpyDeviceToHost,
                     sample_stream_);
     cudaStreamSynchronize(sample_stream_);
-    VLOG(2) << "slot_num: " << slot_num_;
-    if (slot_num_ > 0) {
-      VLOG(2) << "uniq feature";
-      auto d_uniq_fea_num = memory::AllocShared(
-          place_,
-          sizeof(uint64_t),
-          phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-      cudaMemsetAsync(
-          d_uniq_fea_num->ptr(), 0, sizeof(uint64_t), sample_stream_);
-      table_->clear(sample_stream_);
-      size_t cursor = 0;
-      size_t batch = 0;
-      d_feature_list_ = memory::AllocShared(
-          place_,
-          once_sample_startid_len_ * fea_num_per_node_ * sizeof(uint64_t),
-          phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-      uint64_t *d_feature_list_ptr =
-          reinterpret_cast<uint64_t *>(d_feature_list_->ptr());
-      while (cursor < h_uniq_node_num) {
-        batch = (cursor + once_sample_startid_len_ <= h_uniq_node_num)
-                    ? once_sample_startid_len_
-                    : h_uniq_node_num - cursor;
-
-        int ret = gpu_graph_ptr->get_feature_of_nodes(gpuid_,
-                                                      d_uniq_node_ptr + cursor,
-                                                      d_feature_list_ptr,
-                                                      batch,
-                                                      slot_num_,
-                                                      (int*)d_slot_feature_num_map_->ptr(),
-                                                      fea_num_per_node_);
-        if (InsertTable(
-                d_feature_list_ptr, fea_num_per_node_ * batch, d_uniq_fea_num)) {
-          CopyFeaFromTable(d_uniq_fea_num);
-          table_->clear(sample_stream_);
-          cudaMemsetAsync(
-              d_uniq_fea_num->ptr(), 0, sizeof(uint64_t), sample_stream_);
-        }
-        cursor += batch;
-      }
-      CopyFeaFromTable(d_uniq_fea_num);
-    }
-
+    
     VLOG(0) << "sample_times:" << sample_times
         << ", d_walk_size:" << buf_size_
         << ", d_walk_offset:" << i
@@ -1385,30 +1294,7 @@ void GraphDataGenerator::AllocResource(int thread_id,
   }
   VLOG(2) << "h_device_keys size: " << h_device_keys_len_.size();
   
-  h_slot_feature_num_map_ = gpu_graph_ptr->slot_feature_num_map();
-  fea_num_per_node_ = 0;
-  for (int i = 0; i < slot_num_; ++i) {
-    fea_num_per_node_ += h_slot_feature_num_map_[i];
-  }
-  std::vector<int> h_actual_slot_id_map, h_fea_offset_map;
-  h_actual_slot_id_map.resize(fea_num_per_node_);
-  h_fea_offset_map.resize(fea_num_per_node_);
-  for (int slot_id = 0, fea_idx = 0; slot_id < slot_num_; ++slot_id) {
-    for (int j = 0; j < h_slot_feature_num_map_[slot_id]; ++j, ++fea_idx) {
-      h_actual_slot_id_map[fea_idx] = slot_id;
-      h_fea_offset_map[fea_idx] = j;
-    }
-  }
 
-  d_slot_feature_num_map_ = memory::Alloc(place_, slot_num_ * sizeof(int));
-  cudaMemcpy(d_slot_feature_num_map_->ptr(), h_slot_feature_num_map_.data(),
-          sizeof(int) * slot_num_, cudaMemcpyHostToDevice);
-  d_actual_slot_id_map_ = memory::Alloc(place_, fea_num_per_node_ * sizeof(int));
-  cudaMemcpy(d_actual_slot_id_map_->ptr(), h_actual_slot_id_map.data(),
-          sizeof(int) * fea_num_per_node_, cudaMemcpyHostToDevice);
-  d_fea_offset_map_ = memory::Alloc(place_, fea_num_per_node_ * sizeof(int));
-  cudaMemcpy(d_fea_offset_map_->ptr(), h_fea_offset_map.data(),
-          sizeof(int) * fea_num_per_node_, cudaMemcpyHostToDevice);
 
   size_t once_max_sample_keynum = walk_degree_ * once_sample_startid_len_;
   d_prefix_sum_ = memory::AllocShared(
@@ -1469,10 +1355,6 @@ void GraphDataGenerator::AllocResource(int thread_id,
   ins_buf_pair_len_ = 0;
   d_ins_buf_ =
       memory::AllocShared(place_, (batch_size_ * 2 * 2) * sizeof(uint64_t));
-  if (slot_num_ > 0) {
-    d_feature_buf_ = memory::AllocShared(
-        place_, (batch_size_ * 2 * 2) * fea_num_per_node_ * sizeof(uint64_t));
-  }
   d_pair_num_ = memory::AllocShared(place_, sizeof(int));
 
   d_slot_tensor_ptr_ =
@@ -1484,6 +1366,39 @@ void GraphDataGenerator::AllocResource(int thread_id,
 
   debug_gpu_memory_info(gpuid_, "AllocResource end");
 }
+
+void GraphDataGenerator::AllocTrainResource(int thread_id) {
+  if (slot_num_ > 0) {
+    platform::CUDADeviceGuard guard(gpuid_);
+    auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
+    h_slot_feature_num_map_ = gpu_graph_ptr->slot_feature_num_map();
+    fea_num_per_node_ = 0;
+    for (int i = 0; i < slot_num_; ++i) {
+      fea_num_per_node_ += h_slot_feature_num_map_[i];
+    }
+    std::vector<int> h_actual_slot_id_map, h_fea_offset_map;
+    h_actual_slot_id_map.resize(fea_num_per_node_);
+    h_fea_offset_map.resize(fea_num_per_node_);
+    for (int slot_id = 0, fea_idx = 0; slot_id < slot_num_; ++slot_id) {
+      for (int j = 0; j < h_slot_feature_num_map_[slot_id]; ++j, ++fea_idx) {
+        h_actual_slot_id_map[fea_idx] = slot_id;
+        h_fea_offset_map[fea_idx] = j;
+      }
+    }
+      
+    d_slot_feature_num_map_ = memory::Alloc(place_, slot_num_ * sizeof(int));
+    cudaMemcpy(d_slot_feature_num_map_->ptr(), h_slot_feature_num_map_.data(),
+          sizeof(int) * slot_num_, cudaMemcpyHostToDevice);
+    d_actual_slot_id_map_ = memory::Alloc(place_, fea_num_per_node_ * sizeof(int));
+    cudaMemcpy(d_actual_slot_id_map_->ptr(), h_actual_slot_id_map.data(),
+          sizeof(int) * fea_num_per_node_, cudaMemcpyHostToDevice);
+    d_fea_offset_map_ = memory::Alloc(place_, fea_num_per_node_ * sizeof(int));
+    cudaMemcpy(d_fea_offset_map_->ptr(), h_fea_offset_map.data(),
+          sizeof(int) * fea_num_per_node_, cudaMemcpyHostToDevice);
+    d_feature_buf_ = memory::AllocShared(
+        place_, (batch_size_ * 2 * 2) * fea_num_per_node_ * sizeof(uint64_t));
+  }
+}                                       
 
 void GraphDataGenerator::SetConfig(
     const paddle::framework::DataFeedDesc &data_feed_desc) {
