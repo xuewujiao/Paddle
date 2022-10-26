@@ -141,7 +141,7 @@ static
 std::shared_ptr<GpuRDMAChecker> g_checker = nullptr;
 GpuRDMAChecker *GpuRDMAChecker::get(int device_num) {
   if (g_checker == nullptr) {
-    g_checker = std::make_shared<GpuRDMAChecker>(device_num)
+    g_checker = std::make_shared<GpuRDMAChecker>(device_num);
   }
   // check gpu num
   CHECK(device_num == g_checker->device_num());
@@ -233,8 +233,6 @@ HeterPsResource::HeterPsResource(const std::vector<int> &dev_ids) {
     resources_.push_back(resource);
     devid_2_index_[dev_ids_[i]] = i;
   }
-#if defined(PADDLE_WITH_CUDA)
-#endif
 }
 
 ppStream HeterPsResource::comm_stream(int dev_num, int stream_num) {
