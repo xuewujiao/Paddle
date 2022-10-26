@@ -289,7 +289,7 @@ class HeterComm {
     template <typename T>
     T* alloc_cache(const size_t& len,
                    std::shared_ptr<memory::Allocation> *alloc,
-                   bool need_copy) {
+                   bool need_copy = false) {
       size_t need_mem = len * sizeof(T);
       if (need_mem > (*alloc)->size()) {
         if (need_copy) {
