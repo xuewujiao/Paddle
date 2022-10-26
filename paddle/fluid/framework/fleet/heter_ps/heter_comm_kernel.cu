@@ -363,8 +363,7 @@ void HeterCommKernel::calc_shard_index(KeyType* d_keys,
                                        long long len,
                                        T* shard_index,
                                        int total_gpu,
-                                       const StreamType& stream,
-                                       const int &node_num) {
+                                       const StreamType& stream) {
   int grid_size = (len - 1) / block_size_ + 1;
   size_t c_len = (size_t)len;
   calc_shard_index_kernel<<<grid_size, block_size_, 0, stream>>>(
