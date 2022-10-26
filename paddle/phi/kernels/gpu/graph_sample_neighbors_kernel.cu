@@ -92,7 +92,7 @@ __global__ void SampleKernel(const uint64_t rand_seed,
     int deg = col_ptr[node + 1] - in_row_start;
     int out_row_start = output_ptr[out_row];
 
-    if (deg <= k) {
+    if (deg <= k || k == -1) {
       for (int idx = threadIdx.x; idx < deg; idx += WARP_SIZE) {
         output[out_row_start + idx] = row[in_row_start + idx];
         if (return_eids) {

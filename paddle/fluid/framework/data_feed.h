@@ -926,6 +926,8 @@ class GraphDataGenerator {
   std::shared_ptr<phi::Allocation> GenerateSampleGraph(
       uint64_t* node_ids, int len, int* uniq_len, phi::DenseTensor* inverse);
 
+  std::shared_ptr<phi::Allocation> GetNodeDegree(uint64_t* node_ids, int len);
+
  protected:
   int walk_degree_;
   int walk_len_;
@@ -946,6 +948,7 @@ class GraphDataGenerator {
   int* index_tensor_ptr_;
   int64_t* show_tensor_ptr_;
   int64_t* clk_tensor_ptr_;
+  int* degree_tensor_ptr_;
 
   cudaStream_t stream_;
   paddle::platform::Place place_;

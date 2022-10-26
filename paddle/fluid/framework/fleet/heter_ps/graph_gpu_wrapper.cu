@@ -313,6 +313,12 @@ std::vector<std::shared_ptr<phi::Allocation>> GraphGpuWrapper::get_edge_type_gra
       ->get_edge_type_graph(gpu_id, edge_type_len);
 }
 
+void GraphGpuWrapper::get_node_degree(
+    int gpu_id, int idx, uint64_t* key, int len, std::shared_ptr<phi::Allocation> node_degree) {
+  return ((GpuPsGraphTable *)graph_table)
+      ->get_node_degree(gpu_id, idx, key, len, node_degree);
+}
+
 int GraphGpuWrapper::get_feature_of_nodes(int gpu_id,
                                           uint64_t *d_walk,
                                           uint64_t *d_offset,

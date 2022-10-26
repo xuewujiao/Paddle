@@ -96,6 +96,10 @@ class GraphGpuWrapper {
   NeighborSampleResultV2 graph_neighbor_sample_all_edge_type(
       int gpu_id, int edge_type_len, uint64_t* key, int sample_size, int len,
       std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs);
+
+  void get_node_degree(int gpu_id, int idx, uint64_t* key, int len,
+                       std::shared_ptr<phi::Allocation> node_degree);
+
   std::vector<uint64_t> graph_neighbor_sample(int gpu_id,
                                               int idx,
                                               std::vector<uint64_t>& key,

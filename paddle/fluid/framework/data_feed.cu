@@ -629,6 +629,19 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GetReindexResult(
   return final_nodes;
 }
 
+std::shared_ptr<phi::Allocation> GraphDataGenerator::GetNodeDegree(
+    uint64_t* node_ids, int len) {
+  auto node_degree = memory::AllocShared(place_, len * edge_to_id_len_ * sizeof(int));
+
+  auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
+  auto edge_to_id = gpu_graph_ptr->edge_to_id;
+  for (auto& iter : edge_to_id) {
+    int edge_idx = iter.second;
+    gpu_graph_ptr->get_node_degree(gpuid_, edge_idx, node_ids, len, node_degree);
+  }
+  return node_degree;
+}
+
 std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
     uint64_t* node_ids, int len, int* final_len, phi::DenseTensor* inverse) {
 
@@ -738,7 +751,7 @@ int GraphDataGenerator::GenerateBatch() {
   platform::CUDADeviceGuard guard(gpuid_);
   int res = 0;
 
-  std::shared_ptr<phi::Allocation> final_sage_nodes;
+  std::shared_ptr<phi::Allocation> final_sage_nodes, node_degrees;
   if (!gpu_graph_training_) {
     while (cursor_ < h_device_keys_.size()) {
       size_t device_key_size = h_device_keys_[cursor_]->size();
@@ -803,12 +816,20 @@ int GraphDataGenerator::GenerateBatch() {
         index_tensor_ptr_ =
             feed_vec_[index_offset]->mutable_data<int>({total_instance}, this->place_);
 
+        degree_tensor_ptr_ =
+            feed_vec_[index_offset + 1]->mutable_data<int>({uniq_instance_ * edge_to_id_len_}, this->place_);
+        uint64_t* final_sage_node_ptr = reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
+        node_degrees = GetNodeDegree(final_sage_node_ptr, uniq_instance_);
+        cudaMemcpyAsync(degree_tensor_ptr_, node_degrees->ptr(),
+                        sizeof(int) * uniq_instance_ * edge_to_id_len_,
+                        cudaMemcpyDeviceToDevice, stream_);
+
         VLOG(1) << "copy id and index";
-        cudaMemcpy(id_tensor_ptr_, final_sage_nodes->ptr(),
-                   sizeof(int64_t) * uniq_instance_,
-                   cudaMemcpyDeviceToDevice);
-        cudaMemcpy(index_tensor_ptr_, inverse_.data<int>(), sizeof(int) * total_instance,
-                   cudaMemcpyDeviceToDevice);
+        cudaMemcpyAsync(id_tensor_ptr_, final_sage_nodes->ptr(),
+                        sizeof(int64_t) * uniq_instance_,
+                        cudaMemcpyDeviceToDevice, stream_);
+        cudaMemcpyAsync(index_tensor_ptr_, inverse_.data<int>(), sizeof(int) * total_instance,
+                        cudaMemcpyDeviceToDevice, stream_);
         GraphFillCVMKernel<<<GET_BLOCKS(uniq_instance_),
                              CUDA_NUM_THREADS,
                              0,
@@ -883,6 +904,14 @@ int GraphDataGenerator::GenerateBatch() {
       index_tensor_ptr_ =
           feed_vec_[index_offset]->mutable_data<int>({total_instance}, this->place_);
 
+      degree_tensor_ptr_ =
+          feed_vec_[index_offset + 1]->mutable_data<int>({uniq_instance_ * edge_to_id_len_}, 
+                                                         this->place_);
+      uint64_t* final_sage_node_ptr = reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
+      node_degrees = GetNodeDegree(final_sage_node_ptr, uniq_instance_);
+      cudaMemcpyAsync(degree_tensor_ptr_, node_degrees->ptr(),
+                      sizeof(int) * uniq_instance_ * edge_to_id_len_,
+                      cudaMemcpyDeviceToDevice, stream_);
       cudaMemcpyAsync(id_tensor_ptr_,
                       final_sage_nodes->ptr(),
                       sizeof(int64_t) * uniq_instance_,
