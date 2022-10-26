@@ -133,7 +133,7 @@ static std::string excute_cmd_result(const std::string &cmd) {
     out.append(szline, ret);
   }
   pclose(fp);
-  fprintf(stderr, "cmd: %s, ret:%s\n", cmd.c_str(), out.c_str());
+  fprintf(stderr, "cmd: %s, ret:\n%s\n", cmd.c_str(), out.c_str());
   return paddle::string::trim_spaces(out);
 }
 #if defined(PADDLE_WITH_CUDA)
