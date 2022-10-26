@@ -2050,11 +2050,12 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::update_one_table(
 
   int dev_id = resource_->dev_id(gpu_num);
   platform::CUDADeviceGuard guard(dev_id);
+  auto stream = resource_->local_stream(gpu_num, 0);
   tables_[gpu_num]->rwlock_->WRLock();
   tables_[gpu_num]->update(
-      d_keys, d_grads, len, sgd, resource_->remote_stream(gpu_num, gpu_num));
+      d_keys, (const char* )d_grads, len, sgd, stream);
   tables_[gpu_num]->rwlock_->UNLock();
-  cudaStreamSynchronize(resource_->remote_stream(gpu_num, gpu_num));
+  cudaStreamSynchronize(stream);
 }
 
 template <typename KeyType,
