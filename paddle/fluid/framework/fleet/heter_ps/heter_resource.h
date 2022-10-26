@@ -122,6 +122,9 @@ class HeterPsResource {
     }
     return rdma_status_[devid];
   }
+  // node
+  bool multi_node(void) { return multi_node_; }
+  void set_multi_node(bool multi_node) { multi_node_ = multi_node; }
 
   std::vector<std::shared_ptr<DevResource>> resources_;
   std::vector<int> dev_ids_;
@@ -131,6 +134,8 @@ class HeterPsResource {
   // rdma
   bool rdma_trans_ = false;
   std::vector<int> rdma_status_;
+  // multi node
+  bool multi_node_ = false;
 };
 
 }  // end namespace framework

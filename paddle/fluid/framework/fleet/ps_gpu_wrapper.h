@@ -259,6 +259,7 @@ class PSGPUWrapper {
       auto gloo = paddle::framework::GlooWrapper::GetInstance();
       if (gloo->Size() > 1) {
         multi_node_ = 1;
+        resource_->set_multi_node(multi_node_);
       }
 #else
       PADDLE_THROW(

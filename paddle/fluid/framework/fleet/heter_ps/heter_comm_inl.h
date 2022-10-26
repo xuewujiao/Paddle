@@ -44,6 +44,7 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::HeterComm(
   storage_.resize(device_num_);
   multi_mf_dim_ = resource->multi_mf();
   load_factor_ = FLAGS_gpugraph_hbm_table_load_factor;
+  multi_node_ = resource_->multi_node();
   VLOG(0) << "load_factor = " << load_factor_;
 
   if (multi_mf_dim_) {
@@ -103,7 +104,11 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::HeterComm(
   multi_mf_dim_ = resource->multi_mf();
   gpu_accessor_ = gpu_accessor;
   load_factor_ = FLAGS_gpugraph_hbm_table_load_factor;
-  VLOG(0) << "load_factor = " << load_factor_;
+  multi_node_ = resource_->multi_node();
+  VLOG(0) << "device_num = " << device_num_
+          << ", multi_node = " << multi_node_
+          << ", multi_mf_dim = " << multi_mf_dim_
+          << ", load_factor = " << load_factor_;
   if (multi_mf_dim_) {
     max_mf_dim_ = resource_->max_mf_dim();
     auto accessor_wrapper_ptr =
@@ -114,7 +119,8 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::HeterComm(
         accessor_wrapper_ptr->GetPushValueSize(max_mf_dim_);
     pull_type_size_ =
         accessor_wrapper_ptr->GetPullValueSize(max_mf_dim_);
-    VLOG(0) << " HeterComm init, max feature_value_size:" << val_type_size_
+    VLOG(0) << " HeterComm init, max_mf_dim: " << max_mf_dim_
+            << ", max feature_value_size:" << val_type_size_
             << ", feature_value_push_size:" << grad_type_size_
             << ", feature_pull_type_size:" << pull_type_size_;
   } else {
@@ -1672,10 +1678,14 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse(
   if (len == 0) {
     return;
   }
-  if (!FLAGS_gpugraph_dedup_pull_push_mode) {
-    pull_merge_sparse(num, d_keys, d_vals, len);
+  if (multi_node_) {
+    pull_sparse_all2all(num, d_keys, d_vals, len);
   } else {
-    pull_normal_sparse(num, d_keys, d_vals, len);
+    if (!FLAGS_gpugraph_dedup_pull_push_mode) {
+      pull_merge_sparse(num, d_keys, d_vals, len);
+    } else {
+      pull_normal_sparse(num, d_keys, d_vals, len);
+    }
   }
 }
 
@@ -1686,6 +1696,23 @@ template <typename KeyType,
           typename GPUAccessor>
 template <typename Sgd>
 void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse(
+    int dev_num,
+    KeyType* d_keys,
+    float* d_grads,
+    size_t len,
+    Sgd& sgd) {
+  if (multi_node_) {
+    push_sparse_all2all(dev_num, d_keys, d_grads, len, sgd);
+  } else {
+    push_normal_sparse(dev_num, d_keys, d_grads, len, sgd);
+  }
+}
+template <typename KeyType,
+          typename ValType,
+          typename GradType,
+          typename GPUAccessor>
+template <typename Sgd>
+void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_normal_sparse(
     int dev_num,
     KeyType* d_keys,
     float* d_grads,
@@ -2281,9 +2308,8 @@ int HeterComm<KeyType, ValType, GradType, GPUAccessor>::dedup_keys_and_fillidx(
     uint32_t* d_offset,
     uint32_t* d_merged_cnts,
     bool filter_zero) {
-  int dev_id = resource_->dev_id(gpu_id);
-  platform::CUDAPlace place = platform::CUDAPlace(dev_id);
-  platform::CUDADeviceGuard guard(dev_id);
+  platform::CUDAPlace place = platform::CUDAPlace(gpu_id);
+  platform::CUDADeviceGuard guard(gpu_id);
   auto stream = resource_->local_stream(gpu_id, 0);
 
   assert(total_fea_num > 0);
@@ -2389,7 +2415,7 @@ template <typename KeyType,
           typename GPUAccessor>
 void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_all2all(
     const int gpu_id, KeyType* d_keys, float* d_vals, size_t fea_num) {
-  AnyDeviceGuard guard(resource_->dev_id(gpu_id));
+  AnyDeviceGuard guard(gpu_id);
   auto &loc = storage_[gpu_id];
   // gather keys of all gpu and select shard key
   size_t gather_inner_size = gather_inter_keys_by_copy(gpu_id, fea_num, d_keys);
@@ -2548,9 +2574,8 @@ template <typename KeyType,
 void HeterComm<KeyType, ValType, GradType, GPUAccessor>::partition_shard_keys(
     const int &gpu_id, const size_t &len, const KeyType* d_keys,
     uint32_t* d_idx_parted, KeyType* d_keys_parted, size_t* h_part_sizes, const int &shard_num) {
-  int dev_id = resource_->dev_id(gpu_id);
-  DevPlace place = DevPlace(dev_id);
-  AnyDeviceGuard guard(dev_id);
+  DevPlace place = DevPlace(gpu_id);
+  AnyDeviceGuard guard(gpu_id);
   auto stream = resource_->local_stream(gpu_id, 0);
 
   std::vector<uint32_t> h_offsets(shard_num * 2);
@@ -3013,9 +3038,8 @@ template <typename KeyType,
 size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::merge_grad(
     const int &gpu_id, const size_t &len, const KeyType* d_in_keys, KeyType* d_out_keys,
     const void* d_in_grads, void* d_out_grads) {
-  int dev_id = resource_->dev_id(gpu_id);
-  platform::CUDAPlace place = platform::CUDAPlace(dev_id);
-  platform::CUDADeviceGuard guard(dev_id);
+  platform::CUDAPlace place = platform::CUDAPlace(gpu_id);
+  platform::CUDADeviceGuard guard(gpu_id);
   auto stream = resource_->local_stream(gpu_id, 0);
 
   auto d_fea_num_info = memory::Alloc(place, sizeof(uint32_t) * len * 4);

@@ -471,6 +471,14 @@ class HeterComm {
                            KeyType* d_keys,
                            float* d_vals,
                            size_t len);
+
+  template <typename Sgd>
+  void push_normal_sparse(int num,
+                     KeyType* d_keys,
+                     float* d_grads,
+                     size_t len,
+                     Sgd& sgd);  // NOLINT
+
   void shard_inner_keys(const size_t& total_fea_num,
                         const KeyType* d_keys,
                         const int& gpu_id,
@@ -573,6 +581,7 @@ class HeterComm {
                                         KeyType* d_out_keys,
                                         char* d_out_vals,
                                         cudaStream_t& stream);
+
 
   using Table = HashTable<KeyType, ValType>;
   using PtrTable = HashTable<KeyType, float*>;
