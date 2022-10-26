@@ -597,7 +597,7 @@ class HeterComm {
 
   GPUAccessor gpu_accessor_;
 
- private:
+ protected:
   int topo_aware_{0};
   std::vector<LocalStorage> storage_;
   DynamicGradMerger merger_;
