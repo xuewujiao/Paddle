@@ -280,7 +280,9 @@ class HeterComm {
   };
 
   struct LocalStorage {
-    LocalStorage() {}
+    LocalStorage() {
+      sem_wait = std::make_unique<Semaphore>();
+    }
     void init(int device_num, int dev_id) {
       place_ = platform::CUDAPlace(dev_id);
       h_recv_offsets.resize(device_num);
@@ -388,7 +390,7 @@ class HeterComm {
     size_t h_trans_offset;
 
     // node trans comm and stream buffer
-    Semaphore sem_wait;
+    std::unique_ptr<Semaphore> sem_wait;
     std::shared_ptr<memory::Allocation> trans_keys_buff;
     std::shared_ptr<memory::Allocation> trans_vals_buff;
     KeyType* d_merged_trans_keys = nullptr;

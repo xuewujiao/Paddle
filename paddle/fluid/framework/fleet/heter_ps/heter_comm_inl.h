@@ -3289,8 +3289,8 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_keys_by_all2all_
     PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
 
     // wait node data ok
-    cache.sem_wait.post();
-    my_cache.sem_wait.wait();
+    cache.sem_wait->post();
+    my_cache.sem_wait->wait();
 
     size_t &recv_size = my_cache.shard_res.h_remote_part_offsets[nccl_node_size];
     // p2p copy
@@ -3299,7 +3299,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_keys_by_all2all_
            recv_size * sizeof(KeyType), stream));
     PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
   } else {
-    my_cache.sem_wait.wait();
+    my_cache.sem_wait->wait();
     int trans_id = get_transfer_devid(gpu_id);
     auto &trans = storage_[trans_id];
 
@@ -3331,7 +3331,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_keys_by_all2all_
            stream);
     PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
 
-    trans.sem_wait.post();
+    trans.sem_wait->post();
   }
   return total_fea_num;
 }
@@ -3365,8 +3365,8 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_vals_by_all2all_
     PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
 
     // wait node data ok
-    cache.sem_wait.post();
-    my_cache.sem_wait.wait();
+    cache.sem_wait->post();
+    my_cache.sem_wait->wait();
 
     // p2p copy
     PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyPeerAsync((void*)d_out_vals, gpu_id,
@@ -3374,7 +3374,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_vals_by_all2all_
         fea_size * value_bytes, stream));
     PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
   } else {
-    my_cache.sem_wait.wait();
+    my_cache.sem_wait->wait();
     int trans_id = get_transfer_devid(gpu_id);
     auto &trans = storage_[trans_id];
 
@@ -3405,7 +3405,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_vals_by_all2all_
             (char *)my_cache.d_merged_push_trans_vals,
             stream);
     PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
-    trans.sem_wait.post();
+    trans.sem_wait->post();
   }
   return total_fea_num;
 }
@@ -3440,8 +3440,8 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_gradient_by_all2
     PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
 
     // wait node data ok
-    cache.sem_wait.post();
-    my_cache.sem_wait.wait();
+    cache.sem_wait->post();
+    my_cache.sem_wait->wait();
 
     // p2p copy
     size_t &recv_total_size = my_cache.shard_res.h_remote_part_offsets[nccl_node_size];
@@ -3454,7 +3454,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_gradient_by_all2
     PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
   } else {
     // copy local rank id data
-    my_cache.sem_wait.wait();
+    my_cache.sem_wait->wait();
     int trans_id = get_transfer_devid(gpu_id);
     auto &trans = storage_[trans_id];
 
@@ -3509,7 +3509,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_gradient_by_all2
             (char *)my_cache.d_merged_push_trans_vals,
             stream);
     PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
-    trans.sem_wait.post();
+    trans.sem_wait->post();
   }
   return total_send_recv;
 }
