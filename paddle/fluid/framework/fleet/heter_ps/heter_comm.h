@@ -540,7 +540,7 @@ class HeterComm {
   template <typename Sgd>
   void push_sparse_all2all(const int& gpu_id,
                            KeyType* d_keys,
-                           GradType* d_grads,
+                           float* d_grads,
                            size_t len,
                            Sgd& sgd);  // NOLINT
   size_t merge_grad(const int& gpu_id,
