@@ -610,8 +610,10 @@ class HeterComm {
   size_t val_type_size_;
   size_t pull_type_size_;
   size_t grad_type_size_;
+  bool enable_gpu_direct_access_ = false;
 
 #if defined(PADDLE_WITH_CUDA)
+  GpuRDMAChecker *rdma_checker_ = nullptr;
   std::vector<ncclComm_t> nccl_inner_comms_;
   std::vector<ncclComm_t> nccl_inter_comms_;
   int multi_mf_dim_{8};

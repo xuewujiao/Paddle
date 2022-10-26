@@ -45,8 +45,17 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::HeterComm(
   multi_mf_dim_ = resource->multi_mf();
   load_factor_ = FLAGS_gpugraph_hbm_table_load_factor;
   multi_node_ = resource_->multi_node();
-  VLOG(0) << "load_factor = " << load_factor_;
-
+#if defined(PADDLE_WITH_CUDA)
+  rdma_checker_ = GpuRDMAChecker::get(device_num_);
+  topo_aware_ = rdma_checker_->topo_aware();
+#endif
+  enable_gpu_direct_access_ = (topo_aware_) ? false : FLAGS_gpugraph_enable_gpu_direct_access;
+  VLOG(0) << "device_num = " << device_num_
+          << ", multi_node = " << multi_node_
+          << ", multi_mf_dim = " << multi_mf_dim_
+          << ", topo_aware = " << topo_aware_
+          << ", enable_gpu_direct_access = " << enable_gpu_direct_access_
+          << ", load_factor = " << load_factor_;
   if (multi_mf_dim_) {
     max_mf_dim_ = resource_->max_mf_dim();
     auto accessor_wrapper_ptr =
@@ -57,7 +66,8 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::HeterComm(
         accessor_wrapper_ptr->GetPushValueSize(max_mf_dim_);
     pull_type_size_ =
         accessor_wrapper_ptr->GetPullValueSize(max_mf_dim_);
-    VLOG(0) << " HeterComm init, max feature_value_size:" << val_type_size_
+    VLOG(0) << " HeterComm init, max_mf_dim: " << max_mf_dim_
+            << ", max feature_value_size:" << val_type_size_
             << ", feature_value_push_size:" << grad_type_size_
             << ", feature_pull_type_size:" << pull_type_size_;
   } else {
@@ -105,9 +115,16 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::HeterComm(
   gpu_accessor_ = gpu_accessor;
   load_factor_ = FLAGS_gpugraph_hbm_table_load_factor;
   multi_node_ = resource_->multi_node();
-  VLOG(0) << "device_num = " << device_num_
+#if defined(PADDLE_WITH_CUDA)
+  rdma_checker_ = GpuRDMAChecker::get(device_num_);
+  topo_aware_ = rdma_checker_->topo_aware();
+#endif
+  enable_gpu_direct_access_ = (topo_aware_) ? false : FLAGS_gpugraph_enable_gpu_direct_access;
+  VLOG(0) << "gpu access device_num = " << device_num_
           << ", multi_node = " << multi_node_
           << ", multi_mf_dim = " << multi_mf_dim_
+          << ", topo_aware = " << topo_aware_
+          << ", enable_gpu_direct_access = " << enable_gpu_direct_access_
           << ", load_factor = " << load_factor_;
   if (multi_mf_dim_) {
     max_mf_dim_ = resource_->max_mf_dim();
@@ -1418,7 +1435,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_merge_sparse(
               total_device * sizeof(int),
               stream);
 
-  if (!FLAGS_gpugraph_enable_gpu_direct_access) {
+  if (!enable_gpu_direct_access_) {
     for (int i = 0; i < total_device; ++i) {
       int shard_len = h_right[i] - h_left[i] + 1;
       if (h_left[i] == -1 || h_right[i] == -1) {
@@ -1435,12 +1452,12 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_merge_sparse(
       continue;
     }
     auto& node = path_[num][i].nodes_.back();
-    if (!FLAGS_gpugraph_enable_gpu_direct_access) {
+    if (!enable_gpu_direct_access_) {
       sync_stream(node.in_stream);
     }
     AnyDeviceGuard guard(resource_->dev_id(i));
     ptr_tables_[i]->rwlock_->RDLock();
-    if (!FLAGS_gpugraph_enable_gpu_direct_access) {
+    if (!enable_gpu_direct_access_) {
       ptr_tables_[i]->get(reinterpret_cast<KeyType*>(node.key_storage),
                           node.val_storage,
                           h_right[i] - h_left[i] + 1,
@@ -1464,7 +1481,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_merge_sparse(
     ptr_tables_[i]->rwlock_->UNLock();
   }
 
-  if (!FLAGS_gpugraph_enable_gpu_direct_access) {
+  if (!enable_gpu_direct_access_) {
     walk_to_src(num,
                 total_device,
                 h_left,
@@ -1496,7 +1513,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_merge_sparse(
                                          stream);
   sync_stream(stream);
 
-  if (!FLAGS_gpugraph_enable_gpu_direct_access) {
+  if (!enable_gpu_direct_access_) {
     for (int i = 0; i < total_device; ++i) {
       if (h_left[i] == -1 || h_right[i] == -1) {
         continue;
@@ -1585,7 +1602,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_normal_sparse(
               total_device * sizeof(int),
               stream);
 
-  if (!FLAGS_gpugraph_enable_gpu_direct_access) {
+  if (!enable_gpu_direct_access_) {
     for (int i = 0; i < total_device; ++i) {
       int shard_len = h_right[i] - h_left[i] + 1;
       if (h_left[i] == -1 || h_right[i] == -1) {
@@ -1601,12 +1618,12 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_normal_sparse(
       continue;
     }
     auto& node = path_[num][i].nodes_.back();
-    if (!FLAGS_gpugraph_enable_gpu_direct_access) {
+    if (!enable_gpu_direct_access_) {
       sync_stream(node.in_stream);
     }
     AnyDeviceGuard guard(resource_->dev_id(i));
     ptr_tables_[i]->rwlock_->RDLock();
-    if (!FLAGS_gpugraph_enable_gpu_direct_access) {
+    if (!enable_gpu_direct_access_) {
       // add default value (show, clk, EmbedW, mf_size, embding all eauqls 0)
       // for get
       CUDA_CHECK(cudaMemsetAsync(node.val_storage,
@@ -1642,7 +1659,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_normal_sparse(
     }
     ptr_tables_[i]->rwlock_->UNLock();
   }
-  if (!FLAGS_gpugraph_enable_gpu_direct_access) {
+  if (!enable_gpu_direct_access_) {
     walk_to_src(num,
                 total_device,
                 h_left,
@@ -1659,7 +1676,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_normal_sparse(
 
   sync_stream(stream);
 
-  if (!FLAGS_gpugraph_enable_gpu_direct_access) {
+  if (!enable_gpu_direct_access_) {
     for (int i = 0; i < total_device; ++i) {
       if (h_left[i] == -1 || h_right[i] == -1) {
         continue;
@@ -1826,7 +1843,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_normal_sparse(
               total_device * sizeof(int),
               stream);
 
-  if (!FLAGS_gpugraph_enable_gpu_direct_access) {
+  if (!enable_gpu_direct_access_) {
     for (int i = 0; i < total_device; ++i) {
       int shard_len = h_right[i] - h_left[i] + 1;
       if (h_left[i] == -1 || h_right[i] == -1) {
@@ -1850,13 +1867,13 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_normal_sparse(
       continue;
     }
     auto& node = path_[dev_num][i].nodes_.back();
-    if (!FLAGS_gpugraph_enable_gpu_direct_access) {
+    if (!enable_gpu_direct_access_) {
       sync_stream(node.in_stream);
     }
 
     AnyDeviceGuard guard(resource_->dev_id(i));
     ptr_tables_[i]->rwlock_->WRLock();
-    if (!FLAGS_gpugraph_enable_gpu_direct_access) {
+    if (!enable_gpu_direct_access_) {
       ptr_tables_[i]->update(reinterpret_cast<KeyType*>(node.key_storage),
                              node.val_storage,
                              h_right[i] - h_left[i] + 1,
@@ -1883,7 +1900,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_normal_sparse(
     }
   }
 
-  if (!FLAGS_gpugraph_enable_gpu_direct_access) {
+  if (!enable_gpu_direct_access_) {
     for (int i = 0; i < total_device; ++i) {
       if (h_left[i] == -1 || h_right[i] == -1) {
         continue;
@@ -2750,7 +2767,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_sparse_keys_by
   cache.alloc(remote_size, pull_type_size_, HeterCommType::COPY_KEY);
 
   size_t total_fea_num = 0;
-  if (resource_->need_rdma_trans()) {
+  if (rdma_checker_->need_rdma_trans()) {
     total_fea_num = send_keys_by_all2all_trans(
         gpu_id,
         node_size_,
@@ -2792,7 +2809,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::scatter_sparse_vals_by_
   auto h_remote_part_offsets = res.h_remote_part_offsets.data();
 
   size_t total_fea_num = 0;
-  if (resource_->need_rdma_trans()) {
+  if (rdma_checker_->need_rdma_trans()) {
     total_fea_num = send_vals_by_all2all_trans(
           gpu_id,
           node_size_,
@@ -3220,7 +3237,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_sparse_gradien
       stream);
 
   size_t total_send_recv = 0;
-  if (resource_->need_rdma_trans()) {
+  if (rdma_checker_->need_rdma_trans()) {
     total_send_recv = send_gradient_by_all2all_trans(
             gpu_id,
             node_size_,
@@ -3277,7 +3294,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_keys_by_all2all_
       cudaStream_t &stream) {
   size_t total_fea_num = 0;
   auto &my_cache = storage_[gpu_id];
-  if (!resource_->is_device_support_rdma(gpu_id)) {
+  if (!rdma_checker_->is_device_support_rdma(gpu_id)) {
     int trans_id = get_transfer_devid(gpu_id);
     auto &cache = storage_[trans_id];
     cache.init_trans(fea_size, pull_type_size_);
@@ -3354,7 +3371,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_vals_by_all2all_
   auto h_remote_part_offsets = my_cache.shard_res.h_remote_part_offsets.data();
 
   size_t total_fea_num = 0;
-  if (!resource_->is_device_support_rdma(gpu_id)) {
+  if (!rdma_checker_->is_device_support_rdma(gpu_id)) {
     int trans_id = get_transfer_devid(gpu_id);
     auto &cache = storage_[trans_id];
     size_t fea_size = h_remote_part_offsets[nccl_node_size];
@@ -3426,7 +3443,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_gradient_by_all2
     cudaStream_t &stream) {
   auto &my_cache = storage_[gpu_id];
   size_t total_send_recv = 0;
-  if (!resource_->is_device_support_rdma(gpu_id)) {
+  if (!rdma_checker_->is_device_support_rdma(gpu_id)) {
     int trans_id = get_transfer_devid(gpu_id);
     auto &cache = storage_[trans_id];
     cache.init_trans(fea_size, value_bytes);
