@@ -253,7 +253,7 @@ class HeterCommKernel {
                           const StreamType& stream);
 
   template <typename KeyType, typename T, typename StreamType>
-  void calc_node_shard_index(KeyType* d_keys,
+  void calc_node_shard_index(const KeyType* d_keys,
                           long long len,
                           T* shard_index,
                           const int &total_devs,

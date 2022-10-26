@@ -370,7 +370,7 @@ void HeterCommKernel::calc_shard_index(KeyType* d_keys,
       d_keys, c_len, shard_index, total_gpu);
 }
 template <typename KeyType, typename T, typename StreamType>
-void HeterCommKernel::calc_node_shard_index(KeyType* d_keys,
+void HeterCommKernel::calc_node_shard_index(const KeyType* d_keys,
                         long long len,
                         T* shard_index,
                         const int &total_devs,
@@ -813,9 +813,8 @@ template void HeterCommKernel::calc_shard_index<long, uint32_t, cudaStream_t>(
     int total_devs,
     const cudaStream_t& stream);
 
-template void
-HeterCommKernel::calc_node_shard_index<unsigned long, int, cudaStream_t>(
-    unsigned long* d_keys,
+template void HeterCommKernel::calc_node_shard_index<unsigned long, int, cudaStream_t>(
+    const unsigned long* d_keys,
     long long len,
     int* shard_index,
     const int &total_devs,
@@ -823,16 +822,15 @@ HeterCommKernel::calc_node_shard_index<unsigned long, int, cudaStream_t>(
     const cudaStream_t& stream);
 
 template void HeterCommKernel::calc_node_shard_index<long, int, cudaStream_t>(
-    long* d_keys,
+    const long* d_keys,
     long long len,
     int* shard_index,
     const int &total_devs,
     const int &node_num,
     const cudaStream_t& stream);
 
-template void
-HeterCommKernel::calc_node_shard_index<unsigned long, uint32_t, cudaStream_t>(
-    unsigned long* d_keys,
+template void HeterCommKernel::calc_node_shard_index<unsigned long, uint32_t, cudaStream_t>(
+    const unsigned long* d_keys,
     long long len,
     uint32_t* shard_index,
     const int &total_devs,
@@ -840,7 +838,7 @@ HeterCommKernel::calc_node_shard_index<unsigned long, uint32_t, cudaStream_t>(
     const cudaStream_t& stream);
 
 template void HeterCommKernel::calc_node_shard_index<long, uint32_t, cudaStream_t>(
-    long* d_keys,
+    const long* d_keys,
     long long len,
     uint32_t* shard_index,
     const int &total_devs,
