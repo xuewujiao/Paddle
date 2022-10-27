@@ -83,8 +83,10 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::HeterComm(
         8, 1, (unsigned int)-1, (size_t)-1, false, false));  // NOLINT
 #endif
     if (!multi_mf_dim_) {
-      auto table = new Table(capacity / load_factor_);
-      tables_.push_back(table);
+      if (capacity > 0) {
+        auto table = new Table(capacity / load_factor_);
+        tables_.push_back(table);
+      }
     } else {
       auto ptr_table = new PtrTable(capacity / load_factor_);
       ptr_table->set_feature_value_size(pull_type_size_, grad_type_size_);
