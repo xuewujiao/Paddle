@@ -1642,6 +1642,11 @@ class Fleet(object):
             meta_optimizer._set_basic_info(loss, self._role_maker,
                                      self.user_defined_optimizer,
                                      copy_user_defined_strategy)
+            from ..meta_optimizers import ParameterServerGraphOptimizer
+            graph_optimizer = ParameterServerGraphOptimizer(self.user_defined_optimizer)
+            graph_optimizer._set_basic_info(loss, self._role_maker,
+                                     self.user_defined_optimizer,
+                                     copy_user_defined_strategy)
 
         valid_strategy = self.strategy_compiler._get_valid_strategy(
             copy_user_defined_strategy, can_not_apply_optimizer_list)
