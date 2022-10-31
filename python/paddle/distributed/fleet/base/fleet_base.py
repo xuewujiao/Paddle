@@ -1600,7 +1600,7 @@ class Fleet(object):
         copy_user_defined_strategy = copy.deepcopy(self._user_defined_strategy)
 
         can_not_apply_optimizer_list = []
-        # fix set collective gpu error
+        # fix set collective and fleet ps gpu error
         if self._is_collective and len(self._user_defined_strategy.sparse_table_configs) > 0:
             context["use_fleet_ps"] = True
             from ..meta_optimizers import ParameterServerOptimizer

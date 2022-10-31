@@ -19,13 +19,12 @@ __all__ = []
 
 
 class RuntimeFactory(object):
-
     def __init__(self):
         pass
 
     def _create_runtime(self, context):
         # add collective && pslib mode
-        if getattr(context, "use_fleet_ps", False):
+        if "use_fleet_ps" in context and context["use_fleet_ps"]:
             ps_runtime = TheOnePSRuntime()
             ps_runtime._set_basic_info(context)
             return ps_runtime
