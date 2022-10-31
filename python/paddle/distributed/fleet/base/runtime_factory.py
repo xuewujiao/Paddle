@@ -24,13 +24,12 @@ class RuntimeFactory(object):
         pass
 
     def _create_runtime(self, context):
-        if context["role_maker"]._is_collective:
+        if not context["user_defined_strategy"].a_sync() and context["role_maker"]._is_collective:
             collective_runtime = CollectiveRuntime()
             collective_runtime._set_basic_info(context)
             return collective_runtime
 
         k_steps = context["valid_strategy"].a_sync_configs["k_steps"]
-
         if not context["role_maker"]._is_collective and k_steps >= 0:
             ps_runtime = TheOnePSRuntime()
             ps_runtime._set_basic_info(context)

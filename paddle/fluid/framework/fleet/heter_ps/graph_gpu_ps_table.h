@@ -55,10 +55,10 @@ class GpuPsGraphTable
         gpu_num * (graph_table_num_ + feature_table_num_), NULL);
     for (int i = 0; i < gpu_num; i++) {
       global_device_map[resource_->dev_id(i)] = i;
-      for (int j = 0; j < graph_table_num; j++) {
+      for (int j = 0; j < graph_table_num_; j++) {
         gpu_graph_list_.push_back(GpuPsCommGraph());
       }
-      for (int j = 0; j < feature_table_num; j++) {
+      for (int j = 0; j < feature_table_num_; j++) {
         gpu_graph_fea_list_.push_back(GpuPsCommGraphFea());
       }
     }

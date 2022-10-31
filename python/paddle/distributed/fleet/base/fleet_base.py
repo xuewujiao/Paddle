@@ -295,7 +295,7 @@ class Fleet(object):
                 if gpus_num != 1:
                     raise ValueError(
                         "CUDA_VISIBLE_DEVICES shoule be set only 1 card if you use `python` to launch fleet program."
-                    )
+                   )
 
         if paddle.fluid.framework._non_static_mode():
             if self.worker_num() == 1:
@@ -1634,6 +1634,14 @@ class Fleet(object):
                 loss, self._role_maker, self.user_defined_optimizer,
                 copy_user_defined_strategy, valid_optimizer_list,
                 valid_graph_optimizer_list)
+            
+        # fix set collective gpu error
+        if self._is_collective and meta_optimizer is None:
+            from ..meta_optimizers import ParameterServerOptimizer
+            meta_optimizer = ParameterServerOptimizer(self.user_defined_optimizer)
+            meta_optimizer._set_basic_info(loss, self._role_maker,
+                                     self.user_defined_optimizer,
+                                     copy_user_defined_strategy)
 
         valid_strategy = self.strategy_compiler._get_valid_strategy(
             copy_user_defined_strategy, can_not_apply_optimizer_list)
