@@ -24,7 +24,12 @@ class RuntimeFactory(object):
         pass
 
     def _create_runtime(self, context):
-        if not context["user_defined_strategy"].a_sync and context["role_maker"]._is_collective:
+        # add collective && pslib mode
+        if getattr(context, "use_fleet_ps", False):
+            ps_runtime = TheOnePSRuntime()
+            ps_runtime._set_basic_info(context)
+            return ps_runtime
+        if context["role_maker"]._is_collective:
             collective_runtime = CollectiveRuntime()
             collective_runtime._set_basic_info(context)
             return collective_runtime
