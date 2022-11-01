@@ -154,6 +154,10 @@ GpuRDMAChecker::GpuRDMAChecker(int device_num) {
 }
 bool GpuRDMAChecker::check_device_status(const int &device_count,
                                   std::vector<int> *gpu_status) {
+  // not need auto detect gpu topo aware
+  if (!FLAGS_enable_auto_detect_gpu_topo) {
+    return false;
+  }
   // a100
   std::string str =
       excute_cmd_result("source ~/.bashrc && nvidia-smi topo -m");

@@ -273,7 +273,7 @@ class PSGPUWrapper {
 
         PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclGroupStart());
         for (int i = 0; i < dev_size; ++i) {
-          platform::CUDADeviceGuard guard(i);
+          platform::CUDADeviceGuard guard(dev_ids[i]);
           platform::dynload::ncclCommInitRank(
               &inter_comms_[i], gloo->Size(), inter_ncclids_[i], gloo->Rank());
         }

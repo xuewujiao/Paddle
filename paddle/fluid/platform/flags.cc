@@ -972,6 +972,10 @@ PADDLE_DEFINE_EXPORTED_int32(
     gpugraph_sparse_table_storage_mode,
     0,
     "parse_table_storage_mode, default 0");
+PADDLE_DEFINE_EXPORTED_bool(enable_auto_detect_gpu_topo,
+    true, "enable auto detect gpu topo, default true");
+PADDLE_DEFINE_EXPORTED_bool(enable_auto_rdma_trans,
+    true, "enable auto gpu rdma trans, default true");
 /**
  * ProcessGroupNCCL related FLAG
  * Name: nccl_blocking_wait
