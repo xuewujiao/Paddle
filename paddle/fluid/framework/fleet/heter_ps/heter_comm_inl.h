@@ -1241,11 +1241,6 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::merge_keys(
   platform::CUDADeviceGuard guard(dev_id);
   auto stream = resource_->local_stream(gpu_num, 0);
 
-  size_t grad_dim = max_mf_dim_;
-  auto accessor_wrapper_ptr =
-      GlobalAccessorFactory::GetInstance().GetAccessorWrapper();
-  size_t grad_value_size = accessor_wrapper_ptr->GetPushValueSize(max_mf_dim_);
-
   auto d_fea_num_info = memory::Alloc(place, sizeof(uint32_t) * (len * 4 + 1));
   uint32_t* d_fea_num_info_ptr =
       reinterpret_cast<uint32_t*>(d_fea_num_info->ptr());
