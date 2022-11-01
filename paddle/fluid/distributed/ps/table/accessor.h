@@ -121,6 +121,8 @@ class ValueAccessor {
   virtual void UpdateStatAfterSave(float* value, int param) {}
   // 判断该value是否保存到ssd
   virtual bool SaveSSD(float* value) = 0;
+  virtual bool FilterSlot(float* value) { return false; }
+
   //
   virtual bool SaveCache(float* value,
                          int param,

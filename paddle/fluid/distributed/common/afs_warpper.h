@@ -63,7 +63,15 @@ class FsReadChannel {
     if (read_count == 0 && buffer != '\n') {
       return -1;
     }
+    // if (read_count < 50) {
+    //   std::cout << "READ LINE <50  ---:" << buffer << "  ====  :" <<
+    //   line_data;
+    // }
     return 0;
+  }
+
+  inline int read(char* data, size_t size) {
+    return fread(data, 1, size, _file.get());
   }
 
  private:
@@ -112,6 +120,13 @@ class FsWriteChannel {
   }
   inline uint32_t write_line(const std::string& data) {
     return write_line(data.c_str(), data.size());
+  }
+  inline uint32_t write(const char* data, size_t size) {
+    size_t write_count = fwrite(data, 1, size, _file.get());
+    if (write_count != size) {
+      return -1;
+    }
+    return 0;
   }
 
  private:
