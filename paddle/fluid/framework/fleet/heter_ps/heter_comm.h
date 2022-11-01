@@ -293,15 +293,15 @@ class HeterComm {
                    std::shared_ptr<memory::Allocation> &alloc, // NOLINT
                    bool need_copy = false) {
       size_t need_mem = len * sizeof(T);
-      if (*alloc == nullptr) {
+      if (alloc.get() == nullptr) {
         alloc = memory::Alloc(place_, need_mem);
       } else if (need_mem > alloc->size()) {
         if (need_copy) {
           std::shared_ptr<memory::Allocation> tmp =
               memory::Alloc(place_, need_mem);
           cudaMemcpy(tmp->ptr(),
-                     (*alloc)->ptr(),
-                     (*alloc)->size(),
+                     alloc->ptr(),
+                     alloc->size(),
                      cudaMemcpyDeviceToDevice);
           alloc.reset();
           alloc = tmp;
