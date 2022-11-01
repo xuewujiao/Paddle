@@ -65,13 +65,12 @@ class HeterComm {
   HeterComm(const HeterComm&) = delete;
   HeterComm& operator=(const HeterComm&) = delete;
 
-  void merge_keys(int gpu_num,
+  size_t merge_keys(const int gpu_num,
                   const KeyType* d_keys,
-                  size_t len,
+                  const size_t &len,
                   KeyType* d_sorted_keys,
                   KeyType* d_merged_keys,
-                  uint32_t* d_restore_idx,
-                  size_t& uniq_len);
+                  uint32_t* d_restore_idx);
   void dynamic_merge_grad(int gpu_num,
                           KeyType* d_keys,
                           float* d_grads,

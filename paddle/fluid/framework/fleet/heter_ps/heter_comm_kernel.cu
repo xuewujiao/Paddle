@@ -669,29 +669,29 @@ void HeterCommKernel::fill_restore_idx(bool filter_zero,
                                        uint32_t* d_restore_idx,
                                        const StreamType& stream) {
   // fill restore idx [1,3,5,2,4,6] = [1,2,1,3,2,1]
-//  if (merge_size * 3 > total_num) {
-//    // repetition rate is not very high
-//    size_t grid_size = (merge_size - 1) / block_size_ + 1;
-//    if (filter_zero) {
-//      kernel_fill_restore_idx_filter_zero<<<grid_size,
-//                                            block_size_,
-//                                            0,
-//                                            stream>>>(merge_size,
-//                                                      d_keys,
-//                                                      d_sorted_idx,
-//                                                      d_offset,
-//                                                      d_merged_cnts,
-//                                                      d_restore_idx);
-//    } else {
-//      kernel_fill_restore_idx<<<grid_size, block_size_, 0, stream>>>(
-//          merge_size, d_sorted_idx, d_offset, d_merged_cnts, d_restore_idx);
-//    }
-//  } else {
+  if (merge_size * 3 > total_num) {
+    // repetition rate is not very high
+    size_t grid_size = (merge_size - 1) / block_size_ + 1;
+    if (filter_zero) {
+      kernel_fill_restore_idx_filter_zero<<<grid_size,
+                                            block_size_,
+                                            0,
+                                            stream>>>(merge_size,
+                                                      d_keys,
+                                                      d_sorted_idx,
+                                                      d_offset,
+                                                      d_merged_cnts,
+                                                      d_restore_idx);
+    } else {
+      kernel_fill_restore_idx<<<grid_size, block_size_, 0, stream>>>(
+          merge_size, d_sorted_idx, d_offset, d_merged_cnts, d_restore_idx);
+    }
+  } else {
     size_t grid_size = (total_num - 1) / block_size_ + 1;
     // mid search
     kernel_fill_restore_idx_by_search<<<grid_size, block_size_, 0, stream>>>(
         total_num, d_sorted_idx, merge_size, d_offset, d_restore_idx);
-//  }
+  }
 }
 template <typename KeyType, typename StreamType>
 void HeterCommKernel::unpack_merged_vals(size_t n,
