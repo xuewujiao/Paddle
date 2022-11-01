@@ -290,12 +290,12 @@ class HeterComm {
     }
     template <typename T>
     T* alloc_cache(const size_t& len,
-                   std::shared_ptr<memory::Allocation> *alloc,
+                   std::shared_ptr<memory::Allocation> &alloc, // NOLINT
                    bool need_copy = false) {
       size_t need_mem = len * sizeof(T);
       if (*alloc == nullptr) {
-        (*alloc) = memory::Alloc(place_, need_mem);
-      } else if (need_mem > (*alloc)->size()) {
+        alloc = memory::Alloc(place_, need_mem);
+      } else if (need_mem > alloc->size()) {
         if (need_copy) {
           std::shared_ptr<memory::Allocation> tmp =
               memory::Alloc(place_, need_mem);
@@ -303,26 +303,26 @@ class HeterComm {
                      (*alloc)->ptr(),
                      (*alloc)->size(),
                      cudaMemcpyDeviceToDevice);
-          (*alloc).reset();
-          (*alloc) = tmp;
+          alloc.reset();
+          alloc = tmp;
         } else {
-          (*alloc).reset();
-          (*alloc) = memory::Alloc(place_, need_mem);
+          alloc.reset();
+          alloc = memory::Alloc(place_, need_mem);
         }
       }
-      return reinterpret_cast<T*>((*alloc)->ptr());
+      return reinterpret_cast<T*>(alloc->ptr());
     }
     void alloc(const size_t& len,
                const size_t& value_bytes = sizeof(GradType),
                const int copy_mode = 0) {
       all_keys =
-          alloc_cache<KeyType>(len, &all_keys_mem, (copy_mode & COPY_KEY));
+          alloc_cache<KeyType>(len, all_keys_mem, (copy_mode & COPY_KEY));
       all_grads = alloc_cache<char>(
-          len * value_bytes, &all_grads_mem, (copy_mode & COPY_VAL));
+          len * value_bytes, all_grads_mem, (copy_mode & COPY_VAL));
       local_keys =
-          alloc_cache<KeyType>(len, &local_keys_mem, (copy_mode & COPY_KEY));
+          alloc_cache<KeyType>(len, local_keys_mem, (copy_mode & COPY_KEY));
       local_grads = alloc_cache<char>(
-          len * value_bytes, &local_grads_mem, (copy_mode & COPY_VAL));
+          len * value_bytes, local_grads_mem, (copy_mode & COPY_VAL));
       d_merged_keys = all_keys;
       d_merged_push_keys = local_keys;
       d_merged_vals = all_grads;
@@ -330,26 +330,26 @@ class HeterComm {
     }
     void init_pull(const size_t& len) {
       pull_res.h_recv_fea_num = len;
-      pull_res.d_restore_keys_idx = alloc_cache<uint32_t>(len, &local_pull_idx);
+      pull_res.d_restore_keys_idx = alloc_cache<uint32_t>(len, local_pull_idx);
     }
     void init_shard(const size_t& len, const size_t& node_size) {
       shard_res.d_local_idx_parted =
-          alloc_cache<uint32_t>(len, &local_shard_idx);
+          alloc_cache<uint32_t>(len, local_shard_idx);
       shard_res.d_node_size_ptr =
-          alloc_cache<uint32_t>(node_size * node_size, &d_node_size_buf);
+          alloc_cache<uint32_t>(node_size * node_size, d_node_size_buf);
       shard_res.resize_part_size(node_size);
     }
     void init_inner(const size_t& len, const int& device_num) {
-      inner_res.d_idx = alloc_cache<uint32_t>(len, &local_inner_idx);
+      inner_res.d_idx = alloc_cache<uint32_t>(len, local_inner_idx);
       inner_res.d_offset_ptr =
-          alloc_cache<uint32_t>(device_num * 2, &inner_offset);
+          alloc_cache<uint32_t>(device_num * 2, inner_offset);
       inner_res.resize(device_num);
     }
     void init_trans(const size_t& fea_num, const size_t& value_bytes) {
-      d_merged_trans_keys = alloc_cache<KeyType>(fea_num * 2, &trans_keys_buff);
+      d_merged_trans_keys = alloc_cache<KeyType>(fea_num * 2, trans_keys_buff);
       d_merged_push_trans_keys = &d_merged_trans_keys[fea_num];
       d_merged_trans_vals =
-          alloc_cache<char>(fea_num * 2 * value_bytes, &trans_vals_buff);
+          alloc_cache<char>(fea_num * 2 * value_bytes, trans_vals_buff);
       d_merged_push_trans_vals = &d_merged_trans_vals[fea_num * value_bytes];
     }
 
