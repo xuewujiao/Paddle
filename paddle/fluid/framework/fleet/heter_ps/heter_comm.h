@@ -573,7 +573,7 @@ class HeterComm {
                                     const int nccl_node_size,
                                     const char* d_in_vals,
                                     char* d_out_vals,
-                                    const size_t value_bytes,
+                                    const size_t &value_bytes,
                                     cudaStream_t& stream);
   size_t send_gradient_by_all2all_trans(const int& gpu_id,
                                         const int nccl_rank_id,
