@@ -2595,6 +2595,11 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_inter_keys_by_
       my_cache.pull_res.d_restore_keys_idx,
       uniq_len);
 
+  VLOG(0) << "inner copy gpu id=" << gpu_id
+          << ", fea size=" << fea_size
+          << ", shard recv size=" << shard_recv_offset
+          << ", merge size=" << uniq_len;
+
   return uniq_len;
 }
 template <typename KeyType,
@@ -2704,6 +2709,8 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_data_by_all2all(
           stream));
   CHECK(send_size == h_recv_part_sizes[nccl_rank_id])
     << "gpu id=" << gpu_id
+    << ", rank_id=" << nccl_rank_id
+    << ", node_size=" << nccl_node_size
     << ", send_size=" << send_size
     << ", recv_size=" << h_recv_part_sizes[nccl_rank_id];
 
@@ -2759,7 +2766,6 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_sparse_keys_by
   for (int i = 0; i < node_size_; ++i) {
     h_push_fea_sizes[rank_offset + i] = h_local_part_sizes[i];
     h_local_part_offsets[i + 1] = h_local_part_offsets[i] + h_local_part_sizes[i];
-    VLOG(0) << "gpu [" << gpu_id << "," << i << "], send len=" << h_local_part_sizes[i];
   }
   CHECK(fea_size == h_local_part_offsets[node_size_])
     << "gpu id=" << gpu_id << ", fea_size=" << fea_size
@@ -2781,7 +2787,6 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_sparse_keys_by
     int offset = node_size_ * i + rank_id_;
     h_remote_part_sizes[i] = h_push_fea_sizes[offset];
     h_remote_part_offsets[i + 1] = h_remote_part_offsets[i] + h_remote_part_sizes[i];
-    VLOG(0) << "gpu [" << gpu_id << "," << i << "], recv len=" << h_push_fea_sizes[offset];
   }
   size_t &remote_size = h_remote_part_offsets[node_size_];
   cache.alloc(remote_size, pull_type_size_, HeterCommType::COPY_KEY);
@@ -2790,8 +2795,8 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_sparse_keys_by
   if (rdma_checker_->need_rdma_trans()) {
     total_fea_num = send_keys_by_all2all_trans(
         gpu_id,
-        node_size_,
         rank_id_,
+        node_size_,
         fea_size,
         cache.d_merged_push_keys,
         cache.d_merged_keys,
@@ -2811,6 +2816,10 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_sparse_keys_by
         stream);
   }
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
+
+  VLOG(0) << "node all2all gpu id=" << gpu_id
+           << ", fea size=" << fea_size
+           << ", recv size=" << remote_size;
 
   return remote_size;
 }
@@ -2832,8 +2841,8 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::scatter_sparse_vals_by_
   if (rdma_checker_->need_rdma_trans()) {
     total_fea_num = send_vals_by_all2all_trans(
           gpu_id,
-          node_size_,
           rank_id_,
+          node_size_,
           d_in_vals,
           reinterpret_cast<char *>(cache.d_merged_push_vals),
           pull_type_size_,
@@ -3260,8 +3269,8 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_sparse_gradien
   if (rdma_checker_->need_rdma_trans()) {
     total_send_recv = send_gradient_by_all2all_trans(
             gpu_id,
-            node_size_,
             rank_id_,
+            node_size_,
             fea_size,
             my_cache.d_merged_push_keys,
             my_cache.d_merged_push_vals,
@@ -3306,8 +3315,8 @@ template <typename KeyType,
           typename GPUAccessor>
 size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_keys_by_all2all_trans(
       const int &gpu_id,
-      const int nccl_rank_id,
-      const int nccl_node_size,
+      const int &nccl_rank_id,
+      const int &nccl_node_size,
       const size_t& fea_size,
       const KeyType* d_in_keys,
       KeyType* d_out_keys,
@@ -3378,8 +3387,8 @@ template <typename KeyType,
           typename GPUAccessor>
 size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_vals_by_all2all_trans(
     const int &gpu_id,
-    const int nccl_rank_id,
-    const int nccl_node_size,
+    const int &nccl_rank_id,
+    const int &nccl_node_size,
     const char *d_in_vals,
     char* d_out_vals,
     const size_t &value_bytes,
@@ -3453,8 +3462,8 @@ template <typename KeyType,
           typename GPUAccessor>
 size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_gradient_by_all2all_trans(
     const int &gpu_id,
-    const int nccl_rank_id,
-    const int nccl_node_size,
+    const int &nccl_rank_id,
+    const int &nccl_node_size,
     const size_t &fea_size,
     const KeyType* d_in_keys,
     const char* d_in_vals,
