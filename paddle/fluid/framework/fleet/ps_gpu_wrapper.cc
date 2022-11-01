@@ -749,14 +749,17 @@ void PSGPUWrapper::BuildGPUTask(std::shared_ptr<HeterContext> gpu_task) {
                                                                       int j) {
     this->HeterPs_->set_multi_mf_dim(multi_mf_dim_, max_mf_dim_);
     int mf_dim = this->index_dim_vec_[j];
-    VLOG(0) << "building table: " << i << "with mf dim: " << mf_dim
-            << " feature_value_size:"
-            << accessor_wrapper_ptr->GetFeatureValueSize(mf_dim);
     size_t feature_value_size =
         accessor_wrapper_ptr->GetFeatureValueSize(mf_dim);
     auto& device_dim_keys = gpu_task->device_dim_keys_[i][j];
     auto& device_dim_ptrs = gpu_task->device_dim_ptr_[i][j];
     size_t len = device_dim_keys.size();
+    VLOG(0) << "building table: " << i
+            << ", dim id: " << j
+            << ", with mf dim: " << mf_dim
+            << ", feature_value_size:"
+            << accessor_wrapper_ptr->GetFeatureValueSize(mf_dim)
+            << ", keys size: " << len;
     CHECK(len == device_dim_ptrs.size());
     this->mem_pools_[i * this->multi_mf_dim_ + j] =
         new MemoryPool(len, feature_value_size);
@@ -796,7 +799,7 @@ void PSGPUWrapper::BuildGPUTask(std::shared_ptr<HeterContext> gpu_task) {
                                 &accessor_wrapper_ptr](int i, int j, int z) {
     // this->HeterPs_->set_multi_mf_dim(multi_mf_dim_, max_mf_dim_);
     int mf_dim = this->index_dim_vec_[j];
-    VLOG(0) << "building table: " << i << "with mf dim: " << mf_dim;
+    VLOG(3) << "building table: " << i << "with mf dim: " << mf_dim;
     auto& device_dim_keys = gpu_task->device_dim_keys_[i][j];
     auto& device_dim_ptrs = gpu_task->device_dim_ptr_[i][j];
     size_t len = device_dim_keys.size();
