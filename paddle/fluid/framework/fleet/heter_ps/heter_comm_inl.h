@@ -2058,7 +2058,7 @@ template <typename KeyType,
           typename GPUAccessor>
 template <typename Sgd>
 void HeterComm<KeyType, ValType, GradType, GPUAccessor>::update_one_table(
-    int gpu_num,
+    int gpu_id,
     KeyType* d_keys,
     GradType* d_grads,
     size_t len,
@@ -2067,13 +2067,23 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::update_one_table(
     return;
   }
 
-  int dev_id = resource_->dev_id(gpu_num);
+  int dev_id = resource_->dev_id(gpu_id);
   platform::CUDADeviceGuard guard(dev_id);
-  auto stream = resource_->local_stream(gpu_num, 0);
-  tables_[gpu_num]->rwlock_->WRLock();
-  tables_[gpu_num]->update(
-      d_keys, (const char* )d_grads, len, sgd, stream);
-  tables_[gpu_num]->rwlock_->UNLock();
+  auto stream = resource_->local_stream(gpu_id, 0);
+  // no mf dim
+  if (!multi_mf_dim_) {
+    auto &table = tables_[gpu_id];
+    table->rwlock_->WRLock();
+    table->update(
+           d_keys, (const char* )d_grads, len, sgd, stream);
+    table->rwlock_->UNLock();
+  } else {
+    auto &table = ptr_tables_[gpu_id];
+    table->rwlock_->WRLock();
+    table->update(
+        d_keys, (const char* )d_grads, len, sgd, stream);
+    table->rwlock_->UNLock();
+  }
   cudaStreamSynchronize(stream);
 }
 
@@ -3046,10 +3056,10 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_all2all(
        my_cache.d_merged_push_vals);
   // update all grad
   update_one_table(gpu_id,
-      my_cache.d_merged_push_keys,
-      reinterpret_cast<GradType*>(my_cache.d_merged_push_vals),
-      uniq_len,
-      sgd);
+       my_cache.d_merged_push_keys,
+       reinterpret_cast<GradType*>(my_cache.d_merged_push_vals),
+       uniq_len,
+       sgd);
 }
 template <typename KeyType,
           typename ValType,
