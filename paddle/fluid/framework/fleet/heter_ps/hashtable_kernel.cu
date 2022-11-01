@@ -99,6 +99,9 @@ __global__ void dy_mf_search_kernel(Table* table,
       float* cur = (float*)(vals + offset);
       float* input = it->second;
       gpu_accessor.PullValueFill(cur, input);
+    } else {
+      printf("warning: pull miss key: %lu\n", keys[i]);
+      assert(false && "error: miss keys");
     }
   }
 }
@@ -134,7 +137,7 @@ __global__ void dy_mf_update_kernel(Table* table,
       float* cur = (float*)(grads + i * grad_value_size);
       sgd.dy_mf_update_value(optimizer_config, (it.getter())->second, cur);
     } else {
-      printf("warning: push miss key: %lu", keys[i]);
+      printf("warning: push miss key: %lu\n", keys[i]);
     }
   }
 }

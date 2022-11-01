@@ -2588,10 +2588,10 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_inter_keys_by_
 
   size_t uniq_len = 0;
   merge_keys(gpu_id,
-      my_cache.d_merged_keys,
+      my_cache.d_merged_keys,       // in keys
       shard_recv_offset,
-      my_cache.d_merged_push_keys,
-      my_cache.d_merged_keys,
+      my_cache.d_merged_push_keys,  // sort keys
+      my_cache.d_merged_keys,       // out merge keys
       my_cache.pull_res.d_restore_keys_idx,
       uniq_len);
 
