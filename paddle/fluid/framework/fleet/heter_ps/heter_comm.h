@@ -293,7 +293,9 @@ class HeterComm {
                    std::shared_ptr<memory::Allocation> *alloc,
                    bool need_copy = false) {
       size_t need_mem = len * sizeof(T);
-      if (need_mem > (*alloc)->size()) {
+      if (*alloc == nullptr) {
+        (*alloc) = memory::Alloc(place_, need_mem);
+      } else if (need_mem > (*alloc)->size()) {
         if (need_copy) {
           std::shared_ptr<memory::Allocation> tmp =
               memory::Alloc(place_, need_mem);
@@ -357,23 +359,23 @@ class HeterComm {
 #elif defined(PADDLE_WITH_XPU_KP)
     platform::XPUPlace place_;
 #endif
-    std::shared_ptr<memory::Allocation> all_keys_mem;
-    std::shared_ptr<memory::Allocation> all_grads_mem;
+    std::shared_ptr<memory::Allocation> all_keys_mem = nullptr;
+    std::shared_ptr<memory::Allocation> all_grads_mem = nullptr;
 
     KeyType* all_keys;
     char* all_grads;
 
-    std::shared_ptr<memory::Allocation> local_keys_mem;
-    std::shared_ptr<memory::Allocation> local_grads_mem;
+    std::shared_ptr<memory::Allocation> local_keys_mem = nullptr;
+    std::shared_ptr<memory::Allocation> local_grads_mem = nullptr;
     KeyType* local_keys;
     char* local_grads;
 
     // all2all
-    std::shared_ptr<memory::Allocation> local_inner_idx;
-    std::shared_ptr<memory::Allocation> local_pull_idx;
-    std::shared_ptr<memory::Allocation> local_shard_idx;
-    std::shared_ptr<memory::Allocation> inner_offset;
-    std::shared_ptr<memory::Allocation> d_node_size_buf;
+    std::shared_ptr<memory::Allocation> local_inner_idx = nullptr;
+    std::shared_ptr<memory::Allocation> local_pull_idx = nullptr;
+    std::shared_ptr<memory::Allocation> local_shard_idx = nullptr;
+    std::shared_ptr<memory::Allocation> inner_offset = nullptr;
+    std::shared_ptr<memory::Allocation> d_node_size_buf = nullptr;
 
     InnerResource inner_res;
     ShardResource shard_res;
@@ -391,8 +393,8 @@ class HeterComm {
 
     // node trans comm and stream buffer
     std::unique_ptr<Semaphore> sem_wait;
-    std::shared_ptr<memory::Allocation> trans_keys_buff;
-    std::shared_ptr<memory::Allocation> trans_vals_buff;
+    std::shared_ptr<memory::Allocation> trans_keys_buff = nullptr;
+    std::shared_ptr<memory::Allocation> trans_vals_buff = nullptr;
     KeyType* d_merged_trans_keys = nullptr;
     char* d_merged_trans_vals = nullptr;
     KeyType* d_merged_push_trans_keys = nullptr;
