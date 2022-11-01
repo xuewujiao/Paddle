@@ -138,6 +138,7 @@ __global__ void dy_mf_update_kernel(Table* table,
       sgd.dy_mf_update_value(optimizer_config, (it.getter())->second, cur);
     } else {
       printf("warning: push miss key: %lu\n", keys[i]);
+      assert(false && "error: miss keys");
     }
   }
 }

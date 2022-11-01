@@ -3059,12 +3059,12 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_all2all(
     return;
   }
   auto &my_cache = storage_[gpu_id];
-  int push_len = gather_inter_gradient_by_copy(
+  size_t push_len = gather_inter_gradient_by_copy(
       gpu_id, len, d_keys, reinterpret_cast<void *>(d_grads));
   push_len = gather_sparse_gradient_by_all2all(
       gpu_id, push_len, my_cache.d_merged_keys, my_cache.d_merged_vals);
   // all embedx merge
-  int uniq_len = merge_grad(
+  size_t uniq_len = merge_grad(
        gpu_id,
        push_len,
        my_cache.d_merged_keys,
@@ -3154,7 +3154,9 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_inter_gradient
     shard_recv_offset += cache.h_fea_sizes[gpu_id];
     res.h_offsets[i] = shard_send_offset;
     shard_send_offset += res.h_part_sizes[i];
-    max_part_size = std::max(res.h_part_sizes[i], max_part_size);
+    if (res.h_part_sizes[i] > max_part_size) {
+      max_part_size = res.h_part_sizes[i];
+    }
   }
 
   size_t trans_need_size = std::max(shard_recv_offset, push_size);
@@ -3199,6 +3201,12 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_inter_gradient
       my_cache.d_merged_keys,
       my_cache.d_merged_push_vals,
       my_cache.d_merged_vals);
+
+  VLOG(0) << "inner copy gpu id=" << gpu_id
+            << ", push size=" << push_size
+            << ", shard recv size=" << shard_recv_offset
+            << ", merge size=" << total_push_size;
+
   return total_push_size;
 }
 template <typename KeyType,
@@ -3306,6 +3314,10 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_sparse_gradien
         stream);
   }
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
+
+  VLOG(0) << "node copy gpu id=" << gpu_id
+          << ", push size=" << fea_size
+          << ", shard recv size=" << total_recv_fea_num;
 
   return total_recv_fea_num;
 }
