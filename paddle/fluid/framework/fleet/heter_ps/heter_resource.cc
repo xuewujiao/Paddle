@@ -25,6 +25,9 @@ limitations under the License. */
 #endif
 #include "paddle/utils/string/string_helper.h"
 
+DECLARE_bool(enable_auto_detect_gpu_topo);
+DECLARE_bool(enable_auto_rdma_trans);
+
 namespace paddle {
 namespace framework {
 
@@ -151,6 +154,15 @@ GpuRDMAChecker *GpuRDMAChecker::get(int device_num) {
 GpuRDMAChecker::GpuRDMAChecker(int device_num) {
   device_num_ = device_num;
   rdma_trans_ = check_device_status(device_num, &rdma_status_);
+}
+bool GpuRDMAChecker::need_rdma_trans(void) {
+  return (FLAGS_enable_auto_rdma_trans && rdma_trans_);
+}
+bool GpuRDMAChecker::is_device_support_rdma(int devid) {
+  if (rdma_status_.empty()) {
+    return true;
+  }
+  return rdma_status_[devid];
 }
 bool GpuRDMAChecker::check_device_status(const int &device_count,
                                   std::vector<int> *gpu_status) {

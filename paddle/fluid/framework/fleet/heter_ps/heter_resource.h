@@ -104,15 +104,8 @@ public:
 public:
   GpuRDMAChecker(int device_num);
   // rdma
-  bool need_rdma_trans(void) {
-    return (FLAGS_enable_auto_rdma_trans && rdma_trans_);
-  }
-  bool is_device_support_rdma(int devid) {
-    if (rdma_status_.empty()) {
-      return true;
-    }
-    return rdma_status_[devid];
-  }
+  bool need_rdma_trans(void);
+  bool is_device_support_rdma(int devid);
   // device num
   int device_num(void) { return device_num_; }
   // topo_aware
