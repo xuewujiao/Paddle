@@ -205,7 +205,7 @@ __global__ void merge_gradients_embedx_kernel(const KeyType* d_keys,
   }
 }
 
-template <typename KeyType, typename GPUAccessor>
+template <typename GPUAccessor>
 __global__ void check_values(const size_t &N, 
     const char *input, 
     const size_t &value_bytes, 
