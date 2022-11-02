@@ -168,7 +168,7 @@ __global__ void merge_gradients_basic_kernel(const KeyType* d_keys,
         merger.merge_basic(out, in, gpu_accessor);
       }
     }
-    if (!gpu_accessor.CheckPushBasic(out)) {
+    if (!gpu_accessor.check_push_basic(out)) {
       printf("base error, key %lu, merge idx: %u, start: %u, old idx: %d\n", key, i, start, ori_index);
       assert(false && "bad grad base values");
     }
@@ -206,8 +206,10 @@ __global__ void merge_gradients_embedx_kernel(const KeyType* d_keys,
         merger.merge_embedx(out, in, field_idx, gpu_accessor);
       }
     }
-    if (!gpu_accessor.CheckPushEmbedx(out)) {
-      printf("embedx error, key %lu, merge idx: %u, start: %u, old idx: %d\n", key, value_idx, start, ori_index);
+    auto &c = out[gpu_accessor.common_push_value.EmbedxGIndex() + field_idx];
+    if (!gpu_accessor.is_vaild(c)) {
+      printf("embedx error, key %lu, merge idx: %u, start: %u, old idx: %d, embedx:[%u]= %f\n", 
+          key, value_idx, start, ori_index, field_idx, c);
       assert(false && "bad grad embedx values");
     }
   }

@@ -489,29 +489,22 @@ class CommonFeatureValueAccessor {
     dest_val[common_push_value.EmbedGIndex()] +=
         src_val[common_push_value.EmbedGIndex()];
   }
-
-  __host__ __device__ bool CheckPushBasic(const float *val) {
+  __host__ __device__ bool is_vaild(const float &c) {
+    if (isnan(c) || isinf(c) || (c > 1e+20 || c < -1e+20)) {
+      return false;
+    }
+    return true;
+  }
+  __host__ __device__ bool check_push_basic(const float *val) {
     for (int i = 0; i < common_push_value.EmbedxGIndex(); ++i) {
       const float &c = val[i];
-      if (isnan(c) || isinf(c) || (c > 1e+20 || c < -1e+20)) {
+      if (!is_vaild(c)) {
         printf("base val index %d = %f\n", i, c);
         return false;
       }
     }
     return true;
   }
-  __host__ __device__ bool CheckPushEmbedx(const float *val) {
-    const float *embedx = &val[common_push_value.EmbedxGIndex()];
-    for (int i = 0; i < int(val[common_push_value.MfDimIndex()]); ++i) {
-      const float &c = embedx[i];
-      if (isnan(c) || isinf(c) || (c > 1e+20 || c < -1e+20)) {
-        printf("embedx val index %d = %f\n", i, c);
-        return false;
-      }
-    }
-    return true;
-  }
-
   // PullCopy 阶段 gpukernel 中  FeatureValue回填到PullValue
   __host__ __device__ void Select(float* dest_val,
                                   float* src_val,
