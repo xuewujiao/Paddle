@@ -205,7 +205,7 @@ __global__ void merge_gradients_embedx_kernel(const KeyType* d_keys,
   }
 }
 
-__global__ void check_valid_values(
+__global__ void kernel_check_valid_values(
     const size_t N, const char *input, const size_t value_bytes, const int float_num) {
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < N) {
@@ -789,7 +789,7 @@ void HeterCommKernel::check_valid_values(
   const int val_size_float = value_bytes / sizeof(float);
   CHECK((value_bytes % sizeof(float)) == 0);
   const int grid_size = (N - 1) / block_size_ + 1;
-  check_valid_values<<<grid_size, block_size_, 0, stream>>>(
+  kernel_check_valid_values<<<grid_size, block_size_, 0, stream>>>(
       N, input, value_bytes, val_size_float);
 }
 
@@ -1187,7 +1187,7 @@ template void HeterCommKernel::scatter_vals<uint32_t, cudaStream_t>(
     long long len,
     size_t value_bytes,
     const cudaStream_t& stream);
-template void HeterCommKernel<cudaStream_t>::check_valid_values(
+template void HeterCommKernel::check_valid_values<cudaStream_t>(
     const size_t &N,
     const char *input,
     const size_t &value_bytes,
