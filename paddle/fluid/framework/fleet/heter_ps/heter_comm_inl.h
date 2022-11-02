@@ -2371,6 +2371,11 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_all2all(
   scatter_sparse_vals_by_all2all(gpu_id, gather_inner_size, loc.d_merged_vals, loc.d_merged_vals);
   // innter scatter
   scatter_inter_vals_by_copy(gpu_id, fea_num, loc.d_merged_vals, d_vals);
+  // pull
+  VLOG(0) << "pull gpu id=" << gpu_id
+      << ", fea num=" << fea_num
+      << ", inner=" << gather_inner_size
+      << ", node=" << pull_size;
 }
 template <typename KeyType,
           typename ValType,
@@ -2504,11 +2509,6 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_inter_keys_by_
       my_cache.d_merged_push_keys,  // sort keys
       my_cache.d_merged_keys,       // out merge keys
       my_cache.pull_res.d_restore_keys_idx);
-
-  VLOG(0) << "inner copy gpu id=" << gpu_id
-          << ", fea size=" << fea_size
-          << ", shard recv size=" << shard_recv_offset
-          << ", merge size=" << uniq_len;
 
   return uniq_len;
 }
@@ -2726,10 +2726,6 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_sparse_keys_by
         stream);
   }
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
-
-  VLOG(0) << "node all2all gpu id=" << gpu_id
-           << ", fea size=" << fea_size
-           << ", recv size=" << remote_size;
 
   return remote_size;
 }
@@ -2972,14 +2968,14 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_all2all(
     return;
   }
   auto &my_cache = storage_[gpu_id];
-  size_t push_len = gather_inter_gradient_by_copy(
+  size_t inter_push_len = gather_inter_gradient_by_copy(
       gpu_id, len, d_keys, reinterpret_cast<void *>(d_grads));
-  push_len = gather_sparse_gradient_by_all2all(
-      gpu_id, push_len, my_cache.d_merged_push_keys, my_cache.d_merged_push_vals);
+  size_t node_push_len = gather_sparse_gradient_by_all2all(
+      gpu_id, inter_push_len, my_cache.d_merged_push_keys, my_cache.d_merged_push_vals);
   // all embedx merge
   size_t uniq_len = merge_grad(
        gpu_id,
-       push_len,
+       node_push_len,
        my_cache.d_merged_push_keys,
        my_cache.d_merged_keys,
        my_cache.d_merged_push_vals,
@@ -2990,6 +2986,12 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_all2all(
        reinterpret_cast<GradType*>(my_cache.d_merged_vals),
        uniq_len,
        sgd);
+  // push
+  VLOG(0) << "push gpu id=" << gpu_id
+        << ", push len=" << len
+        << ", inner=" << inter_push_len
+        << ", node=" << node_push_len
+        << ", update=" << uniq_len;
 }
 template <typename KeyType,
           typename ValType,
@@ -3115,11 +3117,6 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_inter_gradient
       my_cache.d_merged_vals,
       my_cache.d_merged_push_vals);
 
-  VLOG(0) << "inner copy gpu id=" << gpu_id
-            << ", push size=" << push_size
-            << ", shard recv size=" << shard_recv_offset
-            << ", merge size=" << total_push_size;
-
   return total_push_size;
 }
 template <typename KeyType,
@@ -3227,10 +3224,6 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_sparse_gradien
         stream);
   }
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
-
-  VLOG(0) << "node copy gpu id=" << gpu_id
-          << ", push size=" << fea_size
-          << ", shard recv size=" << total_recv_fea_num;
 
   return total_recv_fea_num;
 }
