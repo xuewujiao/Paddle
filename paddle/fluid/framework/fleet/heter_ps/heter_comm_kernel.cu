@@ -205,18 +205,14 @@ __global__ void merge_gradients_embedx_kernel(const KeyType* d_keys,
   }
 }
 
-template <typename GPUAccessor>
-__global__ void check_values(const size_t &N, 
-    const char *input, 
-    const size_t &value_bytes, 
-    const int &float_num,
-    GPUAccessor& gpu_accessor) {
+__global__ void check_valid_values(
+    const size_t N, const char *input, const size_t value_bytes, const int float_num) {
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < N) {
     const float *val = (const float *)(input + i * value_bytes);
     for (int k = 0; k < float_num; ++k) {
       auto &c = val[k];
-      if (gpu_accessor.is_vaild(c)) {
+      if (isnan(c) || isinf(c) || (c > 1e+20 || c < -(1e+20))) {
         continue;
       }
       printf("error id=%u, offset=%d, value=%f\n", i, k, c);
@@ -564,8 +560,9 @@ void HeterCommKernel::merge_gradient(const KeyType* d_keys,
         gpu_accessor);
   }
   // check values
-  check_values<<<grid_size1, block_size_, 0, stream>>>(
-      n, output, grad_value_size, grad_value_size / sizeof(float), gpu_accessor);
+  const size_t val_size_float = grad_value_size / sizeof(float);
+  check_values<GPUAccessor><<<grid_size1, block_size_, 0, stream>>>(
+      n, output, grad_value_size, val_size_float, gpu_accessor);
 }
 
 template <typename T, typename StreamType>
@@ -787,6 +784,19 @@ void HeterCommKernel::scatter_vals(const float* d_shard_vals,
   scatter_dvals_by_unit_kernel<<<grid_size, block_size_, 0, stream>>>(
       d_vals, d_shard_vals, idx, N, val_size_float);
 }
+template <typename StreamType>
+void HeterCommKernel::check_valid_values(
+                  const size_t &N,
+                  const char *input,
+                  const size_t &value_bytes,
+                  const StreamType& stream) {
+  const int val_size_float = value_bytes / sizeof(float);
+  CHECK((value_bytes % sizeof(float)) == 0);
+  const int grid_size = (N - 1) / block_size_ + 1;
+  check_valid_values<<<grid_size, block_size_, 0, stream>>>(
+      N, input, value_bytes, val_size_float);
+}
+
 template void HeterCommKernel::fill_idx<int, cudaStream_t>(
     int* idx, long long len, const cudaStream_t& stream);
 template void HeterCommKernel::fill_idx<uint32_t, cudaStream_t>(
@@ -1181,6 +1191,11 @@ template void HeterCommKernel::scatter_vals<uint32_t, cudaStream_t>(
     long long len,
     size_t value_bytes,
     const cudaStream_t& stream);
+void HeterCommKernel<cudaStream_t>::check_valid_values(
+    const size_t &N,
+    const char *input,
+    const size_t &value_bytes,
+    const cudaStream_t& stream)
 #endif
 
 }  // namespace framework
