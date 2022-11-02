@@ -1195,7 +1195,7 @@ void HeterCommKernel<cudaStream_t>::check_valid_values(
     const size_t &N,
     const char *input,
     const size_t &value_bytes,
-    const cudaStream_t& stream)
+    const cudaStream_t& stream);
 #endif
 
 }  // namespace framework
