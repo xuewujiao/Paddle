@@ -2971,19 +2971,19 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_all2all(
   size_t push_len = gather_inter_gradient_by_copy(
       gpu_id, len, d_keys, reinterpret_cast<void *>(d_grads));
   push_len = gather_sparse_gradient_by_all2all(
-      gpu_id, push_len, my_cache.d_merged_keys, my_cache.d_merged_vals);
+      gpu_id, push_len, my_cache.d_merged_push_keys, my_cache.d_merged_push_vals);
   // all embedx merge
   size_t uniq_len = merge_grad(
        gpu_id,
        push_len,
-       my_cache.d_merged_keys,
        my_cache.d_merged_push_keys,
-       my_cache.d_merged_vals,
-       my_cache.d_merged_push_vals);
+       my_cache.d_merged_keys,
+       my_cache.d_merged_push_vals,
+       my_cache.d_merged_vals);
   // update all grad
   update_one_table(gpu_id,
-       my_cache.d_merged_push_keys,
-       reinterpret_cast<GradType*>(my_cache.d_merged_push_vals),
+       my_cache.d_merged_keys,
+       reinterpret_cast<GradType*>(my_cache.d_merged_vals),
        uniq_len,
        sgd);
 }
@@ -3106,10 +3106,10 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_inter_gradient
   size_t total_push_size = merge_grad(
       gpu_id,
       shard_recv_offset,
-      my_cache.d_merged_push_keys,
       my_cache.d_merged_keys,
-      my_cache.d_merged_push_vals,
-      my_cache.d_merged_vals);
+      my_cache.d_merged_push_keys,
+      my_cache.d_merged_vals,
+      my_cache.d_merged_push_vals);
 
   VLOG(0) << "inner copy gpu id=" << gpu_id
             << ", push size=" << push_size
@@ -3139,7 +3139,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_sparse_gradien
   partition_shard_keys(gpu_id,
       fea_size, d_keys,
       res.d_local_idx_parted,
-      my_cache.d_merged_push_keys,
+      my_cache.d_merged_keys,
       h_local_part_sizes,
       node_size_);
   CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -3175,7 +3175,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_sparse_gradien
   my_cache.alloc(total_recv_fea_num, grad_type_size_, HeterCommType::COPY_ALL);
   // fill shard vals
   heter_comm_kernel_->gather_vals(
-      reinterpret_cast<float*>(my_cache.d_merged_push_vals), // out
+      reinterpret_cast<float*>(my_cache.d_merged_vals),      // out
       reinterpret_cast<const float* >(d_push_vals),          // in
       res.d_local_idx_parted,
       fea_size,
@@ -3189,11 +3189,11 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_sparse_gradien
             rank_id_,
             node_size_,
             fea_size,
-            my_cache.d_merged_push_keys,
-            my_cache.d_merged_push_vals,
-            grad_type_size_,
             my_cache.d_merged_keys,
             my_cache.d_merged_vals,
+            grad_type_size_,
+            my_cache.d_merged_push_keys,
+            my_cache.d_merged_push_vals,
             stream);
   } else {
     // send local device
@@ -3206,8 +3206,8 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_sparse_gradien
         h_local_part_offsets,
         h_remote_part_sizes,
         h_remote_part_offsets,
-        (const char *)(my_cache.d_merged_push_keys),
-        reinterpret_cast<char *>(my_cache.d_merged_keys),
+        (const char *)(my_cache.d_merged_keys),
+        reinterpret_cast<char *>(my_cache.d_merged_push_keys),
         stream);
     send_data_by_all2all(
         gpu_id,
@@ -3218,8 +3218,8 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_sparse_gradien
         h_local_part_offsets,
         h_remote_part_sizes,
         h_remote_part_offsets,
-        (const char *)(my_cache.d_merged_push_vals),
-        reinterpret_cast<char *>(my_cache.d_merged_vals),
+        (const char *)(my_cache.d_merged_vals),
+        reinterpret_cast<char *>(my_cache.d_merged_push_vals),
         stream);
   }
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
