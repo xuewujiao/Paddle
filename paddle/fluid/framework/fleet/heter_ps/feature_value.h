@@ -495,15 +495,25 @@ class CommonFeatureValueAccessor {
     }
     return true;
   }
-  __host__ __device__ bool check_push_basic(const float *val) {
+  __host__ __device__ int check_push_basic(const float *val) {
     for (int i = 0; i < common_push_value.EmbedxGIndex(); ++i) {
       const float &c = val[i];
       if (!is_vaild(c)) {
-        printf("base val index %d = %f\n", i, c);
-        return false;
+        return i;
       }
     }
-    return true;
+    return -1;
+  }
+  __host__ __device__ int check_push_embedx(const int &id, const float *val) {
+    if (id >= common_push_value.MfDimIndex()) {
+      return -1;
+    }
+    int pos = id + common_push_value.EmbedxGIndex();
+    const float &c = val[pos];
+    if (!is_vaild(c)) {
+      return pos;
+    }
+    return -1;
   }
   // PullCopy 阶段 gpukernel 中  FeatureValue回填到PullValue
   __host__ __device__ void Select(float* dest_val,

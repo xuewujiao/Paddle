@@ -168,8 +168,10 @@ __global__ void merge_gradients_basic_kernel(const KeyType* d_keys,
         merger.merge_basic(out, in, gpu_accessor);
       }
     }
-    if (!gpu_accessor.check_push_basic(out)) {
-      printf("base error, key %lu, merge idx: %u, start: %u, old idx: %d\n", key, i, start, ori_index);
+    int ret = gpu_accessor.check_push_basic(out);
+    if (ret >= 0) {
+      printf("base error, key %lu, merge start old idx: [%u,%u,%d], value:[%d]=%f\n", 
+          key, i, start, ori_index, ret, out[ret]);
       assert(false && "bad grad base values");
     }
   }
@@ -206,10 +208,10 @@ __global__ void merge_gradients_embedx_kernel(const KeyType* d_keys,
         merger.merge_embedx(out, in, field_idx, gpu_accessor);
       }
     }
-    auto &c = out[gpu_accessor.common_push_value.EmbedxGIndex() + field_idx];
-    if (!gpu_accessor.is_vaild(c)) {
-      printf("embedx error, key %lu, merge idx: %u, start: %u, old idx: %d, embedx:[%u]= %f\n", 
-          key, value_idx, start, ori_index, field_idx, c);
+    int ret = gpu_accessor.check_push_embedx(field_idx, out);
+    if (ret >= 0) {
+      printf("embedx error, key %lu, merge start old idx: [%u,%u,%d], field_idx: %u, value:[%u,%d]=%f\n", 
+          key, value_idx, start, ori_index, field_idx, ret, out[ret]);
       assert(false && "bad grad embedx values");
     }
   }
