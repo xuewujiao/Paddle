@@ -493,7 +493,7 @@ class CommonFeatureValueAccessor {
   __host__ __device__ bool CheckPushBasic(const float *val) {
     for (int i = 0; i < common_push_value.EmbedxGIndex(); ++i) {
       const float &c = val[i];
-      if (isnan(c) || isinf(c) || (c > 1e+20 || c < -1e-20)) {
+      if (isnan(c) || isinf(c) || (c > 1e+20 || c < -1e+20)) {
         printf("base val index %d = %f\n", i, c);
         return false;
       }
@@ -504,7 +504,7 @@ class CommonFeatureValueAccessor {
     const float *embedx = &val[common_push_value.EmbedxGIndex()];
     for (int i = 0; i < int(val[common_push_value.MfDimIndex()]); ++i) {
       const float &c = embedx[i];
-      if (isnan(c) || isinf(c) || (c > 1e+20 || c < -1e-20)) {
+      if (isnan(c) || isinf(c) || (c > 1e+20 || c < -1e+20)) {
         printf("embedx val index %d = %f\n", i, c);
         return false;
       }
