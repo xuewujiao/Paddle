@@ -2412,6 +2412,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_inner_keys_p2p(
           res.d_remote_keys[i], i, &res.d_keys_parted[offset],
                 gpu_id, data_len * sizeof(KeyType), stream));
     }
+    PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
     return;
   }
   // need transfer
@@ -2838,6 +2839,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::scatter_inner_vals_p2p(
           total_fea_num,
           value_bytes,
           stream);
+  PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
 }
 template <typename KeyType,
           typename ValType,
@@ -2927,6 +2929,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_inner_data_p2p(
       PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyPeerAsync(res.d_remote_vals[i], i, &res.d_vals_parted[offset * value_bytes],
               gpu_id, data_len * value_bytes, stream));
     }
+    PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
     return;
   }
   // need transfer
@@ -2952,6 +2955,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_inner_data_p2p(
     PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyPeerAsync(res.d_remote_vals[i], i, res.d_trans_vals,
             trans_id, data_len * value_bytes, stream));
   }
+  PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
 }
 template <typename KeyType,
           typename ValType,
