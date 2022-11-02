@@ -168,12 +168,6 @@ __global__ void merge_gradients_basic_kernel(const KeyType* d_keys,
         merger.merge_basic(out, in, gpu_accessor);
       }
     }
-    int ret = gpu_accessor.check_push_basic(out);
-    if (ret >= 0) {
-      printf("base error, key %lu, merge start old idx: [%u,%u,%d], value:[%d]=%f\n", 
-          key, i, start, ori_index, ret, out[ret]);
-      assert(false && "bad grad base values");
-    }
   }
 }
 
@@ -208,11 +202,26 @@ __global__ void merge_gradients_embedx_kernel(const KeyType* d_keys,
         merger.merge_embedx(out, in, field_idx, gpu_accessor);
       }
     }
-    int ret = gpu_accessor.check_push_embedx(field_idx, out);
-    if (ret >= 0) {
-      printf("embedx error, key %lu, merge start old idx: [%u,%u,%d], field_idx: %u, value:[%u,%d]=%f\n", 
-          key, value_idx, start, ori_index, field_idx, ret, out[ret]);
-      assert(false && "bad grad embedx values");
+  }
+}
+
+template <typename KeyType, typename GPUAccessor>
+__global__ void check_values(const size_t &N, 
+    const char *input, 
+    const size_t &value_bytes, 
+    const int &float_num,
+    GPUAccessor& gpu_accessor) {
+  const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < N) {
+    const float *val = (const float *)(input + i * value_bytes);
+    for (int k = 0; k < float_num; ++k) {
+      auto &c = val[k];
+      if (gpu_accessor.is_vaild(c)) {
+        continue;
+      }
+      printf("error id=%u, offset=%d, value=%f\n", i, k, c);
+      assert(false && "error values");
+      return;
     }
   }
 }
@@ -554,6 +563,9 @@ void HeterCommKernel::merge_gradient(const KeyType* d_keys,
         merger,
         gpu_accessor);
   }
+  // check values
+  check_values<<<grid_size1, block_size_, 0, stream>>>(
+      n, output, grad_value_size, grad_value_size / sizeof(float), gpu_accessor);
 }
 
 template <typename T, typename StreamType>
