@@ -559,10 +559,6 @@ void HeterCommKernel::merge_gradient(const KeyType* d_keys,
         merger,
         gpu_accessor);
   }
-  // check values
-  const size_t val_size_float = grad_value_size / sizeof(float);
-  check_values<GPUAccessor><<<grid_size1, block_size_, 0, stream>>>(
-      n, output, grad_value_size, val_size_float, gpu_accessor);
 }
 
 template <typename T, typename StreamType>
