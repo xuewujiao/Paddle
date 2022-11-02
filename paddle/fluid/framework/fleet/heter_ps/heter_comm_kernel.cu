@@ -1187,7 +1187,7 @@ template void HeterCommKernel::scatter_vals<uint32_t, cudaStream_t>(
     long long len,
     size_t value_bytes,
     const cudaStream_t& stream);
-void HeterCommKernel<cudaStream_t>::check_valid_values(
+template void HeterCommKernel<cudaStream_t>::check_valid_values(
     const size_t &N,
     const char *input,
     const size_t &value_bytes,
