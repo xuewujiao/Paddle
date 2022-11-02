@@ -505,7 +505,7 @@ class CommonFeatureValueAccessor {
     return -1;
   }
   __host__ __device__ int check_push_embedx(const int &id, const float *val) {
-    if (id >= common_push_value.MfDimIndex()) {
+    if (id >= int(val[common_push_value.MfDimIndex()])) {
       return -1;
     }
     int pos = id + common_push_value.EmbedxGIndex();
