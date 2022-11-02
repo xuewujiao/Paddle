@@ -66,11 +66,11 @@ class HeterComm {
   HeterComm& operator=(const HeterComm&) = delete;
 
   size_t merge_keys(const int gpu_num,
-                  const KeyType* d_keys,
-                  const size_t &len,
-                  KeyType* d_sorted_keys,
-                  KeyType* d_merged_keys,
-                  uint32_t* d_restore_idx);
+                    const KeyType* d_keys,
+                    const size_t& len,
+                    KeyType* d_sorted_keys,
+                    KeyType* d_merged_keys,
+                    uint32_t* d_restore_idx);
   void dynamic_merge_grad(int gpu_num,
                           KeyType* d_keys,
                           float* d_grads,
@@ -279,9 +279,7 @@ class HeterComm {
   };
 
   struct LocalStorage {
-    LocalStorage() {
-      sem_wait = std::make_unique<Semaphore>();
-    }
+    LocalStorage() { sem_wait = std::make_unique<Semaphore>(); }
     void init(int device_num, int dev_id) {
       place_ = platform::CUDAPlace(dev_id);
       h_recv_offsets.resize(device_num);
@@ -289,7 +287,7 @@ class HeterComm {
     }
     template <typename T>
     T* alloc_cache(const size_t& len,
-                   std::shared_ptr<memory::Allocation> &alloc, // NOLINT
+                   std::shared_ptr<memory::Allocation>& alloc,  // NOLINT
                    bool need_copy = false) {
       size_t need_mem = len * sizeof(T);
       if (alloc.get() == nullptr) {
@@ -470,17 +468,17 @@ class HeterComm {
                           size_t len);
 
   // node all2all pull
-  void pull_sparse_all2all(const int gpu_id,
+  void pull_sparse_all2all(const int &gpu_id,
                            KeyType* d_keys,
                            float* d_vals,
-                           size_t len);
+                           const size_t &len);
 
   template <typename Sgd>
   void push_normal_sparse(int num,
-                     KeyType* d_keys,
-                     float* d_grads,
-                     size_t len,
-                     Sgd& sgd);  // NOLINT
+                          KeyType* d_keys,
+                          float* d_grads,
+                          size_t len,
+                          Sgd& sgd);  // NOLINT
 
   void shard_inner_keys(const size_t& total_fea_num,
                         const KeyType* d_keys,
@@ -490,12 +488,12 @@ class HeterComm {
   void gather_inner_keys_p2p(const size_t& total_fea_num,
                              const KeyType* d_keys,
                              InnerResource& res,
-                             const int gpu_id,
-                             const int gpu_num,
-                             const int trans_id);
-  size_t gather_inter_keys_by_copy(const int gpu_id,
-                                const size_t& fea_size,
-                                const KeyType* d_keys);
+                             const int &gpu_id,
+                             const int &gpu_num,
+                             const int &trans_id);
+  size_t gather_inter_keys_by_copy(const int &gpu_id,
+                                   const size_t& fea_size,
+                                   const KeyType* d_keys);
   void partition_shard_keys(const int& gpu_id,
                             const size_t& total_fea_num,
                             const KeyType* d_keys,
@@ -504,66 +502,68 @@ class HeterComm {
                             size_t* h_part_sizes,
                             const int& shard_num);
   size_t send_data_by_all2all(const int& gpu_id,
-                            const int& nccl_node_size,
-                            const int& nccl_rank_id,
-                            const int& value_bytes,
-                            const size_t* h_send_part_sizes,
-                            const size_t* h_send_part_offsets,
-                            const size_t* h_recv_part_sizes,
-                            const size_t* h_recv_part_offsets,
-                            const char* d_send_buff,
-                            char* d_rev_buff,
-                            cudaStream_t& stream);
-  size_t gather_sparse_keys_by_all2all(const int gpu_id,
-                                    const size_t& fea_size,
-                                    const KeyType* d_in_keys);
-  void scatter_sparse_vals_by_all2all(const int gpu_id,
+                              const int& nccl_node_size,
+                              const int& nccl_rank_id,
+                              const int& value_bytes,
+                              const size_t* h_send_part_sizes,
+                              const size_t* h_send_part_offsets,
+                              const size_t* h_recv_part_sizes,
+                              const size_t* h_recv_part_offsets,
+                              const char* d_send_buff,
+                              char* d_rev_buff,
+                              cudaStream_t& stream);
+  size_t gather_sparse_keys_by_all2all(const int &gpu_id,
+                                       const size_t& fea_size,
+                                       const KeyType* d_in_keys);
+  void scatter_sparse_vals_by_all2all(const int &gpu_id,
                                       const size_t& fea_size,
                                       const char* d_in_vals,
-                                      void* d_out_vals);
-  void scatter_inner_vals_p2p(const size_t &total_fea_num,
+                                      void* d_out_vals,
+                                      const size_t &value_bytes);
+  void scatter_inner_vals_p2p(const size_t& total_fea_num,
                               void* d_out_vals,
                               InnerResource& res,
-                              const int gpu_id,
-                              const int gpu_num,
-                              const int trans_id,
-                              const size_t value_bytes);
-  void scatter_inter_vals_by_copy(const int gpu_id,
+                              const int &gpu_id,
+                              const int &gpu_num,
+                              const int &trans_id,
+                              const size_t &value_bytes);
+  void scatter_inter_vals_by_copy(const int &gpu_id,
                                   const size_t& fea_size,
                                   const char* d_in_vals,
-                                  void* d_out_vals);
-  void gather_inner_data_p2p(const size_t &total_fea_num,
+                                  void* d_out_vals,
+                                  const size_t &value_bytes);
+  void gather_inner_data_p2p(const size_t& total_fea_num,
                              const KeyType* d_keys,
                              const void* d_vals,
                              InnerResource& res,
-                             const int gpu_id,
-                             const int gpu_num,
-                             const int trans_id,
+                             const int &gpu_id,
+                             const int &gpu_num,
+                             const int &trans_id,
                              const size_t& value_bytes);
   template <typename Sgd>
   void push_sparse_all2all(const int& gpu_id,
                            KeyType* d_keys,
                            float* d_grads,
-                           size_t len,
+                           const size_t &len,
                            Sgd& sgd);  // NOLINT
   size_t merge_grad(const int& gpu_id,
-                 const size_t& len,
-                 const KeyType* d_in_keys,
-                 KeyType* d_out_keys,
-                 const void* d_in_grads,
-                 void* d_out_grads);
+                    const size_t& len,
+                    const KeyType* d_in_keys,
+                    KeyType* d_out_keys,
+                    const void* d_in_grads,
+                    void* d_out_grads);
   size_t gather_inter_gradient_by_copy(const int& gpu_id,
-                                    const size_t& push_size,
-                                    KeyType* d_keys,
-                                    void* d_push_vals);
+                                       const size_t& push_size,
+                                       KeyType* d_keys,
+                                       void* d_push_vals);
   size_t gather_sparse_gradient_by_all2all(const int& gpu_id,
-                                        const size_t& push_size,
-                                        const KeyType* d_keys,
-                                        const void* d_push_vals);
+                                           const size_t& push_size,
+                                           const KeyType* d_keys,
+                                           const void* d_push_vals);
   size_t send_keys_by_all2all_trans(const int& gpu_id,
                                     const int& rank_id,
                                     const int& node_size,
-                                    const size_t &fea_size,
+                                    const size_t& fea_size,
                                     const KeyType* d_in_keys,
                                     KeyType* d_out_keys,
                                     cudaStream_t& stream);
@@ -572,19 +572,18 @@ class HeterComm {
                                     const int& node_size,
                                     const char* d_in_vals,
                                     char* d_out_vals,
-                                    const size_t &value_bytes,
+                                    const size_t& value_bytes,
                                     cudaStream_t& stream);
   size_t send_gradient_by_all2all_trans(const int& gpu_id,
                                         const int& rank_id,
                                         const int& node_size,
-                                        const size_t &fea_size,
+                                        const size_t& fea_size,
                                         const KeyType* d_keys,
                                         const char* d_push_vals,
                                         const size_t& value_bytes,
                                         KeyType* d_out_keys,
                                         char* d_out_vals,
                                         cudaStream_t& stream);
-
 
   using Table = HashTable<KeyType, ValType>;
   using PtrTable = HashTable<KeyType, float*>;
@@ -614,7 +613,7 @@ class HeterComm {
   bool enable_gpu_direct_access_ = false;
 
 #if defined(PADDLE_WITH_CUDA)
-  GpuRDMAChecker *rdma_checker_ = nullptr;
+  GpuRDMAChecker* rdma_checker_ = nullptr;
   std::vector<ncclComm_t> nccl_inner_comms_;
   std::vector<ncclComm_t> nccl_inter_comms_;
   int multi_mf_dim_{8};

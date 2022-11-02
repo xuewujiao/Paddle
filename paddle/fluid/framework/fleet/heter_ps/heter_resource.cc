@@ -32,7 +32,7 @@ namespace paddle {
 namespace framework {
 
 #if defined(PADDLE_WITH_CUDA)
-GPUResource::GPUResource(std::vector<int>& dev_ids, int index) {
+GPUResource::GPUResource(std::vector<int> &dev_ids, int index) {
   index_ = index;
   dev_ids_ = dev_ids;
   dev_id_ = dev_ids_[index];
@@ -141,8 +141,7 @@ static std::string excute_cmd_result(const std::string &cmd) {
   return paddle::string::trim_spaces(out);
 }
 #if defined(PADDLE_WITH_CUDA)
-static
-std::shared_ptr<GpuRDMAChecker> g_checker = nullptr;
+static std::shared_ptr<GpuRDMAChecker> g_checker = nullptr;
 GpuRDMAChecker *GpuRDMAChecker::get(int device_num) {
   if (g_checker == nullptr) {
     g_checker = std::make_shared<GpuRDMAChecker>(device_num);
@@ -165,14 +164,13 @@ bool GpuRDMAChecker::is_device_support_rdma(int devid) {
   return rdma_status_[devid];
 }
 bool GpuRDMAChecker::check_device_status(const int &device_count,
-                                  std::vector<int> *gpu_status) {
+                                         std::vector<int> *gpu_status) {
   // not need auto detect gpu topo aware
   if (!FLAGS_enable_auto_detect_gpu_topo) {
     return false;
   }
   // a100
-  std::string str =
-      excute_cmd_result("source ~/.bashrc && nvidia-smi topo -m");
+  std::string str = excute_cmd_result("source ~/.bashrc && nvidia-smi topo -m");
   if (str.empty()) {  // a100 auto gpu card rdma status
     return false;
   }
@@ -242,7 +240,7 @@ bool GpuRDMAChecker::check_device_status(const int &device_count,
 }
 #endif
 
-HeterPsResource::HeterPsResource(const std::vector<int>& dev_ids) {
+HeterPsResource::HeterPsResource(const std::vector<int> &dev_ids) {
   dev_ids_ = dev_ids;
   for (size_t i = 0; i < dev_ids_.size(); ++i) {
     std::shared_ptr<DevResource> resource =

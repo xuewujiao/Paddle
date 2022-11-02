@@ -99,9 +99,10 @@ using AnyDeviceGuard = platform::XPUDeviceGuard;
 
 #if defined(PADDLE_WITH_CUDA)
 class GpuRDMAChecker {
-public:
+ public:
   static GpuRDMAChecker* get(int device_num);
-public:
+
+ public:
   GpuRDMAChecker(int device_num);
   // rdma
   bool need_rdma_trans(void);
@@ -110,10 +111,12 @@ public:
   int device_num(void) { return device_num_; }
   // topo_aware
   bool topo_aware(void) { return topo_aware_; }
-private:
-  bool check_device_status(const int &device_count,
-      std::vector<int> *gpu_status);
-private:
+
+ private:
+  bool check_device_status(const int& device_count,
+                           std::vector<int>* gpu_status);
+
+ private:
   int device_num_ = 0;
   bool topo_aware_ = false;
   // rdma
