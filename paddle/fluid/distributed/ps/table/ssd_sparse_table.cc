@@ -52,6 +52,7 @@ int32_t SSDSparseTable::Pull(TableContext& context) {
   if (context.use_ptr) {
     char** pull_values = context.pull_context.ptr_values;
     const uint64_t* keys = context.pull_context.keys;
+    VLOG(0) << "context.pass_id:" << context.pass_id;
     return PullSparsePtr(
         context.shard_id, pull_values, keys, context.num, context.pass_id);
   } else {
@@ -180,6 +181,72 @@ int32_t SSDSparseTable::PullSparse(float* pull_values,
   return 0;
 }
 
+// 老版本
+// int32_t SSDSparseTable::PullSparsePtr(int shard_id,
+//                                       char** pull_values,
+//                                       const uint64_t* pull_keys,
+//                                       size_t num,
+//                                       uint16_t pass_id) {
+//   CostTimer timer("pserver_ssd_sparse_select_all");
+//   size_t value_size = _value_accesor->GetAccessorInfo().size / sizeof(float);
+//   size_t mf_value_size =
+//       _value_accesor->GetAccessorInfo().mf_size / sizeof(float);
+
+//   {  // 从table取值 or create
+
+//     std::atomic<uint32_t> missed_keys{0};
+
+//     auto& local_shard = _local_shards[shard_id];
+//     float data_buffer[value_size];  // NOLINT
+//     float* data_buffer_ptr = data_buffer;
+//     for (size_t i = 0; i < num; ++i) {
+//       uint64_t key = pull_keys[i];
+//       auto itr = local_shard.find(key);
+//       size_t data_size = value_size - mf_value_size;
+//       FixedFeatureValue* ret = NULL;
+//       if (itr == local_shard.end()) {
+//         // pull rocksdb
+//         std::string tmp_string("");
+//         if (_db->get(shard_id,
+//                       reinterpret_cast<char*>(&key),
+//                       sizeof(uint64_t),
+//                       tmp_string) > 0) {
+//           ++missed_keys;
+//           auto& feature_value = local_shard[key];
+//           feature_value.resize(data_size);
+//           float* data_ptr =
+//               const_cast<float*>(feature_value.data());
+//           _value_accesor->Create(&data_buffer_ptr, 1);
+//           memcpy(
+//               data_ptr, data_buffer_ptr, data_size * sizeof(float));
+//           ret = &feature_value;
+//         } else {
+//           data_size = tmp_string.size() / sizeof(float);
+//           memcpy(data_buffer_ptr,
+//                   paddle::string::str_to_float(tmp_string),
+//                   data_size * sizeof(float));
+//           // from rocksdb to mem
+//           auto& feature_value = local_shard[key];
+//           feature_value.resize(data_size);
+//           memcpy(const_cast<float*>(feature_value.data()),
+//                   data_buffer_ptr,
+//                   data_size * sizeof(float));
+//           _db->del_data(shard_id,
+//                         reinterpret_cast<char*>(&key),
+//                         sizeof(uint64_t));
+//           ret = &feature_value;
+//         }
+//       } else {
+//         ret = itr.value_ptr();
+//       }
+//       _value_accesor->UpdatePassId(ret->data(), pass_id);
+//       pull_values[i] = reinterpret_cast<char*>(ret);
+//     }
+//   }
+//   return 0;
+// }
+
+// 新的
 int32_t SSDSparseTable::PullSparsePtr(int shard_id,
                                       char** pull_values,
                                       const uint64_t* pull_keys,
@@ -210,16 +277,22 @@ int32_t SSDSparseTable::PullSparsePtr(int shard_id,
         if (cur_ctx->batch_keys.size() == 1024) {
           cur_ctx->batch_values.resize(cur_ctx->batch_keys.size());
           cur_ctx->status.resize(cur_ctx->batch_keys.size());
+          VLOG(0) << " shard:" << shard_id
+                  << "  not found create cur_ctx->batch_keys SIZE:"
+                  << cur_ctx->batch_keys.size();
           auto fut =
               _shards_task_pool[shard_id % _shards_task_pool.size()]->enqueue(
                   [this, shard_id, cur_ctx]() -> int {
+                    VLOG(0) << " 0 shard:" << shard_id << " multi_get start;";
                     _db->multi_get(shard_id,
                                    cur_ctx->batch_keys.size(),
                                    cur_ctx->batch_keys.data(),
                                    cur_ctx->batch_values.data(),
                                    cur_ctx->status.data());
+                    VLOG(0) << " 0 shard:" << shard_id << " multi_get done;";
                     return 0;
                   });
+          // fut.wait();
           cur_ctx = context.switch_item();
           for (size_t x = 0; x < tasks.size(); ++x) {
             tasks[x].wait();
@@ -235,6 +308,9 @@ int32_t SSDSparseTable::PullSparsePtr(int shard_id,
                        data_buffer_ptr,
                        init_size * sizeof(float));
                 ret = &feature_value;
+                VLOG(0) << " 1.1 shard:" << shard_id << " key:" << cur_key
+                        << " before updatepassid:" << pass_id
+                        << "  data:" << ret->data();
               } else {
                 int data_size =
                     cur_ctx->batch_values[idx].size() / sizeof(float);
@@ -247,8 +323,18 @@ int32_t SSDSparseTable::PullSparsePtr(int shard_id,
                        data_size * sizeof(float));
                 _db->del_data(shard_id, (char*)&cur_key, sizeof(uint64_t));
                 ret = &feature_value;
+                VLOG(0) << " 1.2 shard:" << shard_id << " key:" << cur_key
+                        << " before updatepassid:" << pass_id
+                        << "  data:" << ret->data();
               }
+              VLOG(0) << " 1 shard:" << shard_id << " key:" << cur_key
+                      << " before updatepassid:" << pass_id
+                      << "  data:" << ret->data();
               _value_accesor->UpdatePassId(ret->data(), pass_id);
+              VLOG(0) << " 1 shard:" << shard_id << " key:" << cur_key
+                      << " after updatepassid:" << pass_id
+                      << "  data:" << ret->data();
+
               int pull_data_idx = cur_ctx->batch_index[idx];
               pull_values[pull_data_idx] = (char*)ret;
             }
@@ -260,23 +346,34 @@ int32_t SSDSparseTable::PullSparsePtr(int shard_id,
       } else {
         ret = itr.value_ptr();
         // int pull_data_idx = keys[i].second;
+        VLOG(0) << " 2 shard:" << shard_id << " key:" << key
+                << " before updatepassid:" << pass_id
+                << "  data:" << ret->data();
         _value_accesor->UpdatePassId(ret->data(), pass_id);
+        VLOG(0) << " 2 shard:" << shard_id << " key:" << key
+                << " after updatepassid:" << pass_id
+                << "  data:" << ret->data();
         pull_values[i] = (char*)ret;
       }
     }
     if (cur_ctx->batch_keys.size() != 0) {
       cur_ctx->batch_values.resize(cur_ctx->batch_keys.size());
       cur_ctx->status.resize(cur_ctx->batch_keys.size());
+      VLOG(0) << " shard:" << shard_id << " remain cur_ctx->batch_keys SIZE:"
+              << cur_ctx->batch_keys.size();
       auto fut =
           _shards_task_pool[shard_id % _shards_task_pool.size()]->enqueue(
               [this, shard_id, cur_ctx]() -> int {
+                VLOG(0) << " 1 shard:" << shard_id << " multi_get before;";
                 _db->multi_get(shard_id,
                                cur_ctx->batch_keys.size(),
                                cur_ctx->batch_keys.data(),
                                cur_ctx->batch_values.data(),
                                cur_ctx->status.data());
+                VLOG(0) << " 1 shard:" << shard_id << " multi_get done;";
                 return 0;
               });
+      // fut.wait();
       tasks.push_back(std::move(fut));
     }
     for (size_t x = 0; x < tasks.size(); ++x) {
@@ -308,7 +405,13 @@ int32_t SSDSparseTable::PullSparsePtr(int shard_id,
           _db->del_data(shard_id, (char*)&cur_key, sizeof(uint64_t));
           ret = &feature_value;
         }
+        VLOG(0) << " 3 shard:" << shard_id << " key:" << cur_key
+                << " before updatepassid:" << pass_id
+                << "  data:" << ret->data();
         _value_accesor->UpdatePassId(ret->data(), pass_id);
+        VLOG(0) << " 3 shard:" << shard_id << " key:" << cur_key
+                << " after updatepassid:" << pass_id
+                << "  data:" << ret->data();
         int pull_data_idx = cur_ctx->batch_index[idx];
         pull_values[pull_data_idx] = (char*)ret;
       }
@@ -1788,9 +1891,9 @@ int32_t SSDSparseTable::LoadWithString(
     } else {
       shard_map[file_shard_idx] = 1;
     }
-    // max_inner_shard_num = std::max(max_inner_shard_num,
-    // shard_map[file_shard_idx]);
-    max_inner_shard_num = 5;
+    max_inner_shard_num =
+        std::max(max_inner_shard_num, shard_map[file_shard_idx]);
+    // max_inner_shard_num = 5;
     VLOG(0) << " Load filelist:" << filename;
   }
   std::vector<std::thread> threads;
@@ -1928,11 +2031,15 @@ int32_t SSDSparseTable::LoadWithString(
           continue;
         }
       }
+      if (key == 0) {
+        VLOG(0) << " LOAD KEY 0 CONTINUE";
+        continue;
+      }
       size_t value_size =
           _value_accesor->ParseFromString(++end, data_buffer_ptr);
-      // VLOG(1) << " ParseFromString: " << end << "  " << value_size;
-      // ssd or mem
-      // video slot filter
+      // _value_accesor->UpdatePassId(data_buffer_ptr, 0);
+      // VLOG(0) << "load key: " << key << "    " << value_size << "
+      // ParseFromString: " << end; ssd or mem video slot filter
       filter_begin = butil::gettimeofday_ms();
       if (!_value_accesor->FilterSlot(data_buffer_ptr)) {
         filter_time += butil::gettimeofday_ms() - filter_begin;
@@ -1964,6 +2071,7 @@ int32_t SSDSparseTable::LoadWithString(
                     << "  size:" << value_size;
           }
           _value_accesor->ParseFromString(end, value.data());
+          // _value_accesor->UpdatePassId(value.data(), 0);
           mem_count++;
           if (value_size > feature_value_size - mf_value_size) {
             mem_mf_count++;
@@ -2000,6 +2108,272 @@ int32_t SSDSparseTable::LoadWithString(
   // _cache_tk_size = LocalSize() * _config.sparse_table_cache_rate();
   return 0;
 }
+
+// int32_t SSDSparseTable::LoadWithString(
+//     size_t file_start_idx,
+//     size_t end_idx,
+//     const std::vector<std::string>& file_list,
+//     const std::string& param) {
+//   if (file_start_idx >= file_list.size()) {
+//     return 0;
+//   }
+//   int load_param = atoi(param.c_str());
+//   load_param -= 4;
+
+//   size_t feature_value_size =
+//       _value_accesor->GetAccessorInfo().size / sizeof(float);
+//   size_t mf_value_size =
+//       _value_accesor->GetAccessorInfo().mf_size / sizeof(float);
+
+// #ifdef PADDLE_WITH_HETERPS
+//   int thread_num = _real_local_shard_num;
+// #else
+//   int thread_num = _real_local_shard_num < 15 ? _real_local_shard_num : 15;
+// #endif
+
+//   for (int i = 0; i < _real_local_shard_num; i++) {
+//     _fs_channel.push_back(paddle::framework::MakeChannel<std::string>(30000));
+//   }
+
+//   std::unordered_map<int, int> shard_map;
+//   int max_inner_shard_num = 0;
+//   for (auto& filename : file_list) {
+//     std::vector<std::string> split_filename_string =
+//         paddle::string::split_string<std::string>(filename, "-");
+//     int file_split_idx =
+//         atoi(split_filename_string[split_filename_string.size() -
+//         1].c_str());
+//     // int file_shard_idx =
+//     // atoi(split_filename_string[split_filename_string.size() - 3].c_str());
+//     int file_shard_idx =
+//         atoi(split_filename_string[split_filename_string.size() -
+//         2].c_str());
+//     if (shard_map.find(file_shard_idx) != shard_map.end()) {
+//       shard_map[file_shard_idx]++;
+//     } else {
+//       shard_map[file_shard_idx] = 1;
+//     }
+//     max_inner_shard_num = std::max(max_inner_shard_num,
+//     shard_map[file_shard_idx]); VLOG(0) << " Load filelist:" << filename;
+//   }
+//   std::vector<std::thread> threads;
+//   threads.resize(thread_num);
+//   // threads.resize(thread_num * max_inner_shard_num);
+//   VLOG(0) << "max inner_shard_num :" << max_inner_shard_num
+//           << "  thread_num:" << thread_num
+//           << "   threads size:" << threads.size();
+//   // std::deque<std::atomic<int>> load_shard_num;
+//   // for (int i = 0; i < _real_local_shard_num; i++) {
+//   //   load_shard_num.emplace_back(max_inner_shard_num);
+//   // }
+//   VLOG(0) << "file_list size:" << file_list.size();
+//   auto load_func = [this,
+//                     &file_start_idx,
+//                     &file_list,
+//                     &load_param,
+//                     &max_inner_shard_num](int shard_num) {
+//     // int shard_num = file_num / max_inner_shard_num;
+//     for (int split_num = 0; split_num < max_inner_shard_num; split_num++) {
+//       FsChannelConfig channel_config;
+//       channel_config.path = file_list[shard_num * max_inner_shard_num +
+//       split_num]; VLOG(0) << "SSDSparseTable::load begin load " <<
+//       channel_config.path
+//               << " into local shard " << shard_num;
+//       channel_config.converter =
+//       _value_accesor->Converter(load_param).converter;
+//       channel_config.deconverter =
+//           _value_accesor->Converter(load_param).deconverter;
+//       paddle::framework::ChannelWriter<std::string> writer(
+//           _fs_channel[shard_num].get());
+
+//       bool is_read_failed = false;
+//       int retry_num = 0;
+//       int err_no = 0;
+//       do {
+//         is_read_failed = false;
+//         err_no = 0;
+//         std::string line_data;
+//         auto read_channel = _afs_client.open_r(channel_config, 0, &err_no);
+//         try {
+//           while (read_channel->read_line(line_data) == 0 &&
+//                 line_data.size() > 1) {
+//             std::vector<std::string> split_value_string =
+//                 paddle::string::split_string<std::string>(line_data, " ");
+//             if (split_value_string.size() != 109 &&
+//                 split_value_string.size() != 108 &&
+//                 split_value_string.size() != 9 &&
+//                 split_value_string.size() != 8) {
+//               VLOG(0) << "READ LINE shard:" << shard_num << "（"
+//                       << split_value_string.size() << " ) : " << line_data;
+//             }
+//             writer << line_data;
+//           }
+//           writer.Flush();
+//           read_channel->close();
+//           if (err_no == -1) {
+//             ++retry_num;
+//             is_read_failed = true;
+//             VLOG(0) << "MemorySparseTable load failed after read, retry it!
+//             path:"
+//                     << channel_config.path << " , retry_num=" << retry_num;
+//           }
+//         } catch (...) {
+//           ++retry_num;
+//           is_read_failed = true;
+//           VLOG(0) << "MemorySparseTable load failed, retry it! path:"
+//                   << channel_config.path << " , retry_num=" << retry_num;
+//         }
+//         if (retry_num > FLAGS_pserver_table_save_max_retry) {
+//           VLOG(0) << "MemorySparseTable load failed reach max limit!";
+//           exit(-1);
+//         }
+//       } while (is_read_failed);
+//     }
+//      _fs_channel[shard_num]->Close();
+
+//     // std::string line_data;
+//     // auto read_channel = _afs_client.open_r(channel_config, 0, &err_no);
+//     // paddle::framework::ChannelWriter<std::string> writer(
+//     //     _fs_channel[shard_num].get());
+//     // while (read_channel->read_line(line_data) == 0 && line_data.size() >
+//     1) {
+//     //   // std::vector<std::string> split_string =
+//     //   paddle::string::split_string<std::string>(line_data, "\t");
+//     //   std::vector<std::string> split_value_string =
+//     //   paddle::string::split_string<std::string>(line_data, " "); if
+//     //   (split_value_string.size() != 109 && split_value_string.size() != 9)
+//     {
+//     //     VLOG(0) << "READ LINE shard:" << shard_num << "（" <<
+//     //     split_value_string.size() << " ) : " << line_data;
+//     //   }
+//     //   writer << line_data;
+//     // }
+//     // writer.Flush();
+//     // read_channel->close();
+//     // if (load_shard_num[shard_num].fetch_sub(1) == 1) {
+//     //   _fs_channel[shard_num]->Close();
+//     // }
+//     // _fs_channel[file_num]->Close();
+//   };
+//   for (size_t i = 0; i < threads.size(); i++) {
+//     threads[i] = std::thread(load_func, i);
+//   }
+
+//   int start_shard_id = file_start_idx / max_inner_shard_num;
+//   omp_set_num_threads(thread_num);
+// #pragma omp parallel for schedule(dynamic)
+//   for (int i = 0; i < _real_local_shard_num; ++i) {
+//     std::vector<std::pair<char*, int>> ssd_keys;
+//     std::vector<std::pair<char*, int>> ssd_values;
+//     std::vector<uint64_t> tmp_key;
+//     ssd_keys.reserve(FLAGS_pserver_load_batch_size);
+//     ssd_values.reserve(FLAGS_pserver_load_batch_size);
+//     tmp_key.reserve(FLAGS_pserver_load_batch_size);
+//     ssd_keys.clear();
+//     ssd_values.clear();
+//     tmp_key.clear();
+//     std::string line_data;
+//     char* end = NULL;
+//     int local_shard_id = i % _avg_local_shard_num;
+//     auto& shard = _local_shards[local_shard_id];
+//     float data_buffer[FLAGS_pserver_load_batch_size * feature_value_size];
+//     float* data_buffer_ptr = data_buffer;
+//     uint64_t mem_count = 0;
+//     uint64_t ssd_count = 0;
+//     uint64_t mem_mf_count = 0;
+//     uint64_t ssd_mf_count = 0;
+//     uint64_t filtered_count = 0;
+//     uint64_t filter_time = 0;
+//     uint64_t filter_begin = 0;
+
+//     paddle::framework::ChannelReader<std::string>
+//     reader(_fs_channel[i].get());
+
+//     while (reader >> line_data) {
+//       uint64_t key = std::strtoul(line_data.data(), &end, 10);
+//       VLOG(1) << " LOAD KEY:" << key;
+//       if (FLAGS_pserver_open_strict_check) {
+//         if (key % _sparse_table_shard_num != (i + start_shard_id)) {
+//           VLOG(0) << "SSDSparseTable key:" << key << " not match shard,"
+//                   << " file_idx:" << i + start_shard_id
+//                   << " shard num:" << _sparse_table_shard_num;
+//           continue;
+//         }
+//       }
+//       size_t value_size =
+//           _value_accesor->ParseFromString(++end, data_buffer_ptr);
+//       // VLOG(1) << " ParseFromString: " << end << "  " << value_size;
+//       // ssd or mem
+//       // video slot filter
+//       filter_begin = butil::gettimeofday_ms();
+//       if (!_value_accesor->FilterSlot(data_buffer_ptr)) {
+//         filter_time += butil::gettimeofday_ms() - filter_begin;
+//         if (_value_accesor->SaveSSD(data_buffer_ptr)) {
+//           tmp_key.emplace_back(key);
+//           ssd_keys.emplace_back(
+//               std::make_pair((char*)&tmp_key.back(), sizeof(uint64_t)));
+//           ssd_values.emplace_back(std::make_pair((char*)data_buffer_ptr,
+//                                                  value_size *
+//                                                  sizeof(float)));
+//           data_buffer_ptr += feature_value_size;
+//           if (static_cast<int>(ssd_keys.size()) ==
+//               FLAGS_pserver_load_batch_size) {
+//             _db->put_batch(
+//                 local_shard_id, ssd_keys, ssd_values, ssd_keys.size());
+//             ssd_keys.clear();
+//             ssd_values.clear();
+//             tmp_key.clear();
+//             data_buffer_ptr = data_buffer;
+//           }
+//           ssd_count++;
+//           if (value_size > feature_value_size - mf_value_size) {
+//             ssd_mf_count++;
+//           }
+//         } else {
+//           auto& value = shard[key];
+//           value.resize(value_size);
+//           if (value_size != 108) {
+//             VLOG(1) << " key:" << key << " string:" << end
+//                     << "  size:" << value_size;
+//           }
+//           _value_accesor->ParseFromString(end, value.data());
+//           mem_count++;
+//           if (value_size > feature_value_size - mf_value_size) {
+//             mem_mf_count++;
+//           }
+//         }
+//       } else {
+//         filter_time += butil::gettimeofday_ms() - filter_begin;
+//         filtered_count++;
+//       }
+//     }
+//     // last batch
+//     if (ssd_keys.size() > 0) {
+//       _db->put_batch(local_shard_id, ssd_keys, ssd_values, ssd_keys.size());
+//     }
+
+//     _db->flush(local_shard_id);
+//     VLOG(0) << "Table>> load done. ALL[" << mem_count + ssd_count << "] MEM["
+//             << mem_count << "] MEM_MF[" << mem_mf_count << "] SSD[" <<
+//             ssd_count
+//             << "] SSD_MF[" << ssd_mf_count << "] FILTERED[" << filtered_count
+//             << "] filter_time cost:" << filter_time / 1000 << " s";
+//   }
+//   for (int i = 0; i < threads.size(); i++) {
+//     threads[i].join();
+//   }
+//   for (int i = 0; i < _fs_channel.size(); i++) {
+//     _fs_channel[i].reset();
+//   }
+//   _fs_channel.clear();
+//   LOG(INFO) << "load num:" << LocalSize();
+//   LOG(INFO) << "SSDSparseTable load success, path from "
+//             << file_list[file_start_idx] << " to "
+//             << file_list[file_start_idx + _real_local_shard_num - 1];
+
+//   // _cache_tk_size = LocalSize() * _config.sparse_table_cache_rate();
+//   return 0;
+// }
 
 int32_t SSDSparseTable::LoadWithBinary(const std::string& path, int param) {
   size_t feature_value_size =
