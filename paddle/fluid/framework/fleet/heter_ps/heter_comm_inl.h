@@ -972,7 +972,12 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::dynamic_merge_grad(
   } else {
     auto d_merge_grads = memory::Alloc(place, len * grad_value_size);
     float *d_merge_grads_ptr = reinterpret_cast<float *>(d_merge_grads->ptr());
-
+    // copy merge keys to d_keys
+    PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyAsync(d_keys,
+                                               d_merge_keys_ptr,
+                                               sizeof(KeyType) * segment_len,
+                                               cudaMemcpyDeviceToDevice,
+                                               stream));
     heter_comm_kernel_->merge_gradient(d_keys,
                                        d_offset,
                                        d_fea_num_info_ptr,
