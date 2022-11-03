@@ -205,17 +205,20 @@ __global__ void merge_gradients_embedx_kernel(const KeyType* d_keys,
   }
 }
 
-__global__ void kernel_check_valid_values(
-    const size_t N, const char *input, const size_t value_bytes, const int float_num) {
+__global__ void check_valid_values_kernel(
+    const int type, const size_t N, const char *input, const size_t value_bytes, const int float_num) {
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < N) {
     const float *val = (const float *)(input + i * value_bytes);
     for (int k = 0; k < float_num; ++k) {
       auto &c = val[k];
-      if (!(isnan(c) || isinf(c) || (int(c) > 1e+20 || int(c) < -(1e+20)))) {
-        continue;
+      if (isnan(c)) {
+        PADDLE_ENFORCE(false, "type %d, nan error id=%u, offset=%d, float=%f\n", type, i, k, c);
+      } else if (isinf(c)) {
+        PADDLE_ENFORCE(false, "type %d, inf error id=%u, offset=%d, float=%f\n", type, i, k, c);
+      } else if ((int(c) > 1e+30 || int(c) < -(1e+30)) {
+        PADDLE_ENFORCE(false, "type %d, data error id=%u, offset=%d, float=%f, int=%d\n", type, i, k, c, int(c));
       }
-      PADDLE_ENFORCE(false, "error id=%u, offset=%d, float=%f, int=%d\n", i, k, c, int(c));
     }
   }
 }
@@ -780,6 +783,7 @@ void HeterCommKernel::scatter_vals(const float* d_shard_vals,
 }
 template <typename StreamType>
 void HeterCommKernel::check_valid_values(
+                  const int &type,
                   const size_t &N,
                   const char *input,
                   const size_t &value_bytes,
@@ -787,8 +791,8 @@ void HeterCommKernel::check_valid_values(
   const int val_size_float = value_bytes / sizeof(float);
   CHECK((value_bytes % sizeof(float)) == 0);
   const int grid_size = (N - 1) / block_size_ + 1;
-  kernel_check_valid_values<<<grid_size, block_size_, 0, stream>>>(
-      N, input, value_bytes, val_size_float);
+  check_valid_values_kernel<<<grid_size, block_size_, 0, stream>>>(
+      type, N, input, value_bytes, val_size_float);
 }
 
 template void HeterCommKernel::fill_idx<int, cudaStream_t>(
@@ -1186,6 +1190,7 @@ template void HeterCommKernel::scatter_vals<uint32_t, cudaStream_t>(
     size_t value_bytes,
     const cudaStream_t& stream);
 template void HeterCommKernel::check_valid_values<cudaStream_t>(
+    const int &type,
     const size_t &N,
     const char *input,
     const size_t &value_bytes,

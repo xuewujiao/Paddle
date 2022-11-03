@@ -2371,7 +2371,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_all2all(
   scatter_inter_vals_by_copy(gpu_id, fea_num, loc.d_merged_vals, d_vals, pull_type_size_);
   // pull
   if (FLAGS_enable_tracker_all2all) {
-    heter_comm_kernel_->check_valid_values(fea_num,
+    heter_comm_kernel_->check_valid_values(0, fea_num,
              (const char *)(d_vals), pull_type_size_, resource_->local_stream(gpu_id, 0));
     VLOG(0) << "pull gpu id=" << gpu_id << ", fea num=" << fea_num
             << ", inner=" << gather_inner_size << ", node=" << pull_size;
@@ -3095,7 +3095,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_all2all(
                                         my_cache.d_merged_push_keys,
                                         my_cache.d_merged_push_vals);
   if (FLAGS_enable_tracker_all2all) {
-    heter_comm_kernel_->check_valid_values(node_push_len,
+    heter_comm_kernel_->check_valid_values(1, node_push_len,
         (const char *)(my_cache.d_merged_push_vals),
         grad_type_size_, resource_->local_stream(gpu_id, 0));
   }
@@ -3107,7 +3107,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_all2all(
                                my_cache.d_merged_push_vals,
                                my_cache.d_merged_vals);
   if (FLAGS_enable_tracker_all2all) {
-    heter_comm_kernel_->check_valid_values(uniq_len,
+    heter_comm_kernel_->check_valid_values(2, uniq_len,
           (const char *)(my_cache.d_merged_vals),
           grad_type_size_, resource_->local_stream(gpu_id, 0));
   }
