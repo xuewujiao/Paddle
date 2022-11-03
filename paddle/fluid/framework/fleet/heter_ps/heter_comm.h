@@ -610,6 +610,7 @@ class HeterComm {
   size_t val_type_size_;
   size_t pull_type_size_;
   size_t grad_type_size_;
+  size_t max_type_size_;
   bool enable_gpu_direct_access_ = false;
 
 #if defined(PADDLE_WITH_CUDA)

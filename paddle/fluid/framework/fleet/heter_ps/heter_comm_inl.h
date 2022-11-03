@@ -72,6 +72,7 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::HeterComm(
     pull_type_size_ = sizeof(ValType);
     grad_type_size_ = sizeof(GradType);
   }
+  max_type_size_ = std::max(pull_type_size_, grad_type_size_);
 
   for (int i = 0; i < device_num_; ++i) {
 #if defined(PADDLE_WITH_CUDA)
@@ -142,6 +143,8 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::HeterComm(
     pull_type_size_ = sizeof(ValType);
     grad_type_size_ = sizeof(GradType);
   }
+  max_type_size_ = std::max(pull_type_size_, grad_type_size_);
+
   for (int i = 0; i < device_num_; ++i) {
 #if defined(PADDLE_WITH_CUDA)
     platform::CUDADeviceGuard guard(resource_->dev_id(i));
@@ -2515,7 +2518,7 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_inter_keys_by_copy(
     my_cache.h_trans_offset = trans_need_size;
     trans_need_size += my_cache.h_trans_size;
   }
-  my_cache.alloc(trans_need_size, pull_type_size_);
+  my_cache.alloc(trans_need_size, max_type_size_);
   // barrier wait all hbm malloc size
   barrier_.wait();
 
@@ -2770,7 +2773,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
         h_remote_part_offsets[i] + h_remote_part_sizes[i];
   }
   size_t &remote_size = h_remote_part_offsets[node_size_];
-  cache.alloc(remote_size, pull_type_size_, HeterCommType::COPY_KEY);
+  cache.alloc(remote_size, max_type_size_, HeterCommType::COPY_KEY);
 
   size_t total_fea_num = 0;
   if (rdma_checker_->need_rdma_trans()) {
@@ -3233,7 +3236,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
     my_cache.h_trans_offset = trans_need_size;
     trans_need_size += my_cache.h_trans_size;
   }
-  my_cache.alloc(trans_need_size, grad_type_size_);
+  my_cache.alloc(trans_need_size, max_type_size_);
   // barrier wait all hbm malloc size
   barrier_.wait();
 
@@ -3354,7 +3357,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
     h_remote_part_offsets[i + 1] = h_remote_part_offsets[i] + recv_num;
   }
   size_t total_recv_fea_num = h_remote_part_offsets[node_size_];
-  my_cache.alloc(total_recv_fea_num, grad_type_size_, HeterCommType::COPY_ALL);
+  my_cache.alloc(total_recv_fea_num, max_type_size_, HeterCommType::COPY_ALL);
   // fill shard vals
   heter_comm_kernel_->gather_vals(
       reinterpret_cast<float *>(my_cache.d_merged_vals),  // out
@@ -3425,9 +3428,15 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_keys_by_all2all_trans(
   if (!rdma_checker_->is_device_support_rdma(gpu_id)) {
     int trans_id = get_transfer_devid(gpu_id);
     auto &trans = storage_[trans_id];
+    // wait node alloc hbm
+    trans.sem_wait->post();
+    my_cache.sem_wait->wait();
+
     const size_t &recv_size =
-        my_cache.shard_res.h_remote_part_offsets[nccl_node_size];
-    trans.init_trans(std::max(recv_size, fea_size), pull_type_size_);
+                my_cache.shard_res.h_remote_part_offsets[nccl_node_size];
+    size_t need_len = std::max(fea_size, recv_size);
+    CHECK(trans.trans_keys_buff->size() >= need_len * sizeof(KeyType) * 2);
+
     // p2p copy
     PADDLE_ENFORCE_GPU_SUCCESS(
         cudaMemcpyPeerAsync((void *)trans.d_merged_trans_keys,
@@ -3455,6 +3464,14 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_keys_by_all2all_trans(
     my_cache.sem_wait->wait();
     int trans_id = get_transfer_devid(gpu_id);
     auto &trans = storage_[trans_id];
+
+    // alloc trans mem
+    size_t trans_len = std::max(trans.shard_res.h_local_part_offsets[nccl_node_size],
+        trans.shard_res.h_remote_part_offsets[nccl_node_size]);
+    my_cache.init_trans(trans_len, max_type_size_);
+
+    trans.sem_wait->post();
+    my_cache.sem_wait->wait();
 
     // send local device
     total_fea_num =
@@ -3511,9 +3528,8 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_vals_by_all2all_trans(
   if (!rdma_checker_->is_device_support_rdma(gpu_id)) {
     int trans_id = get_transfer_devid(gpu_id);
     auto &trans = storage_[trans_id];
+
     const size_t &send_size = h_remote_part_offsets[nccl_node_size];
-    const size_t &recv_size = h_local_part_offsets[nccl_node_size];
-    trans.init_trans(std::max(send_size, recv_size), value_bytes);
     // p2p copy
     PADDLE_ENFORCE_GPU_SUCCESS(
         cudaMemcpyPeerAsync((void *)trans.d_merged_trans_vals,
@@ -3528,6 +3544,7 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_vals_by_all2all_trans(
     trans.sem_wait->post();
     my_cache.sem_wait->wait();
 
+    const size_t &recv_size = h_local_part_offsets[nccl_node_size];
     // p2p copy
     PADDLE_ENFORCE_GPU_SUCCESS(
         cudaMemcpyPeerAsync((void *)d_out_vals,
@@ -3592,9 +3609,15 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
   if (!rdma_checker_->is_device_support_rdma(gpu_id)) {
     int trans_id = get_transfer_devid(gpu_id);
     auto &trans = storage_[trans_id];
+
+    // wait node alloc hbm
+//    trans.sem_wait->post();
+//    my_cache.sem_wait->wait();
     const size_t &recv_total_size =
-        my_cache.shard_res.h_remote_part_offsets[nccl_node_size];
-    trans.init_trans(std::max(fea_size, recv_total_size), value_bytes);
+                my_cache.shard_res.h_remote_part_offsets[nccl_node_size];
+    size_t need_len = std::max(fea_size, recv_total_size);
+    CHECK(trans.trans_keys_buff->size() >= need_len * sizeof(KeyType) * 2);
+
     // p2p copy
     PADDLE_ENFORCE_GPU_SUCCESS(
         cudaMemcpyPeerAsync((void *)trans.d_merged_trans_keys,
@@ -3637,6 +3660,14 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
     my_cache.sem_wait->wait();
     int trans_id = get_transfer_devid(gpu_id);
     auto &trans = storage_[trans_id];
+
+//    size_t trans_len = std::max(trans.shard_res.h_local_part_offsets[nccl_node_size],
+//            trans.shard_res.h_remote_part_offsets[nccl_node_size]);
+//    // alloc mem
+//    my_cache.init_trans(trans_len, value_bytes);
+//
+//    trans.sem_wait->post();
+//    my_cache.sem_wait->wait();
 
     // send local device
     total_send_recv =
