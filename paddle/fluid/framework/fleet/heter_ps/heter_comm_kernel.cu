@@ -206,19 +206,21 @@ __global__ void merge_gradients_embedx_kernel(const KeyType* d_keys,
 }
 
 __global__ void check_valid_values_kernel(
-    const int type, const size_t N, const char *input, const size_t value_bytes) {
+    const int type, const size_t N, const char *input, const size_t value_bytes, const int num) {
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < N) {
     const float *val = (const float *)(input + i * value_bytes);
-    int num = int(value_bytes / sizeof(float));
     for (int k = 0; k < num; ++k) {
       auto &c = val[k];
       if (isnan(c)) {
-        PADDLE_ENFORCE(false, "type %d, nan error id=%u, offset=%d, float=%f\n", type, i, k, c);
+        PADDLE_ENFORCE(false, "type %d, nan error id=%u, offset=%d, float=%f, value_bytes=%u, num=%d\n", 
+            type, i, k, c, value_bytes, num);
       } else if (isinf(c)) {
-        PADDLE_ENFORCE(false, "type %d, inf error id=%u, offset=%d, float=%f\n", type, i, k, c);
+        PADDLE_ENFORCE(false, "type %d, inf error id=%u, offset=%d, float=%f, value_bytes=%u, num=%d\n", 
+            type, i, k, c, value_bytes, num);
       } else if (int(c) > 1e+30 || int(c) < -(1e+30)) {
-        PADDLE_ENFORCE(false, "type %d, data error id=%u, offset=%d, float=%f, int=%d\n", type, i, k, c, int(c));
+        PADDLE_ENFORCE(false, "type %d, data error id=%u, offset=%d, float=%f, int=%d, value_bytes=%u, num=%d\n", 
+            type, i, k, c, int(c), value_bytes, num);
       }
     }
   }
@@ -791,8 +793,10 @@ void HeterCommKernel::check_valid_values(
                   const StreamType& stream) {
   CHECK((value_bytes % sizeof(float)) == 0);
   const int grid_size = (N - 1) / block_size_ + 1;
+  const int num = int(value_bytes / sizeof(float));
+  printf("check_valid_values type=%d, N=%u, value_bytes=%u, num=%d\n", type, N, value_bytes, num);
   check_valid_values_kernel<<<grid_size, block_size_, 0, stream>>>(
-      type, N, input, value_bytes);
+      type, N, input, value_bytes, num);
 }
 
 template void HeterCommKernel::fill_idx<int, cudaStream_t>(
