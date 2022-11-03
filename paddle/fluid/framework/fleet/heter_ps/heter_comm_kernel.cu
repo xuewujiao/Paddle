@@ -216,7 +216,7 @@ __global__ void check_valid_values_kernel(
         PADDLE_ENFORCE(false, "type %d, nan error id=%u, offset=%d, float=%f\n", type, i, k, c);
       } else if (isinf(c)) {
         PADDLE_ENFORCE(false, "type %d, inf error id=%u, offset=%d, float=%f\n", type, i, k, c);
-      } else if ((int(c) > 1e+30 || int(c) < -(1e+30)) {
+      } else if (int(c) > 1e+30 || int(c) < -(1e+30)) {
         PADDLE_ENFORCE(false, "type %d, data error id=%u, offset=%d, float=%f, int=%d\n", type, i, k, c, int(c));
       }
     }
