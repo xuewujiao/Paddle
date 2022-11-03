@@ -206,11 +206,12 @@ __global__ void merge_gradients_embedx_kernel(const KeyType* d_keys,
 }
 
 __global__ void check_valid_values_kernel(
-    const int type, const size_t N, const char *input, const size_t value_bytes, const int float_num) {
+    const int type, const size_t N, const char *input, const size_t value_bytes) {
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < N) {
     const float *val = (const float *)(input + i * value_bytes);
-    for (int k = 0; k < float_num; ++k) {
+    int num = int(value_bytes / sizeof(float));
+    for (int k = 0; k < num; ++k) {
       auto &c = val[k];
       if (isnan(c)) {
         PADDLE_ENFORCE(false, "type %d, nan error id=%u, offset=%d, float=%f\n", type, i, k, c);
@@ -332,7 +333,7 @@ __global__ void gather_dvals_by_unit_kernel(TUnit* d_dest_vals,
                                              const TUnit* d_src_vals,
                                              T* idx,
                                              size_t len,
-                                             size_t val_size_unit) {
+                                             const size_t val_size_unit) {
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < len) {
     size_t pos = idx[i / val_size_unit] * val_size_unit + (i % val_size_unit);
@@ -508,7 +509,7 @@ void HeterCommKernel::dy_mf_fill_shard_grads(KeyType* d_shard_keys,
   int grid_size = (len - 1) / block_size_ + 1;
   size_t c_len = (size_t)len;
 
-  const size_t grad_value_size_float = grad_value_size / sizeof(float);
+  const size_t grad_value_size_float = size_t(grad_value_size / sizeof(float));
   // d_keys to d_shard_keys
   fill_shard_key_kernel<<<grid_size, block_size_, 0, stream>>>(
       d_shard_keys, d_keys, idx, c_len);
@@ -759,7 +760,7 @@ void HeterCommKernel::gather_vals(float* d_shard_vals,
                      long long len,
                      size_t value_bytes,
                      const StreamType& stream) {
-  const size_t value_size_float = value_bytes / sizeof(float);
+  const size_t value_size_float = size_t(value_bytes / sizeof(float));
   size_t N = len * value_size_float;
   int grid_size = (N - 1) / block_size_ + 1;
   // d_vals -> d_shard_vals
@@ -773,7 +774,7 @@ void HeterCommKernel::scatter_vals(const float* d_shard_vals,
                     long long len,
                     size_t value_bytes,
                     const StreamType& stream) {
-  const size_t val_size_float = value_bytes / sizeof(float);
+  const size_t val_size_float = size_t(value_bytes / sizeof(float));
   CHECK((value_bytes % sizeof(float)) == 0);
   size_t N = len * val_size_float;
   const int grid_size = (N - 1) / block_size_ + 1;
@@ -788,11 +789,10 @@ void HeterCommKernel::check_valid_values(
                   const char *input,
                   const size_t &value_bytes,
                   const StreamType& stream) {
-  const int val_size_float = value_bytes / sizeof(float);
   CHECK((value_bytes % sizeof(float)) == 0);
   const int grid_size = (N - 1) / block_size_ + 1;
   check_valid_values_kernel<<<grid_size, block_size_, 0, stream>>>(
-      type, N, input, value_bytes, val_size_float);
+      type, N, input, value_bytes);
 }
 
 template void HeterCommKernel::fill_idx<int, cudaStream_t>(
