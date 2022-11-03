@@ -215,7 +215,7 @@ __global__ void kernel_check_valid_values(
       if (!(isnan(c) || isinf(c) || (int(c) > 1e+20 || int(c) < -(1e+20)))) {
         continue;
       }
-      PADDLE_ENFORCE(false, "error id=%u, offset=%d, value=%f\n", i, k, c);
+      PADDLE_ENFORCE(false, "error id=%u, offset=%d, float=%f, int=%d\n", i, k, c, int(c));
     }
   }
 }
