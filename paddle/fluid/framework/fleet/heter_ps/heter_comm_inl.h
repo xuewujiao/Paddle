@@ -2396,12 +2396,14 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::shard_inner_keys(
                        d_left_ptr,
                        d_right_ptr,
                        gpu_id);
-  cudaMemcpy(&h_offsets[0],
-             d_left_ptr,
-             gpu_num * 2 * sizeof(uint32_t),
-             cudaMemcpyDeviceToHost);
+  auto stream = resource_->local_stream(gpu_id, 0);
+  cudaMemcpyAsync(&h_offsets[0],
+      d_left_ptr,
+      gpu_num * 2 * sizeof(uint32_t),
+      cudaMemcpyDeviceToHost);
+  PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
 
-  for (int i = 0; i < device_num_; ++i) {
+  for (int i = 0; i < gpu_num; ++i) {
     res->h_part_sizes[i] = h_offsets[gpu_num + i] - h_offsets[i] + 1;
   }
 }
@@ -2496,8 +2498,11 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_inter_keys_by_copy(
     shard_recv_offset += cache.h_fea_sizes[gpu_id];
     res.h_offsets[i] = shard_send_offset;
     shard_send_offset += res.h_part_sizes[i];
-    max_part_size = std::max(res.h_part_sizes[i], max_part_size);
+    if (max_part_size < res.h_part_sizes[i]) {
+      max_part_size = res.h_part_sizes[i];
+    }
   }
+  CHECK(shard_send_offset == static_cast<size_t>(fea_size));
 
   size_t trans_need_size =
       std::max(shard_recv_offset, static_cast<size_t>(fea_size));
@@ -2838,6 +2843,11 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::
                              stream);
   }
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
+  if (FLAGS_enable_tracker_all2all) {
+    size_t recv_size = h_local_part_offsets[node_size_];
+    heter_comm_kernel_->check_valid_values(5, recv_size,
+         (const char *)(cache.d_merged_push_vals), pull_type_size_, stream);
+  }
   // fill vals
   heter_comm_kernel_->scatter_vals(
       (const float *)(cache.d_merged_push_vals),  // in
@@ -2847,6 +2857,10 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::
       value_bytes,
       stream);
   CUDA_CHECK(cudaStreamSynchronize(stream));
+  if (FLAGS_enable_tracker_all2all) {
+    heter_comm_kernel_->check_valid_values(6, fea_size,
+        (const char *)(d_out_vals), pull_type_size_, stream);
+  }
 }
 template <typename KeyType,
           typename ValType,
