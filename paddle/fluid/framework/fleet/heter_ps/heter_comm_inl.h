@@ -3252,6 +3252,12 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
   // barrier wait all gpu aync memcpy data
   barrier_.wait();
 
+  if (FLAGS_enable_tracker_all2all) {
+    heter_comm_kernel_->check_valid_values(3, shard_recv_offset,
+        (const char *)(my_cache.d_merged_vals),
+        grad_type_size_, resource_->local_stream(gpu_id, 0));
+  }
+
   // all embedx merge
   size_t total_push_size = merge_grad(gpu_id,
                                       shard_recv_offset,
@@ -3259,6 +3265,12 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
                                       my_cache.d_merged_push_keys,
                                       my_cache.d_merged_vals,
                                       my_cache.d_merged_push_vals);
+
+  if (FLAGS_enable_tracker_all2all) {
+    heter_comm_kernel_->check_valid_values(4, total_push_size,
+        (const char *)(my_cache.d_merged_push_vals),
+        grad_type_size_, resource_->local_stream(gpu_id, 0));
+  }
 
   return total_push_size;
 }

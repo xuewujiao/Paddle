@@ -794,7 +794,7 @@ void HeterCommKernel::check_valid_values(
   CHECK((value_bytes % sizeof(float)) == 0);
   const int grid_size = (N - 1) / block_size_ + 1;
   const int num = int(value_bytes / sizeof(float));
-  printf("check_valid_values type=%d, N=%u, value_bytes=%u, num=%d\n", type, N, value_bytes, num);
+//  printf("check_valid_values type=%d, N=%u, value_bytes=%u, num=%d\n", type, N, value_bytes, num);
   check_valid_values_kernel<<<grid_size, block_size_, 0, stream>>>(
       type, N, input, value_bytes, num);
 }
