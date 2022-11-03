@@ -72,9 +72,9 @@ struct DynamicGradMerger {
   template <typename GPUAccessor>
   __device__ __forceinline__ void update_embedx(float* output,
                                                 const float* input,
-                                                size_t embedx_idx,
+                                                const int embedx_idx,
                                                 GPUAccessor& fv_accessor) {
-    if (embedx_idx < output[fv_accessor.common_push_value.MfDimIndex()]) {
+    if (embedx_idx < int(output[fv_accessor.common_push_value.MfDimIndex()])) {
       output[fv_accessor.common_push_value.EmbedxGIndex() + embedx_idx] =
           input[fv_accessor.common_push_value.EmbedxGIndex() + embedx_idx];
     }
@@ -83,9 +83,9 @@ struct DynamicGradMerger {
   template <typename GPUAccessor>
   __device__ __forceinline__ void merge_embedx(float* output,
                                                const float* input,
-                                               size_t embedx_idx,
+                                               const int embedx_idx,
                                                GPUAccessor& fv_accessor) {
-    if (embedx_idx < output[fv_accessor.common_push_value.MfDimIndex()]) {
+    if (embedx_idx < int(output[fv_accessor.common_push_value.MfDimIndex()])) {
       output[fv_accessor.common_push_value.EmbedxGIndex() + embedx_idx] +=
           input[fv_accessor.common_push_value.EmbedxGIndex() + embedx_idx];
     }

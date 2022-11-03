@@ -2371,6 +2371,8 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_all2all(
   scatter_inter_vals_by_copy(gpu_id, fea_num, loc.d_merged_vals, d_vals, pull_type_size_);
   // pull
   if (FLAGS_enable_tracker_all2all) {
+    heter_comm_kernel_->check_valid_values(fea_num,
+             (const char *)(d_vals), pull_type_size_, resource_->local_stream(gpu_id, 0));
     VLOG(0) << "pull gpu id=" << gpu_id << ", fea num=" << fea_num
             << ", inner=" << gather_inner_size << ", node=" << pull_size;
   }

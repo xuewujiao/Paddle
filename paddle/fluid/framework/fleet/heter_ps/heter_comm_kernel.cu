@@ -212,12 +212,10 @@ __global__ void kernel_check_valid_values(
     const float *val = (const float *)(input + i * value_bytes);
     for (int k = 0; k < float_num; ++k) {
       auto &c = val[k];
-      if (isnan(c) || isinf(c) || (c > 1e+20 || c < -(1e+20))) {
+      if (!(isnan(c) || isinf(c) || (int(c) > 1e+20 || int(c) < -(1e+20)))) {
         continue;
       }
-      printf("error id=%u, offset=%d, value=%f\n", i, k, c);
-      assert(false && "error values");
-      return;
+      PADDLE_ENFORCE(false, "error id=%u, offset=%d, value=%f\n", i, k, c);
     }
   }
 }
