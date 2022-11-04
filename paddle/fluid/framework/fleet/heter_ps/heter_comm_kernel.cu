@@ -187,21 +187,15 @@ __global__ void merge_gradients_embedx_kernel(const KeyType* d_keys,
 
   if (i < n) {
     size_t value_idx = i / grad_dim;
-    size_t field_idx = i % grad_dim;
-    uint32_t start = offset[value_idx];
-    uint32_t num = fea_num[value_idx];
-    int ori_index = index[start];
-    float* in = (float*)(input + size_t(ori_index) * grad_value_size);
-    float* out = (float*)(output + value_idx * grad_value_size);
-    merger.update_embedx(out, in, field_idx, gpu_accessor);
-    KeyType key = d_keys[value_idx];
-    if (key != 0) {
-      for (int j = 1; j < num; ++j) {
-        int ori_index = index[start + j];
-        float* in = (float*)(input + size_t(ori_index) * grad_value_size);
-        merger.merge_embedx(out, in, field_idx, gpu_accessor);
-      }
+    const uint32_t &start = offset[value_idx];
+    const uint32_t &num = fea_num[value_idx];
+    
+    double val = 0;
+    uint32_t off = gpu_accessor.common_push_value.EmbedxGIndex() + (i % grad_dim);
+    for (uint32_t j = 0; j < num; ++j) {
+      val += ((float*)(&input[size_t(index[start + j]) * grad_value_size]))[off];
     }
+    ((float*)(&output[value_idx * grad_value_size]))[off] = val;
   }
 }
 
