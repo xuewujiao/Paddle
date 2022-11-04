@@ -189,12 +189,11 @@ __global__ void PushMergeCopyAtomic(const size_t N,
         break;
       default:
         int embedx_idx = off - 3;
-        if (mf_dim < embedx_idx) {
-          return;
+        if (embedx_idx < mf_dim) {
+          paddle::platform::CudaAtomicAdd(
+              &cur[accessor.EmbedxGIndex() + embedx_idx],
+              *(ptr + off) * -1. * bs);
         }
-        paddle::platform::CudaAtomicAdd(
-            &cur[accessor.EmbedxGIndex() + embedx_idx],
-            *(ptr + off) * -1. * bs);
         break;
     }
   }
@@ -277,12 +276,12 @@ __global__ void PushMergeCopy(const size_t N,
         break;
       default:
         int embedx_idx = off - 3;
-        if (mf_dim < embedx_idx) {
+        if (embedx_idx < mf_dim) {
+          SUM_GRAD_VALUE
+          cur[accessor.EmbedxGIndex() + embedx_idx] = val * -1. * bs;
+        } else {
           cur[accessor.EmbedxGIndex() + embedx_idx] = 0.0;
-          return;
         }
-        SUM_GRAD_VALUE
-        cur[accessor.EmbedxGIndex() + embedx_idx] = val * -1. * bs;
         break;
     }
   }

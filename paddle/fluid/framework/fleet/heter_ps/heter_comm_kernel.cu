@@ -199,15 +199,22 @@ __global__ void merge_gradients_embedx_kernel(const KeyType* d_keys,
   }
 }
 
+template <typename KeyType>
 __global__ void check_valid_values_kernel(
-    const int type, const size_t N, const char *input, 
-    const size_t value_bytes, const int num, bool debug) {
+    const int type, const size_t N, const KeyType *keys, 
+    const char *input, const size_t value_bytes, 
+    const int num, bool debug) {
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < N) {
     const float *val = (const float *)(input + i * value_bytes);
-    if (debug && i <= 1) {
-      printf("type=%d, id=%lu, bytes=%lu, values=[%f,%f,%f,%f,%f,%f,%f,%f]\n", 
-          type, i, value_bytes, val[0], val[1], val[2], val[3], val[4], val[5], val[6], val[7]);
+    if (debug && (i == 0 || i == (N-1))) {
+      if (keys != nullptr) {
+        printf("type=%d, id=%lu, bytes=%lu, key=%lu, values=[%f,%f,%f,%f,%f,%f,%f,%f]\n", 
+              type, i, value_bytes, uint64_t(keys[i]), val[0], val[1], val[2], val[3], val[4], val[5], val[6], val[7]);
+      } else {
+        printf("type=%d, id=%lu, bytes=%lu, values=[%f,%f,%f,%f,%f,%f,%f,%f]\n", 
+              type, i, value_bytes, val[0], val[1], val[2], val[3], val[4], val[5], val[6], val[7]);
+      }
     }
     for (int k = 0; k < num; ++k) {
       auto &c = val[k];
@@ -783,10 +790,11 @@ void HeterCommKernel::scatter_vals(const float* d_shard_vals,
   scatter_dvals_by_unit_kernel<<<grid_size, block_size_, 0, stream>>>(
       d_vals, d_shard_vals, idx, N, val_size_float);
 }
-template <typename StreamType>
+template <typename KeyType, typename StreamType>
 void HeterCommKernel::check_valid_values(
                   const int &type,
                   const size_t &N,
+                  const KeyType *keys,
                   const char *input,
                   const size_t &value_bytes,
                   const StreamType& stream, bool debug) {
@@ -795,7 +803,7 @@ void HeterCommKernel::check_valid_values(
   const int num = int(value_bytes / sizeof(float));
 //  printf("check_valid_values type=%d, N=%u, value_bytes=%u, num=%d\n", type, N, value_bytes, num);
   check_valid_values_kernel<<<grid_size, block_size_, 0, stream>>>(
-      type, N, input, value_bytes, num, debug);
+      type, N, keys, input, value_bytes, num, debug);
 }
 
 template void HeterCommKernel::fill_idx<int, cudaStream_t>(
@@ -1192,9 +1200,17 @@ template void HeterCommKernel::scatter_vals<uint32_t, cudaStream_t>(
     long long len,
     size_t value_bytes,
     const cudaStream_t& stream);
-template void HeterCommKernel::check_valid_values<cudaStream_t>(
+template void HeterCommKernel::check_valid_values<long, cudaStream_t>(
     const int &type,
     const size_t &N,
+    const long *keys,
+    const char *input,
+    const size_t &value_bytes,
+    const cudaStream_t& stream, bool debug);
+template void HeterCommKernel::check_valid_values<uint64_t, cudaStream_t>(
+    const int &type,
+    const size_t &N,
+    const uint64_t *keys,
     const char *input,
     const size_t &value_bytes,
     const cudaStream_t& stream, bool debug);

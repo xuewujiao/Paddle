@@ -287,10 +287,11 @@ class HeterCommKernel {
                     long long len,
                     size_t value_bytes,
                     const StreamType& stream);
-  template <typename StreamType>
+  template <typename KeyType, typename StreamType>
   void check_valid_values(
                     const int &type,
                     const size_t &N,
+                    const KeyType *keys,
                     const char *input,
                     const size_t &value_bytes,
                     const StreamType& stream,
