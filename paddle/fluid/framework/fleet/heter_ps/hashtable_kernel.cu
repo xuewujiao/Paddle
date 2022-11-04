@@ -91,7 +91,6 @@ __global__ void dy_mf_search_kernel(Table* table,
                                     size_t pull_feature_value_size,
                                     GPUAccessor gpu_accessor) {
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  // return;
   if (i < len) {
     auto it = table->find(keys[i]);
     if (it != table->end()) {
@@ -99,9 +98,10 @@ __global__ void dy_mf_search_kernel(Table* table,
       float* cur = (float*)(vals + offset);
       float* input = it->second;
       gpu_accessor.PullValueFill(cur, input);
-    } else {
-      PADDLE_ENFORCE(false, "warning: pull miss key: %lu", keys[i]);
-    }
+    } 
+//    else {
+//      PADDLE_ENFORCE(false, "warning: pull miss key: %lu", keys[i]);
+//    }
   }
 }
 
