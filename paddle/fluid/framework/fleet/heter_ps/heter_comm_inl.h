@@ -2375,7 +2375,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_all2all(
   // pull
   if (FLAGS_enable_tracker_all2all) {
     heter_comm_kernel_->check_valid_values(0, fea_num,
-             (const char *)(d_vals), pull_type_size_, resource_->local_stream(gpu_id, 0));
+             (const char *)(d_vals), pull_type_size_, resource_->local_stream(gpu_id, 0), (gpu_id == 0));
     VLOG(0) << "pull gpu id=" << gpu_id << ", fea num=" << fea_num
             << ", inner=" << gather_inner_size << ", node=" << pull_size;
   }
@@ -3202,6 +3202,11 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
                                   KeyType *d_keys,
                                   void *d_push_vals) {
   auto stream = resource_->local_stream(gpu_id, 0);
+  if (FLAGS_enable_tracker_all2all) {
+     heter_comm_kernel_->check_valid_values(7, push_size,
+         (const char *)(d_push_vals),
+         grad_type_size_, resource_->local_stream(gpu_id, 0), (gpu_id == 0));
+  }
   auto &my_cache = storage_[gpu_id];
 
   my_cache.init_inner(push_size, device_num_);
@@ -3272,7 +3277,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
   if (FLAGS_enable_tracker_all2all) {
     heter_comm_kernel_->check_valid_values(3, shard_recv_offset,
         (const char *)(my_cache.d_merged_vals),
-        grad_type_size_, resource_->local_stream(gpu_id, 0));
+        grad_type_size_, resource_->local_stream(gpu_id, 0), (gpu_id == 0));
   }
 
   // all embedx merge
@@ -3286,7 +3291,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
   if (FLAGS_enable_tracker_all2all) {
     heter_comm_kernel_->check_valid_values(4, total_push_size,
         (const char *)(my_cache.d_merged_push_vals),
-        grad_type_size_, resource_->local_stream(gpu_id, 0));
+        grad_type_size_, resource_->local_stream(gpu_id, 0), (gpu_id == 0));
   }
 
   return total_push_size;

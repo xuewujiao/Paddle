@@ -293,7 +293,8 @@ class HeterCommKernel {
                     const size_t &N,
                     const char *input,
                     const size_t &value_bytes,
-                    const StreamType& stream);
+                    const StreamType& stream,
+                    bool debug = false);
 
  private:
   int block_size_{256};
