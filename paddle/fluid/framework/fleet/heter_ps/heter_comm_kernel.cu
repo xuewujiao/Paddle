@@ -199,39 +199,6 @@ __global__ void merge_gradients_embedx_kernel(const KeyType* d_keys,
   }
 }
 
-template <typename KeyType>
-__global__ void check_valid_values_kernel(
-    const int type, const size_t N, const KeyType *keys, 
-    const char *input, const size_t value_bytes, 
-    const int num, bool debug) {
-  const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < N) {
-    const float *val = (const float *)(input + i * value_bytes);
-    if (debug && (i == 0 || i == (N-1))) {
-      if (keys != nullptr) {
-        printf("type=%d, id=%lu, bytes=%lu, key=%lu, values=[%f,%f,%f,%f,%f,%f,%f,%f]\n", 
-              type, i, value_bytes, uint64_t(keys[i]), val[0], val[1], val[2], val[3], val[4], val[5], val[6], val[7]);
-      } else {
-        printf("type=%d, id=%lu, bytes=%lu, values=[%f,%f,%f,%f,%f,%f,%f,%f]\n", 
-              type, i, value_bytes, val[0], val[1], val[2], val[3], val[4], val[5], val[6], val[7]);
-      }
-    }
-    for (int k = 0; k < num; ++k) {
-      auto &c = val[k];
-      if (isnan(c)) {
-        PADDLE_ENFORCE(false, "nan type %d, id=%lu, offset=%d, float=%f\n", 
-            type, i, k, c);
-      } else if (isinf(c)) {
-        PADDLE_ENFORCE(false, "inf type %d, id=%lu, offset=%d, float=%f\n", 
-            type, i, k, c);
-      } else if (int(c) > 1e+30 || int(c) < -(1e+30)) {
-        PADDLE_ENFORCE(false, "err type %d, id=%lu, offset=%d, float=%f, int=%d\n", 
-            type, i, k, c, int(c));
-      }
-    }
-  }
-}
-
 __global__ void split_segments_kernel(const uint32_t* d_fea_num_info,
                                       size_t n,
                                       uint32_t* d_segments,
@@ -790,6 +757,53 @@ void HeterCommKernel::scatter_vals(const float* d_shard_vals,
   scatter_dvals_by_unit_kernel<<<grid_size, block_size_, 0, stream>>>(
       d_vals, d_shard_vals, idx, N, val_size_float);
 }
+template <typename KeyType>
+__global__ void check_valid_values_kernel(
+    const int type, const size_t N, const KeyType *keys, 
+    const char *input, const size_t value_bytes, 
+    const int num, bool debug) {
+  const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < N) {
+    const float *val = (const float *)(input + i * value_bytes);
+    if (debug && (i == 0 || i == (N-1))) {
+      if (keys != nullptr) {
+        printf("type=%d, id=%lu, bytes=%lu, key=%lu, values=[%f,%f,%f,%f,%f,%f,%f,%f]\n", 
+              type, i, value_bytes, uint64_t(keys[i]), val[0], val[1], val[2], val[3], val[4], val[5], val[6], val[7]);
+      } else {
+        printf("type=%d, id=%lu, bytes=%lu, values=[%f,%f,%f,%f,%f,%f,%f,%f]\n", 
+              type, i, value_bytes, val[0], val[1], val[2], val[3], val[4], val[5], val[6], val[7]);
+      }
+    }
+    for (int k = 0; k < num; ++k) {
+      auto &c = val[k];
+      if (isnan(c)) {
+        if (keys != nullptr) {
+          PADDLE_ENFORCE(false, "nan type %d, id=%lu, offset=%d, float=%f, key=%lu, values=[%f,%f,%f,%f,%f,%f,%f,%f]\n", 
+            type, i, k, c, uint64_t(keys[i]), val[0], val[1], val[2], val[3], val[4], val[5], val[6], val[7]);
+        } else {
+          PADDLE_ENFORCE(false, "nan type %d, id=%lu, offset=%d, float=%f\n", 
+            type, i, k, c);
+        }
+      } else if (isinf(c)) {
+        if (keys != nullptr) {
+          PADDLE_ENFORCE(false, "inf type %d, id=%lu, offset=%d, float=%f, key=%lu, values=[%f,%f,%f,%f,%f,%f,%f,%f]\n", 
+            type, i, k, c, uint64_t(keys[i]), val[0], val[1], val[2], val[3], val[4], val[5], val[6], val[7]);
+        } else {
+          PADDLE_ENFORCE(false, "inf type %d, id=%lu, offset=%d, float=%f\n", 
+            type, i, k, c);
+        }
+      } else if (int(c) > 1e+30 || int(c) < -(1e+30)) {
+        if (keys != nullptr) {
+          PADDLE_ENFORCE(false, "err type %d, id=%lu, offset=%d, float=%f, key=%lu, values=[%f,%f,%f,%f,%f,%f,%f,%f]\n", 
+            type, i, k, c, uint64_t(keys[i]), val[0], val[1], val[2], val[3], val[4], val[5], val[6], val[7]);
+        } else {
+          PADDLE_ENFORCE(false, "err type %d, id=%lu, offset=%d, float=%f, int=%d\n", 
+            type, i, k, c, int(c));
+        }
+      }
+    }
+  }
+}
 template <typename KeyType, typename StreamType>
 void HeterCommKernel::check_valid_values(
                   const int &type,
@@ -801,7 +815,6 @@ void HeterCommKernel::check_valid_values(
   CHECK((value_bytes % sizeof(float)) == 0);
   const int grid_size = (N - 1) / block_size_ + 1;
   const int num = int(value_bytes / sizeof(float));
-//  printf("check_valid_values type=%d, N=%u, value_bytes=%u, num=%d\n", type, N, value_bytes, num);
   check_valid_values_kernel<<<grid_size, block_size_, 0, stream>>>(
       type, N, keys, input, value_bytes, num, debug);
 }
