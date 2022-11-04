@@ -806,21 +806,21 @@ void HeterCommKernel::check_valid_values(
       type, N, keys, input, value_bytes, num, debug);
 }
 
-template <typename GPUPushAccessor>
+template <typename GPUAccessor>
 __global__ void scale_grad_kernel(const size_t N,
                                   char* grads,
                                   const size_t value_bytes,
                                   const size_t grad_dim,
-                                  GPUPushAccessor& accessor) {
+                                  GPUAccessor& accessor) {
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < N) {
     size_t idx = i / grad_dim;
-    size_t grad_id = i % grad_dim;
+    size_t field_id = i % grad_dim;
     
     float *vals = (float *)(&grads[idx * value_bytes]);
-    float &show = vals[accessor.ShowIndex()];
+    float &show = vals[accessor.common_push_value.ShowIndex()];
     if (show > 0.0) {
-      vals[grad_id + accessor.EmbedGIndex()] /= show;
+      vals[accessor.common_push_value.EmbedGIndex() + field_id] /= show;
     }
   }
 }
@@ -829,14 +829,14 @@ template<typename StreamType,typename GPUAccessor>
 void HeterCommKernel::scale_grad(const size_t &len,
                   char *grads,
                   const size_t &value_bytes,
-                  const size_t &grad_dim,
+                  const size_t &max_mif_dim,
                   const StreamType& stream,
-                  const GPUAccessor &gpu_accessor) {
-  const size_t grad_dim = (grad_dim + 1);
-  const size_t N = len * embed_num;
+                  GPUAccessor &gpu_accessor) {
+  const size_t grad_dim = (max_mif_dim + 1);
+  const size_t N = len * grad_dim;
   const int grid_size = (N - 1) / block_size_ + 1;
   scale_grad_kernel<<<grid_size, block_size_, 0, stream>>>(
-      N, grads, value_bytes, grad_dim, gpu_accessor.common_push_value);
+      N, grads, value_bytes, grad_dim, gpu_accessor);
 }
 
 template void HeterCommKernel::fill_idx<int, cudaStream_t>(
@@ -1253,7 +1253,7 @@ template void HeterCommKernel::scale_grad<cudaStream_t, CommonFeatureValueAccess
     const size_t &value_bytes,
     const size_t &grad_dim,
     const cudaStream_t& stream,
-    const CommonFeatureValueAccessor &gpu_accessor)
+    CommonFeatureValueAccessor &gpu_accessor);
 #endif
 
 }  // namespace framework

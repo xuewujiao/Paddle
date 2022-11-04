@@ -294,7 +294,7 @@ class HeterCommKernel {
                   const size_t &value_bytes,
                   const size_t &grad_dim,
                   const StreamType& stream,
-                  const GPUAccessor &gpu_accessor);
+                  GPUAccessor &gpu_accessor);
 
   template <typename KeyType, typename StreamType>
   void check_valid_values(
