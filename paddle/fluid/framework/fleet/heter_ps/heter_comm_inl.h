@@ -3112,7 +3112,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_all2all(
     return;
   }
   auto &my_cache = storage_[gpu_id];
-  auto &stream = resource_->local_stream(gpu_id, 0);
+  auto stream = resource_->local_stream(gpu_id, 0);
   // scale grad
   heter_comm_kernel_->scale_grad(len, (char *)d_grads,
       grad_type_size_, max_mf_dim_, stream, gpu_accessor_);
