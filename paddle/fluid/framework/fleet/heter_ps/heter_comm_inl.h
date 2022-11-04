@@ -1628,7 +1628,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse(
   if (FLAGS_enable_tracker_all2all) {
     heter_comm_kernel_->check_valid_values(10, len,
         d_keys, (const char *)(d_grads),
-        grad_type_size_, resource_->local_stream(gpu_id, 0), (gpu_id == 0));
+        grad_type_size_, resource_->local_stream(dev_num, 0), (dev_num == 0));
   }
   if (multi_node_) {
     push_sparse_all2all(dev_num, d_keys, d_grads, len, sgd);
@@ -2857,7 +2857,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::
   if (FLAGS_enable_tracker_all2all) {
     size_t recv_size = h_local_part_offsets[node_size_];
     heter_comm_kernel_->check_valid_values(1, recv_size,
-         nullptr, (const char *)(cache.d_merged_push_vals), pull_type_size_, stream);
+         (const KeyType*)nullptr, (const char *)(cache.d_merged_push_vals), pull_type_size_, stream);
   }
   // fill vals
   heter_comm_kernel_->scatter_vals(
@@ -2870,7 +2870,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::
   CUDA_CHECK(cudaStreamSynchronize(stream));
   if (FLAGS_enable_tracker_all2all) {
     heter_comm_kernel_->check_valid_values(2, fea_size,
-        nullptr, (const char *)(d_out_vals), pull_type_size_, stream);
+        (const KeyType*)nullptr, (const char *)(d_out_vals), pull_type_size_, stream);
   }
 }
 template <typename KeyType,
