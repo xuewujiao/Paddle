@@ -236,8 +236,10 @@ class PSGPUWrapper {
       if (gloo->Size() > 1) {
         multi_node_ = 1;
         resource_->set_multi_node(multi_node_);
+        optimizer_config_.multi_node = true;
         VLOG(0) << "init multi node gpu server";
       } else {
+        optimizer_config_.multi_node = false;
         VLOG(0) << "init single node gpu server";
       }
 #else

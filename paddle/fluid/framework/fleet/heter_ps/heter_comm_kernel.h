@@ -287,6 +287,15 @@ class HeterCommKernel {
                     long long len,
                     size_t value_bytes,
                     const StreamType& stream);
+  // scale grad values
+  template<typename StreamType,typename GPUAccessor>
+  void scale_grad(const size_t &len,
+                  char *grads,
+                  const size_t &value_bytes,
+                  const size_t &grad_dim,
+                  const StreamType& stream,
+                  const GPUAccessor &gpu_accessor);
+
   template <typename KeyType, typename StreamType>
   void check_valid_values(
                     const int &type,
@@ -296,7 +305,6 @@ class HeterCommKernel {
                     const size_t &value_bytes,
                     const StreamType& stream,
                     bool debug = false);
-
  private:
   int block_size_{256};
 };

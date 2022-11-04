@@ -3112,6 +3112,10 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_all2all(
     return;
   }
   auto &my_cache = storage_[gpu_id];
+  // scale grad
+  heter_comm_kernel_->scale_grad(len, (char *)d_grads,
+      grad_type_size_, max_mf_dim_, stream, gpu_accessor_);
+
   size_t inter_push_len = gather_inter_gradient_by_copy(
       gpu_id, len, d_keys, reinterpret_cast<void *>(d_grads));
   size_t node_push_len =
