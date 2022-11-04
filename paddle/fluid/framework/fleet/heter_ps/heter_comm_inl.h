@@ -3112,6 +3112,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_all2all(
     return;
   }
   auto &my_cache = storage_[gpu_id];
+  auto &stream = resource_->local_stream(gpu_id, 0);
   // scale grad
   heter_comm_kernel_->scale_grad(len, (char *)d_grads,
       grad_type_size_, max_mf_dim_, stream, gpu_accessor_);
@@ -3126,7 +3127,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_all2all(
   if (FLAGS_enable_tracker_all2all) {
     heter_comm_kernel_->check_valid_values(13, node_push_len,
         my_cache.d_merged_push_keys, (const char *)(my_cache.d_merged_push_vals),
-        grad_type_size_, resource_->local_stream(gpu_id, 0));
+        grad_type_size_, stream);
   }
   // all embedx merge
   size_t uniq_len = merge_grad(gpu_id,
@@ -3138,7 +3139,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_all2all(
   if (FLAGS_enable_tracker_all2all) {
     heter_comm_kernel_->check_valid_values(14, uniq_len,
           my_cache.d_merged_keys, (const char *)(my_cache.d_merged_vals),
-          grad_type_size_, resource_->local_stream(gpu_id, 0));
+          grad_type_size_, stream);
   }
   // update all grad
   update_one_table(gpu_id,
