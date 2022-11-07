@@ -20,6 +20,7 @@ limitations under the License. */
 #include <iostream>
 #ifdef PADDLE_WITH_CUDA
 #include "paddle/fluid/framework/fleet/heter_ps/cudf/managed.cuh"
+#include "paddle/fluid/framework/fleet/heter_ps/gpu_graph_utils.h"
 
 namespace paddle {
 namespace framework {
@@ -60,9 +61,9 @@ class HBMMemoryPool : public managed {
     block_size_ = mem_pool->block_size();
     VLOG(3) << "hbm memory pool with capacity" << capacity_
             << " bs: " << block_size_;
-    cudaMalloc(&mem_, block_size_ * capacity_);
-    cudaMemcpy(mem_, mem_pool->mem(), mem_pool->byte_size(),
-               cudaMemcpyHostToDevice);
+    CUDA_CHECK(cudaMalloc(&mem_, block_size_ * capacity_));
+    CUDA_CHECK(cudaMemcpy(
+        mem_, mem_pool->mem(), mem_pool->byte_size(), cudaMemcpyHostToDevice));
   }
 
   ~HBMMemoryPool() {
@@ -78,22 +79,8 @@ class HBMMemoryPool : public managed {
     cudaFree(mem_);
     mem_ = NULL;
     capacity_ = capacity;
-    cudaMalloc(&mem_, (block_size_ * capacity / 8 + 1) * 8);
-    cudaMemset(mem_, 0, block_size_ * capacity);
-  }
-
-  friend std::ostream& operator<<(std::ostream& out, HBMMemoryPool& p) {
-    for (size_t k = 0; k < 5; k++) {
-      auto x = (FeatureValue*)(p.mem() + k * p.capacity());
-      out << "show: " << x->show << " clk: " << x->clk << " slot: " << x->slot
-          << " lr: " << x->lr << " mf_dim: " << x->mf_size
-          << " mf_size: " << x->mf_size << " mf:";
-      for (int i = 0; i < x->mf_size + 1; ++i) {
-        out << " " << x->mf[i];
-      }
-      out << "\n";
-    }
-    return out;
+    CUDA_CHECK(cudaMalloc(&mem_, (block_size_ * capacity / 8 + 1) * 8));
+    CUDA_CHECK(cudaMemset(mem_, 0, block_size_ * capacity));
   }
 
   char* mem() { return mem_; }
@@ -107,6 +94,53 @@ class HBMMemoryPool : public managed {
   char* mem_ = NULL;
   size_t capacity_;
   size_t block_size_;
+};
+
+class HBMMemoryPoolFix : public managed {
+ public:
+  HBMMemoryPoolFix() {
+    capacity_ = 0;
+    size_ = 0 ;
+    block_size_ = 0;
+    max_byte_capacity_ = 0;
+  }
+
+  ~HBMMemoryPoolFix() {
+    VLOG(3) << "delete hbm memory pool";
+    cudaFree(mem_);
+  }
+
+  size_t block_size() { return block_size_; }
+
+  void clear(void) { cudaMemset(mem_, 0, block_size_ * capacity_); }
+
+  void reset(size_t capacity, size_t block_size) {
+    if (max_byte_capacity_ < capacity * block_size) {
+      if (mem_ != NULL) {
+        cudaFree(mem_);
+      }
+      max_byte_capacity_ = (block_size * capacity / 8 + 1) * 8;
+      CUDA_CHECK(cudaMalloc(&mem_, max_byte_capacity_));
+    }
+    size_ = capacity;
+    block_size_ = block_size;
+    capacity_ = max_byte_capacity_ / block_size;
+  }
+
+  char* mem() { return mem_; }
+
+  size_t capacity() { return capacity_; }
+  size_t size() { return size_; }
+  __forceinline__ __device__ void* mem_address(const uint32_t& idx) {
+    return (void*)&mem_[(idx)*block_size_];
+  }
+
+ private:
+  char* mem_ = NULL;
+  size_t capacity_;
+  size_t size_;
+  size_t block_size_;
+  size_t max_byte_capacity_;
 };
 
 }  // end namespace framework
