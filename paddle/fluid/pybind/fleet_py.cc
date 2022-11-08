@@ -392,6 +392,8 @@ void BindGraphGpuWrapper(py::module* m) {
       .def("get_all_id",
            py::overload_cast<int, int, std::vector<std::vector<uint64_t>>*>(
                &GraphGpuWrapper::get_all_id))
+      .def("init_metapath", &GraphGpuWrapper::init_metapath)
+      .def("clear_metapath_state", &GraphGpuWrapper::clear_metapath_state)
       .def("load_next_partition", &GraphGpuWrapper::load_next_partition)
       .def("make_partitions", &GraphGpuWrapper::make_partitions)
       .def("make_complementary_graph",

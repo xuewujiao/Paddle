@@ -925,9 +925,6 @@ class GraphDataGenerator {
   int FillGraphSlotFeature(int total_instance, bool gpu_graph_training);
   int MakeInsPair();
   int GetPathNum() { return total_row_; }
-  void ResetPathNum() {total_row_ = 0; }
-  void ResetEpochFinish() {epoch_finish_ = false; }
-  void ClearSampleState();
   void SetDeviceKeys(std::vector<uint64_t>* device_keys, int type) {
     // type_to_index_[type] = h_device_keys_.size();
     // h_device_keys_.push_back(device_keys);
@@ -936,7 +933,6 @@ class GraphDataGenerator {
                   unsigned long len,
                   std::shared_ptr<phi::Allocation> d_uniq_node_num);
   std::vector<uint64_t>& GetHostVec() { return host_vec_; }
-  bool get_epoch_finish() {return epoch_finish_; }
   void clear_gpu_mem();
 
  protected:
@@ -961,6 +957,7 @@ class GraphDataGenerator {
   std::vector<size_t> offset_;
   std::shared_ptr<phi::Allocation> d_prefix_sum_;
   std::vector<std::shared_ptr<phi::Allocation>> d_device_keys_;
+  std::shared_ptr<phi::Allocation> d_train_metapath_keys_;
 
   std::shared_ptr<phi::Allocation> d_walk_;
   std::shared_ptr<phi::Allocation> d_feature_list_;
@@ -996,9 +993,9 @@ class GraphDataGenerator {
   int shuffle_seed_;
   int debug_mode_;
   bool gpu_graph_training_;
-  bool epoch_finish_;
   std::vector<uint64_t> host_vec_;
   std::vector<uint64_t> h_device_keys_len_;
+  uint64_t h_train_metapath_keys_len_;
   uint64_t train_table_cap_;
   uint64_t infer_table_cap_;
   int total_row_;
@@ -1086,11 +1083,6 @@ class DataFeed {
     gpu_graph_data_generator_.clear_gpu_mem();
 #endif
   }
-  virtual bool get_epoch_finish() {
-#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
-    return gpu_graph_data_generator_.get_epoch_finish();
-#endif
-  }
 
   virtual void SetGpuGraphMode(int gpu_graph_mode) {
     gpu_graph_mode_ = gpu_graph_mode;
@@ -1115,24 +1107,7 @@ class DataFeed {
     return 0;
 #endif
   }
-  virtual void ResetPathNum() {
-#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
-    gpu_graph_data_generator_.ResetPathNum();
-#endif
-  }
   
-  virtual void ClearSampleState() {
-#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
-    gpu_graph_data_generator_.ClearSampleState();
-#endif
-  }
-
-  virtual void ResetEpochFinish() {
-#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
-    gpu_graph_data_generator_.ResetEpochFinish();
-#endif
-}
-
   virtual bool IsTrainMode() { return train_mode_; }
   virtual void LoadIntoMemory() {
     PADDLE_THROW(platform::errors::Unimplemented(

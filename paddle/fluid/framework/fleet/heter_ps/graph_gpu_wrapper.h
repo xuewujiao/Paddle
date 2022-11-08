@@ -16,6 +16,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <algorithm>
 
 #include "paddle/fluid/distributed/ps/table/common_graph_table.h"
 #include "paddle/fluid/framework/fleet/heter_ps/gpu_graph_node.h"
@@ -130,6 +131,10 @@ class GraphGpuWrapper {
                            int slot_num,
                            int* d_slot_feature_num_map,
                            int fea_num_per_node);
+  void init_metapath(std::string cur_metapath,
+                     int sub_metapath_index,
+                     int sub_metapath_len);
+  void clear_metapath_state();
 
   void release_graph();
   void release_graph_edge();
@@ -158,14 +163,22 @@ class GraphGpuWrapper {
   std::vector<std::vector<int>> meta_path_;
 
   std::vector<std::set<int>> finish_node_type_;
-  std::vector<std::unordered_map<int, size_t>> node_type_start_;
+  std::vector<size_t> node_type_start_;
   std::vector<std::unordered_map<int, size_t>> global_infer_node_type_start_;
   std::vector<size_t> infer_cursor_;
   std::vector<size_t> cursor_;
+  std::vector<std::shared_ptr<phi::Allocation>> d_graph_train_total_keys_;
+  std::vector<size_t> h_graph_train_keys_len_;
   std::vector<std::vector<std::shared_ptr<phi::Allocation>>>
       d_graph_all_type_total_keys_;
   std::vector<std::vector<uint64_t>> h_graph_all_type_keys_len_;
   std::string slot_feature_separator_ = std::string(" ");
+
+  std::string cur_metapath_;
+  std::vector<int> cur_parse_metapath_;
+  int sub_metapath_index_;
+  int sub_metapath_len_;
+
 };
 #endif
 }  // namespace framework

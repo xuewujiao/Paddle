@@ -74,11 +74,11 @@ void GraphGpuWrapper::init_conf(const std::string &first_node_type,
       }
     }
     finish_node_type_.resize(max_dev_id + 1);
-    node_type_start_.resize(max_dev_id + 1);
     global_infer_node_type_start_.resize(max_dev_id + 1);
     for (size_t i = 0; i < device_id_mapping.size(); i++) {
       int dev_id = device_id_mapping[i];
-      auto &node_type_start = node_type_start_[i];
+      //auto &node_type_start = node_type_start_[i];
+      //node_type_start = 0;
       auto &infer_node_type_start = global_infer_node_type_start_[i];
       auto &finish_node_type = finish_node_type_[i];
       finish_node_type.clear();
@@ -86,9 +86,10 @@ void GraphGpuWrapper::init_conf(const std::string &first_node_type,
       for (size_t idx = 0; idx < feature_to_id.size(); idx++) {
         infer_node_type_start[idx] = 0;
       }
+
       for (auto &type : node_types) {
         auto iter = feature_to_id.find(type);
-        node_type_start[iter->second] = 0;
+        //node_type_start[iter->second] = 0;
         infer_node_type_start[iter->second] = 0;
       }
       infer_cursor_.push_back(0);
@@ -105,12 +106,16 @@ void GraphGpuWrapper::init_type_keys() {
   auto &graph_all_type_total_keys = get_graph_type_keys();
   auto &type_to_index = get_graph_type_to_index();
   std::vector<std::vector<uint64_t>> tmp_keys;
+  std::vector<std::vector<uint64_t>> calc_keys;
+  calc_keys.resize(thread_num);
   tmp_keys.resize(thread_num);
+  int first_node_idx_;
   d_graph_all_type_total_keys_.resize(graph_all_type_total_keys.size());
   h_graph_all_type_keys_len_.resize(graph_all_type_total_keys.size());
   for (size_t f_idx = 0; f_idx < graph_all_type_total_keys.size(); f_idx++) {
     for (size_t j = 0; j < tmp_keys.size(); j++) {
       tmp_keys[j].clear();
+      calc_keys[j].clear();
     }
     d_graph_all_type_total_keys_[f_idx].resize(thread_num);
     auto &type_total_key = graph_all_type_total_keys[f_idx];
@@ -130,7 +135,7 @@ void GraphGpuWrapper::init_type_keys() {
       auto place = platform::CUDAPlace(gpuid);
       platform::CUDADeviceGuard guard(gpuid);
       d_graph_all_type_total_keys_[f_idx][j] =
-          memory::AllocShared(place, tmp_keys[j].size() * sizeof(uint64_t));
+        memory::AllocShared(place, tmp_keys[j].size() * sizeof(uint64_t));
       cudaMemcpyAsync(d_graph_all_type_total_keys_[f_idx][j]->ptr(),
                       tmp_keys[j].data(),
                       sizeof(uint64_t) * tmp_keys[j].size(),
@@ -141,6 +146,122 @@ void GraphGpuWrapper::init_type_keys() {
   for (int i = 0; i < thread_num; i++) {
     auto stream = get_local_stream(i);
     cudaStreamSynchronize(stream);
+  }
+}
+
+void GraphGpuWrapper::init_metapath(std::string cur_metapath,
+                                     int sub_metapath_index,
+                                     int sub_metapath_len) {
+  cur_metapath_ = cur_metapath;
+  sub_metapath_index_ = sub_metapath_index;
+  sub_metapath_len_ = sub_metapath_len;
+
+  auto nodes = paddle::string::split_string<std::string>(cur_metapath_, "-");
+  cur_parse_metapath_.clear();
+  for (auto &node : nodes) {
+    VLOG(2) << "node: " << node << " , in metapath: " << cur_metapath_;
+    auto iter = edge_to_id.find(node);
+    PADDLE_ENFORCE_NE(iter,
+                       edge_to_id.end(),
+                       platform::errors::NotFound(
+                         "(%s) is not found in edge_to_id.", node));
+    cur_parse_metapath_.push_back(iter->second);
+  }
+  size_t thread_num = device_id_mapping.size();
+  node_type_start_.resize(thread_num);
+  for (size_t i = 0; i < thread_num; i++) {
+    node_type_start_[i] = 0;
+  }
+
+  auto &graph_all_type_total_keys = get_graph_type_keys();
+  auto &type_to_index = get_graph_type_to_index();
+  std::vector<std::vector<uint64_t>> tmp_keys;
+  std::vector<std::vector<uint64_t>> calc_keys;
+  calc_keys.resize(thread_num);
+  tmp_keys.resize(thread_num);
+  int first_node_idx_;
+  std::string first_node_ = paddle::string::split_string<std::string>(cur_metapath_, "2")[0];
+  auto it = feature_to_id.find(first_node_);
+  first_node_idx_ = it->second;
+  d_graph_train_total_keys_.resize(thread_num);
+  h_graph_train_keys_len_.resize(thread_num);
+
+  for (size_t f_idx = 0; f_idx < graph_all_type_total_keys.size(); f_idx++) {
+    for (size_t j = 0; j < tmp_keys.size(); j++) {
+      tmp_keys[j].clear();
+      calc_keys[j].clear();
+    }
+    VLOG(2) << "gpu graph training true";
+    //if ((int)f_idx != first_node_idx_) {
+    //if (type_to_index[f_idx] != first_node_idx_) {
+    if (type_to_index[first_node_idx_] != f_idx) {
+      continue;
+    } else {
+      auto &type_total_key = graph_all_type_total_keys[f_idx];
+      VLOG(2) << "first node type:" << first_node_idx_ << ", node start size:" << type_total_key.size() << ", f_idx:" << f_idx <<  ",  type to index:" << type_to_index[first_node_idx_];
+      VLOG(2) << "sub metapaht index: " << sub_metapath_index_ << ", sub metapath len: " << sub_metapath_len_;
+      //for (size_t j = 0; j < type_total_key.size(); j++) {
+      //  if (j % sub_metapath_len_ == sub_metapath_index_) {
+      //    uint64_t shard = type_total_key[j] % thread_num;
+      //    tmp_keys[shard].push_back(type_total_key[j]);
+      //  }
+      //}
+      for (size_t j = 0; j < type_total_key.size(); j++) {
+        uint64_t shard = type_total_key[j] % thread_num;
+        calc_keys[shard].push_back(type_total_key[j]);
+        tmp_keys[shard].push_back(type_total_key[j]);
+      }
+
+/**
+      size_t batchsize = 80000;
+      size_t all_path_len = batchsize * sub_metapath_len_;
+      for (size_t j = 0; j < calc_keys.size(); j++) {
+        for (size_t k = 0; k < calc_keys[j].size(); k += all_path_len) {
+          for (size_t m = k; m < std::min(k + all_path_len, calc_keys[j].size()); m++) {
+            if (m >= (k + sub_metapath_index_ * batchsize) && m < (k + (sub_metapath_index_ + 1) * batchsize)) {
+              tmp_keys[j].push_back(calc_keys[j][m]);
+            }
+          }
+        }
+      }
+**/
+
+      for (size_t j = 0; j < thread_num; j++) {
+        h_graph_train_keys_len_[j] = tmp_keys[j].size();
+        VLOG(2) << j << " th card, graph train keys len: " << tmp_keys[j].size();
+        VLOG(2) << j << " th card, calc keys len: " << calc_keys[j].size();
+        VLOG(2) << j << " th, wraaper key len: " << h_graph_train_keys_len_[j];
+      }
+      for (size_t j = 0; j < thread_num; j++) {
+        auto stream = get_local_stream(j);
+        int gpuid = device_id_mapping[j];
+        auto place = platform::CUDAPlace(gpuid);
+        platform::CUDADeviceGuard guard(gpuid);
+        d_graph_train_total_keys_[j] =
+           memory::AllocShared(place, tmp_keys[j].size() * sizeof(uint64_t));
+        cudaMemcpyAsync(d_graph_train_total_keys_[j]->ptr(),
+                        tmp_keys[j].data(),
+                        sizeof(uint64_t) * tmp_keys[j].size(),
+                        cudaMemcpyHostToDevice,
+                        stream);
+      }
+    }
+  }
+}
+
+void GraphGpuWrapper::clear_metapath_state() {
+  size_t thread_num = device_id_mapping.size();
+  for (size_t j = 0; j < thread_num; j++) {
+    node_type_start_[j] = 0;
+    h_graph_train_keys_len_[j] = 0;
+    d_graph_train_total_keys_[j].reset();
+    for (size_t k = 0; k < cur_parse_metapath_.size(); k++) {
+      ((GpuPsGraphTable *)graph_table)->clear_graph_info(j, cur_parse_metapath_[k]);
+    }
+  }
+  for (size_t j = 0; j < cur_parse_metapath_.size(); j++) {
+    ((GpuPsGraphTable *)graph_table)
+        ->cpu_graph_table_->clear_graph(cur_parse_metapath_[j]);
   }
 }
 
@@ -382,6 +503,9 @@ void GraphGpuWrapper::upload_batch(int type,
                                    int slice_num,
                                    const std::string &edge_type) {
   VLOG(0) << "begin upload edge, type[" << edge_type << "]";
+  auto iter = edge_to_id.find(edge_type);
+  idx = iter->second;
+  VLOG(0) << "cur edge: " << edge_type << ",idx: " << idx;
   std::vector<std::vector<uint64_t>> ids;
   ((GpuPsGraphTable *)graph_table)
       ->cpu_graph_table_->get_all_id(type, idx, slice_num, &ids);

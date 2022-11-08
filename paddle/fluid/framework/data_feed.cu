@@ -953,16 +953,6 @@ int GraphDataGenerator::FillInferBuf() {
   return 0;
 }
 
-void GraphDataGenerator::ClearSampleState() {
-  auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
-  auto &finish_node_type = gpu_graph_ptr->finish_node_type_[gpuid_];
-  auto &node_type_start = gpu_graph_ptr->node_type_start_[gpuid_];
-  finish_node_type.clear();
-  for (auto iter = node_type_start.begin(); iter != node_type_start.end(); iter++) {
-    iter->second = 0;
-  }
-}
-
 int GraphDataGenerator::FillWalkBuf() {
   platform::CUDADeviceGuard guard(gpuid_);
   size_t once_max_sample_keynum = walk_degree_ * once_sample_startid_len_;
@@ -993,47 +983,34 @@ int GraphDataGenerator::FillWalkBuf() {
 
   // 获取全局采样状态
   auto &first_node_type = gpu_graph_ptr->first_node_type_;
+  auto &cur_metapath = gpu_graph_ptr->cur_metapath_;
   auto &meta_path = gpu_graph_ptr->meta_path_;
+  auto &path = gpu_graph_ptr->cur_parse_metapath_;
   auto &node_type_start = gpu_graph_ptr->node_type_start_[gpuid_];
   auto &finish_node_type = gpu_graph_ptr->finish_node_type_[gpuid_];
   auto &type_to_index = gpu_graph_ptr->get_graph_type_to_index();
-  auto &cursor = gpu_graph_ptr->cursor_[thread_id_];
   size_t node_type_len = first_node_type.size();
+  std::string first_node = paddle::string::split_string<std::string>(cur_metapath, "2")[0];
+  auto it = gpu_graph_ptr->feature_to_id.find(first_node);
+  auto node_type = it->second;
+
   int remain_size =
       buf_size_ - walk_degree_ * once_sample_startid_len_ * walk_len_;
   int total_samples = 0;
 
   while (i <= remain_size) {
-    int cur_node_idx = cursor % node_type_len;
-    int node_type = first_node_type[cur_node_idx];
-    auto &path = meta_path[cur_node_idx];
-    size_t start = node_type_start[node_type];
-    VLOG(2) << "cur_node_idx = " << cur_node_idx
-            << " meta_path.size = " << meta_path.size();
-    // auto node_query_result = gpu_graph_ptr->query_node_list(
-    //     gpuid_, node_type, start, once_sample_startid_len_);
-
-    // int tmp_len = node_query_result.actual_sample_size;
-    VLOG(2) << "choose start type: " << node_type;
-    int type_index = type_to_index[node_type];
-    size_t device_key_size = h_device_keys_len_[type_index];
+    size_t start = node_type_start;
+    size_t device_key_size = h_train_metapath_keys_len_;
     VLOG(2) << "type: " << node_type << " size: " << device_key_size
             << " start: " << start;
     uint64_t *d_type_keys =
-        reinterpret_cast<uint64_t *>(d_device_keys_[type_index]->ptr());
+        reinterpret_cast<uint64_t *>(d_train_metapath_keys_->ptr());
     int tmp_len = start + once_sample_startid_len_ > device_key_size
                       ? device_key_size - start
                       : once_sample_startid_len_;
     bool update = true;
     if (tmp_len == 0) {
-      finish_node_type.insert(node_type);
-      if (finish_node_type.size() == node_type_start.size()) {
-        cursor = 0;
-        epoch_finish_ = true;
-        break;
-      }
-      cursor += 1;
-      continue;
+      break;
     }
 
     VLOG(2) << "gpuid = " << gpuid_ << " path[0] = " << path[0];
@@ -1045,6 +1022,7 @@ int GraphDataGenerator::FillWalkBuf() {
                  (uint64_t)(d_type_keys + start),
                  walk_degree_,
                  tmp_len);
+    VLOG(2) << "end initlize sample query";
     auto sample_res = gpu_graph_ptr->graph_neighbor_sample_v3(q, false);
 
     int step = 1;
@@ -1052,12 +1030,9 @@ int GraphDataGenerator::FillWalkBuf() {
     jump_rows_ = sample_res.total_sample_size;
     total_samples += sample_res.total_sample_size;
     VLOG(2) << "i = " << i << " start = " << start << " tmp_len = " << tmp_len
-            << " cursor = " << node_type << " cur_node_idx = " << cur_node_idx
-            << " jump row: " << jump_rows_;
-    VLOG(2) << "jump_row: " << jump_rows_;
+            << "jump row: " << jump_rows_;
     if (jump_rows_ == 0) {
-      node_type_start[node_type] = tmp_len + start;
-      cursor += 1;
+      node_type_start = tmp_len + start;
       continue;
     }
 
@@ -1142,10 +1117,9 @@ int GraphDataGenerator::FillWalkBuf() {
     }
     // 此时更新全局采样状态
     if (update == true) {
-      node_type_start[node_type] = tmp_len + start;
+      node_type_start = tmp_len + start;
       i += jump_rows_ * walk_len_;
       total_row_ += jump_rows_;
-      cursor += 1;
       sample_times++;
     } else {
       VLOG(2) << "table is full, not update stat!";
@@ -1234,7 +1208,7 @@ int GraphDataGenerator::FillWalkBuf() {
                     sample_stream_);
     cudaStreamSynchronize(sample_stream_);
     
-    VLOG(0) << "sample_times:" << sample_times
+    VLOG(2) << "sample_times:" << sample_times
         << ", d_walk_size:" << buf_size_
         << ", d_walk_offset:" << i
         << ", total_rows:" << total_row_
@@ -1285,16 +1259,21 @@ void GraphDataGenerator::AllocResource(int thread_id,
   //                              cudaMemcpyHostToDevice,
   //                              stream_));
   // }
-  auto &d_graph_all_type_keys = gpu_graph_ptr->d_graph_all_type_total_keys_;
-  auto &h_graph_all_type_keys_len = gpu_graph_ptr->h_graph_all_type_keys_len_;
-
-  for (size_t i = 0; i < d_graph_all_type_keys.size(); i++) {
-    d_device_keys_.push_back(d_graph_all_type_keys[i][thread_id]);
-    h_device_keys_len_.push_back(h_graph_all_type_keys_len[i][thread_id]);
-  }
-  VLOG(2) << "h_device_keys size: " << h_device_keys_len_.size();
   
+  if (gpu_graph_training_) {
+    d_train_metapath_keys_ = gpu_graph_ptr->d_graph_train_total_keys_[thread_id];
+    h_train_metapath_keys_len_ = gpu_graph_ptr->h_graph_train_keys_len_[thread_id];
+    VLOG(2) << "h train metapaths key len: " << h_train_metapath_keys_len_;
+  } else {
+    auto &d_graph_all_type_keys = gpu_graph_ptr->d_graph_all_type_total_keys_;
+    auto &h_graph_all_type_keys_len = gpu_graph_ptr->h_graph_all_type_keys_len_;
 
+    for (size_t i = 0; i < d_graph_all_type_keys.size(); i++) {
+      d_device_keys_.push_back(d_graph_all_type_keys[i][thread_id]);
+      h_device_keys_len_.push_back(h_graph_all_type_keys_len[i][thread_id]);
+    }
+    VLOG(2) << "h_device_keys size: " << h_device_keys_len_.size();
+  }
 
   size_t once_max_sample_keynum = walk_degree_ * once_sample_startid_len_;
   d_prefix_sum_ = memory::AllocShared(
@@ -1419,7 +1398,6 @@ void GraphDataGenerator::SetConfig(
       once_sample_startid_len_ * walk_len_ * walk_degree_ * repeat_time_;
   train_table_cap_ = graph_config.train_table_cap();
   infer_table_cap_ = graph_config.infer_table_cap();
-  epoch_finish_ = false;
   VLOG(0) << "Confirm GraphConfig, walk_degree : " << walk_degree_
           << ", walk_len : " << walk_len_ << ", window : " << window_
           << ", once_sample_startid_len : " << once_sample_startid_len_
