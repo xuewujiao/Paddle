@@ -669,16 +669,26 @@ int GraphDataGenerator::GenerateBatch() {
   int res = 0;
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   if (!gpu_graph_training_) {
-    total_instance = (infer_node_start_ + batch_size_ <= infer_node_end_)
-                         ? batch_size_
-                         : infer_node_end_ - infer_node_start_;
-    VLOG(1) << "in graph_data generator:batch_size = " << batch_size_
-            << " instance = " << total_instance;
-    total_instance *= 2;
-    if (total_instance == 0) {
-      return 0;
+    if (!sage_mode) {
+      total_instance = (infer_node_start_ + batch_size_ <= infer_node_end_)
+                           ? batch_size_
+                           : infer_node_end_ - infer_node_start_;
+      VLOG(1) << "in graph_data generator:batch_size = " << batch_size_
+              << " instance = " << total_instance;
+      total_instance *= 2;
+      if (total_instance == 0) {
+        return 0;
+      }
+      FillIdShowClkTensor(total_instance, gpu_graph_training_, cursor_);
+    } else {
+      if (sage_batch_num_ < 0) {
+        return 0;
+      }
+      sage_batch_num -= 1;
+      FillGraphIdShowClkTensor(uniq_instance_vec_[sage_batch_num_],
+                               total_instance_vec_[sage_batch_num_],
+                               sage_batch_num_);
     }
-    FillIdShowClkTensor(total_instance, gpu_graph_training_, cursor_);
   } else {
     if (!sage_mode) {
       while (ins_buf_pair_len_ < batch_size_) {
@@ -1007,10 +1017,18 @@ int GraphDataGenerator::InsertTable(
                   sample_stream_);
   cudaStreamSynchronize(sample_stream_);
   // 产生了足够多的node，采样结束
-  VLOG(2) << "table capcity: " << train_table_cap_ << ", " << h_uniq_node_num
-          << " used";
-  if (h_uniq_node_num + len >= train_table_cap_) {
-    return 1;
+  if (gpu_graph_training_) {
+    VLOG(2) << "table capacity: " << train_table_cap_ << ", " << h_uniq_node_num
+            << " used";
+    if (h_uniq_node_num + len >= train_table_cap_) {
+      return 1;
+    }
+  } else {
+    VLOG(2) << "table capacity: " << infer_table_cap_ << ", " << h_uniq_node_num
+            << " used";
+    if (h_uniq_node_num + len >= infer_table_cap_) {
+      return 1;
+    }
   }
   table_->insert(d_keys, len, d_uniq_node_num_ptr, sample_stream_);
   CUDA_CHECK(cudaStreamSynchronize(sample_stream_));
@@ -1254,17 +1272,6 @@ int GraphDataGenerator::WhileFillInsBuf() {
 
 uint64_t GraphDataGenerator::CopyUniqueNodes() {
   if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
-    // table_->prefetch(cudaCpuDeviceId, sample_stream_);
-    // thrust::pair<uint64_t, uint64_t> *kv = table_->data();
-    // size_t size = table_->size();
-    // uint64_t unused_key = std::numeric_limits<uint64_t>::max();
-    // for (size_t i = 0; i < size; i++) {
-    //   if (kv[i].first == unused_key) {
-    //     continue;
-    //   }
-    //   host_vec_.push_back(kv[i].first);
-    // }
-
     uint64_t h_uniq_node_num = 0;
     uint64_t *d_uniq_node_num =
         reinterpret_cast<uint64_t *>(d_uniq_node_num_->ptr());
@@ -1311,11 +1318,7 @@ void GraphDataGenerator::DoWalkandSage() {
   int device_id = place_.GetDeviceId();
   debug_gpu_memory_info(device_id, "DoWalkandSage start");
   if (gpu_graph_training_) {
-    // FillWalkBuf：需增加sage_mode开关，判断是否这个时候填充host_vec_;
     FillWalkBuf();
-    // FillInsBuf：一次性获得多个batch_size对pair。
-    // 原本在一期，我们是在GenerateBatch函数里FillInsBuf，然后一次产生一个batch数据再依次训练。
-    // 现在这里就是先依次先多个pair，直接对每个batch进行二阶采样。
     if (sage_mode) {
       sage_batch_num_ = 0;
       int total_instance = 0, uniq_instance = 0;
@@ -1335,7 +1338,7 @@ void GraphDataGenerator::DoWalkandSage() {
           uint64_t *final_sage_nodes_ptr =
               reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
           if (InsertTable(final_sage_nodes_ptr, uniq_instance, d_uniq_node_num) != 0) {
-            VLOG(2) << "in sage mode, insert uniq nodes stage, table is full";
+            VLOG(2) << "in train sage mode, insert uniq nodes stage, table is full";
             break;
           }
         }
@@ -1350,10 +1353,59 @@ void GraphDataGenerator::DoWalkandSage() {
       }
 
       uint64_t h_uniq_node_num = CopyUniqueNodes();
-      VLOG(0) << "h_uniq_node_num: " << h_uniq_node_num;
+      VLOG(0) << "train stage h_uniq_node_num: " << h_uniq_node_num;
     }
   } else {
     FillInferBuf();
+    if (sage_mode) {
+      sage_batch_num_ = 0;
+      int total_instance = 0, uniq_instance = 0;
+
+      total_instance = (infer_node_start_ + batch_size_ <= infer_node_end_)
+                            ? batch_size_
+                            : infer_node_end_ - infer_node_start;
+      total_instance *= 2;
+      while (total_instance != 0) {
+        uint64_t *d_type_keys =
+            reinterpret_cast<uint64_t *>(d_device_keys_[cursor_]->ptr());
+        d_type_keys += infer_node_start_;
+        infer_node_start_ += total_instance / 2;
+        auto node_buf = memory::AllocShared(
+            place_, total_instance * sizeof(uint64_t));
+        int64_t *node_buf_ptr = reinterpret_cast<int64_t *>(node_buf->ptr());
+        CopyDuplicateKeys<<<GET_BLOCKS(total_instance / 2),
+                            CUDA_NUM_THREADS,
+                            0,
+                            train_stream_>>>(
+            node_buf_ptr, d_type_keys, total_instance / 2);
+        phi::DenseTensor inverse;
+        uint64_t* node_buf_ptr_ = reinterpret_cast<uint64_t *>(node_buf->ptr());
+        auto final_sage_nodes =
+            GenerateSampleGraph(node_buf_ptr_, total_instance, &uniq_instance,
+                                &inverse);
+
+        if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
+          uint64_t *final_sage_nodes_ptr =
+              reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
+          if (InsertTable(final_sage_nodes_ptr, uniq_instance, d_uniq_node_num) != 0) {
+            VLOG(2) << "in infer sage mode, insert uniq nodes stage, table is full";
+            break;
+          }
+        }
+        final_sage_nodes_vec.emplace_back(final_sage_nodes);
+        inverse_vec_.emplace_back(&inverse);
+        uniq_instance_vec_.emplace_back(uniq_instance);
+        total_instance_vec_.emplace_back(total_instance);
+        sage_batch_num += 1;
+
+        total_instance = (infer_node_start_ + batch_size_ <= infer_node_end_)
+                             ? batch_size_
+                             : infer_node_end_ - infer_node_start;
+      }
+
+      uint64_t h_uniq_node_num = CopyUniqueNodes();
+      VLOG(0) << "infer stage h_uniq_node_num: " << h_uniq_node_num;
+    }
   }
   debug_gpu_memory_info(device_id, "DoWalkandSage end");
 }
@@ -1384,21 +1436,28 @@ int GraphDataGenerator::FillInferBuf() {
       }
     }
     size_t device_key_size = h_device_keys_len_[infer_cursor];
+    // 对于sage模式下，这里不该用infer_table_cap_，待讨论.
     total_row_ =
         (global_infer_node_type_start[infer_cursor] + infer_table_cap_ <=
          device_key_size)
             ? infer_table_cap_
             : device_key_size - global_infer_node_type_start[infer_cursor];
 
-    host_vec_.resize(total_row_);
     uint64_t *d_type_keys =
         reinterpret_cast<uint64_t *>(d_device_keys_[infer_cursor]->ptr());
-    cudaMemcpyAsync(host_vec_.data(),
-                    d_type_keys + global_infer_node_type_start[infer_cursor],
-                    sizeof(uint64_t) * total_row_,
-                    cudaMemcpyDeviceToHost,
-                    sample_stream_);
-    cudaStreamSynchronize(sample_stream_);
+    if (!sage_mode) {
+      host_vec_.resize(total_row_);
+      cudaMemcpyAsync(host_vec_.data(),
+                      d_type_keys + global_infer_node_type_start[infer_cursor],
+                      sizeof(uint64_t) * total_row_,
+                      cudaMemcpyDeviceToHost,
+                      sample_stream_);
+      cudaStreamSynchronize(sample_stream_);
+    } else {
+      InsertTable(d_type_keys + global_infer_node_type_start[infer_cursor],
+                  total_row_,
+                  d_uniq_node_num);
+    }
     VLOG(1) << "cursor: " << infer_cursor
             << " start: " << global_infer_node_type_start[infer_cursor]
             << " num: " << total_row_;

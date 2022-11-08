@@ -908,6 +908,7 @@ class GraphDataGenerator {
   int FillWalkBuf();
   int FillInferBuf();
   void DoWalk();
+  void DoWalkandSage();
   int FillFeatureBuf(uint64_t* d_walk, uint64_t* d_feature, size_t key_num);
   int FillFeatureBuf(std::shared_ptr<phi::Allocation> d_walk,
                      std::shared_ptr<phi::Allocation> d_feature);
@@ -919,11 +920,16 @@ class GraphDataGenerator {
                    int step,
                    int* len_per_row);
   int FillInsBuf();
+  int WhileFillInsBuf();
   int FillIdShowClkTensor(int total_instance,
                           bool gpu_graph_training,
                           size_t cursor = 0);
+  int FillGraphIdShowClkTensor(int uniq_instance,
+                               int total_instance,
+                               int index);
   int FillGraphSlotFeature(int total_instance, bool gpu_graph_training);
   int MakeInsPair();
+  uint64_t CopyUniqueNodes();
   int GetPathNum() { return total_row_; }
   void ResetPathNum() {total_row_ = 0; }
   void ResetEpochFinish() {epoch_finish_ = false; }
@@ -1168,6 +1174,10 @@ class DataFeed {
   virtual void DoWalk() {
     PADDLE_THROW(platform::errors::Unimplemented(
         "This function(DoWalk) is not implemented."));
+  }
+  virtual void DoWalkandSage() {
+    PADDLE_THROW(platform::errors::Unimplemented(
+        "This function(DoWalkandSage) is not implemented."));
   }
   virtual void SetPlace(const paddle::platform::Place& place) {
     place_ = place;
@@ -1780,6 +1790,7 @@ class SlotRecordInMemoryDataFeed : public InMemoryDataFeed<SlotRecord> {
                      const UsedSlotGpuType* used_slots);
 #endif
   virtual void DoWalk();
+  virtual void DoWalkandSage();
 
   float sample_rate_ = 1.0f;
   int use_slot_size_ = 0;
