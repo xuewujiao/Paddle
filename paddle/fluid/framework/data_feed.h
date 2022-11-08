@@ -959,7 +959,6 @@ class GraphDataGenerator {
   int thread_id_;
   size_t jump_rows_;
   int edge_to_id_len_;
-  int uniq_instance_;
   int64_t* id_tensor_ptr_;
   int* index_tensor_ptr_;
   int64_t* show_tensor_ptr_;
@@ -998,7 +997,17 @@ class GraphDataGenerator {
   std::shared_ptr<phi::Allocation> d_reindex_table_value_;
   std::shared_ptr<phi::Allocation> d_reindex_table_index_;
   std::vector<std::shared_ptr<phi::Allocation>> edge_type_graph_;
+
+  // sage_mode
+  std::vector<phi::DenseTensor *> inverse_vec_;
+  std::vector<std::shared_ptr<phi::Allocation>> final_sage_nodes_vec_; // [id tensor, id tensor...]
+  std::vector<int> uniq_instance_vec_;  // used for show and clk.
+  std::vector<int> total_instance_vec_;
+  std::vector<std::vector<std::shared_ptr<phi::Allocation>>> graph_edges_vec_;  // [graph tensor, graph tensor...]
+  std::vector<std::vector<std::vector<int>>> edges_split_num_vec_; // [edges_split_num, edges_split_num, ...] 这块可能需改改
+
   int64_t reindex_table_size_;
+  int sage_batch_num_;
   int ins_buf_pair_len_;
   // size of a d_walk buf
   size_t buf_size_;
