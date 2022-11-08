@@ -733,7 +733,18 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
   return final_nodes_vec[len_samples - 1];
 }
 
+std::atomic_int g_steps(0);
+
 int GraphDataGenerator::GenerateBatch() {
+  if (gpu_graph_training_) {
+    if (max_steps_ > 0 && g_steps.load(std::memory_order_relaxed) >= max_steps_) {
+      VLOG(0) << "reach max_steps[" << max_steps_ << "] steps["
+          << g_steps.load(std::memory_order_relaxed) << "]";
+      return 0;
+    }
+    g_steps++;
+  }
+
   int total_instance = 0;
   platform::CUDADeviceGuard guard(gpuid_);
   int res = 0;
@@ -1582,6 +1593,7 @@ void GraphDataGenerator::SetConfig(
   once_sample_startid_len_ = graph_config.once_sample_startid_len();
   debug_mode_ = graph_config.debug_mode();
   gpu_graph_training_ = graph_config.gpu_graph_training();
+  max_steps_ = graph_config.max_steps();
   if (debug_mode_ || !gpu_graph_training_) {
     batch_size_ = graph_config.batch_size();
   } else {
@@ -1594,7 +1606,8 @@ void GraphDataGenerator::SetConfig(
           << ", walk_len : " << walk_len_ << ", window : " << window_
           << ", once_sample_startid_len : " << once_sample_startid_len_
           << ", sample_times_one_chunk : " << repeat_time_
-          << ", batch_size: " << batch_size_;
+          << ", batch_size: " << batch_size_
+          << ", max_steps: " << max_steps_;
   std::string first_node_type = graph_config.first_node_type();
   std::string meta_path = graph_config.meta_path();
   sage_mode_ = graph_config.sage_mode();

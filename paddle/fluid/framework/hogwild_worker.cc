@@ -204,7 +204,7 @@ void HogwildWorker::TrainFilesWithProfiler() {
 #ifdef PADDLE_WITH_HETERPS
     dev_ctx_->Wait();
     for (size_t i = 0; i < op_name.size(); ++i) {
-      VLOG(1) << "card:" << thread_id_ << ", op: " << op_name[i]
+      VLOG(0) << "card:" << thread_id_ << ", op: " << op_name[i]
               << ", mean time: " << op_total_time[i] / total_inst
               << "s, totol time:" << op_total_time[i] << "sec";
     }
