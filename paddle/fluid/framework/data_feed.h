@@ -927,7 +927,8 @@ class GraphDataGenerator {
   int FillGraphIdShowClkTensor(int uniq_instance,
                                int total_instance,
                                int index);
-  int FillGraphSlotFeature(int total_instance, bool gpu_graph_training);
+  int FillGraphSlotFeature(int total_instance, bool gpu_graph_training,
+                           std::shared_ptr<phi::Allocation> final_sage_nodes=nullptr);
   int MakeInsPair();
   uint64_t CopyUniqueNodes();
   int GetPathNum() { return total_row_; }

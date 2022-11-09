@@ -508,7 +508,8 @@ int GraphDataGenerator::FillGraphIdShowClkTensor(int uniq_instance,
 }
 
 int GraphDataGenerator::FillGraphSlotFeature(int total_instance,
-                                             bool gpu_graph_training) {
+                                             bool gpu_graph_training,
+                                             std::shared_ptr<phi::Allocation> final_sage_nodes) {
   int64_t *slot_tensor_ptr_[slot_num_];
   int64_t *slot_lod_tensor_ptr_[slot_num_];
   for (int i = 0; i < slot_num_; ++i) {
@@ -537,8 +538,23 @@ int GraphDataGenerator::FillGraphSlotFeature(int total_instance,
                   sizeof(uint64_t *) * slot_num_,
                   cudaMemcpyHostToDevice,
                   train_stream_);
+
+  if (sage_mode_) {
+    size_t temp_storage_bytes =
+        total_instance * fea_num_per_node_ * sizeof(uint64_t);
+    if (d_feature_buf_ == NULL || d_feature_buf_->size() < temp_storage_bytes) {
+      d_feature_buf_ = memory::AllocShared(place_, temp_storage_bytes);
+    }
+  }
+
   uint64_t *feature_buf = reinterpret_cast<uint64_t *>(d_feature_buf_->ptr());
-  FillFeatureBuf(ins_cursor, feature_buf, total_instance);
+  if (!sage_mode_) {
+    FillFeatureBuf(ins_cursor, feature_buf, total_instance);
+  } else {
+    uint64_t* sage_nodes_ptr = reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
+    FillFeatureBuf(sage_nodes_ptr, feature_buf, total_instance);
+  }
+
   GraphFillSlotKernel<<<GET_BLOCKS(total_instance * fea_num_per_node_),
                         CUDA_NUM_THREADS,
                         0,
@@ -561,10 +577,19 @@ int GraphDataGenerator::FillGraphSlotFeature(int total_instance,
       (int*)d_slot_feature_num_map_->ptr());
   if (debug_mode_) {
     uint64_t h_walk[total_instance];
-    cudaMemcpy(h_walk,
-               ins_cursor,
-               total_instance * sizeof(uint64_t),
-               cudaMemcpyDeviceToHost);
+    if (!sage_mode_) {
+      cudaMemcpy(h_walk,
+                 ins_cursor,
+                 total_instance * sizeof(uint64_t),
+                 cudaMemcpyDeviceToHost);
+    } else {
+      uint64_t* sage_nodes_ptr =
+          reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
+      cudaMemcpy(h_walk,
+                 ins_cursor,
+                 total_instance * sizeof(uint64_t),
+                 cudaMemcpyDeviceToHost);
+    }
     uint64_t h_feature[total_instance * slot_num_ * fea_num_per_node_];
     cudaMemcpy(h_feature,
                feature_buf,
@@ -719,7 +744,13 @@ int GraphDataGenerator::GenerateBatch() {
   }
 
   if (slot_num_ > 0) {
-    FillGraphSlotFeature(total_instance, gpu_graph_training_);
+    if (!sage_mode_) {
+      FillGraphSlotFeature(total_instance, gpu_graph_training_);
+    } else {
+      FillGraphSlotFeature(uniq_instance_vec_[sage_batch_num_],
+                           gpu_graph_training_,
+                           final_sage_nodes_vec_[sage_batch_num_]);
+    }
   }
   offset_.clear();
   offset_.push_back(0);
