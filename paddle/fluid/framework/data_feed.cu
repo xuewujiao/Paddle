@@ -389,7 +389,6 @@ int GraphDataGenerator::FillIdShowClkTensor(int total_instance,
       feed_vec_[1]->mutable_data<int64_t>({total_instance}, this->place_);
   clk_tensor_ptr_ =
       feed_vec_[2]->mutable_data<int64_t>({total_instance}, this->place_);
-  auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   if (gpu_graph_training) {
     uint64_t *ins_cursor, *ins_buf;
     ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_->ptr());
@@ -692,7 +691,6 @@ int GraphDataGenerator::GenerateBatch() {
   int total_instance = 0;
   platform::CUDADeviceGuard guard(gpuid_);
   int res = 0;
-  auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   if (!gpu_graph_training_) {
     if (!sage_mode_) {
       total_instance = (infer_node_start_ + batch_size_ <= infer_node_end_)
@@ -1070,8 +1068,6 @@ std::vector<std::shared_ptr<phi::Allocation>> GraphDataGenerator::SampleNeighbor
     int64_t* uniq_nodes, int len, int sample_size,
     std::vector<int>& edges_split_num, int64_t* neighbor_len) {
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
-  auto edge_to_id = gpu_graph_ptr->edge_to_id;
-
   auto sample_res = gpu_graph_ptr->graph_neighbor_sample_all_edge_type(
       gpuid_, edge_to_id_len_, (uint64_t*)(uniq_nodes), sample_size, len,
       edge_type_graph_);
