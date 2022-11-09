@@ -943,6 +943,9 @@ class GraphDataGenerator {
   std::vector<std::shared_ptr<phi::Allocation>> SampleNeighbors(
           int64_t* uniq_nodes, int len, int sample_size,
           std::vector<int>& edges_split_num, int64_t* neighbor_len);
+  std::shared_ptr<phi::Allocation> FillReindexHashTable(
+          int64_t* input, int num_input, int64_t len_hashtable,
+          int64_t* keys, int* values, int* key_index, int* final_nodes_len);
   std::shared_ptr<phi::Allocation> GetReindexResult(
           int64_t* reindex_src_data, const int64_t* center_nodes,
           int* final_nodes_len, int node_len, int64_t neighbor_len);
