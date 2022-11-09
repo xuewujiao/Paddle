@@ -312,6 +312,7 @@ struct NeighborSampleResultV2 {
   uint64_t *val;
   int *actual_sample_size;
   std::shared_ptr<memory::Allocation> val_mem, actual_sample_size_mem;
+  cudaStream_t stream = 0;
   void set_stream(cudaStream_t stream_t) {
     stream = stream_t;
   }
