@@ -585,7 +585,7 @@ int GraphDataGenerator::FillGraphSlotFeature(int total_instance,
       uint64_t* sage_nodes_ptr =
           reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
       cudaMemcpy(h_walk,
-                 ins_cursor,
+                 sage_nodes_ptr,
                  total_instance * sizeof(uint64_t),
                  cudaMemcpyDeviceToHost);
     }
@@ -1075,8 +1075,10 @@ std::vector<std::shared_ptr<phi::Allocation>> GraphDataGenerator::SampleNeighbor
   int* all_sample_count_ptr =
       reinterpret_cast<int* >(sample_res.actual_sample_size_mem->ptr());
 
-  auto cumsum_actual_sample_size =
-      memory::Alloc(place_, (len * edge_to_id_len_ + 1) * sizeof(int));
+  auto cumsum_actual_sample_size = memory::Alloc(
+      place_,
+      (len * edge_to_id_len_ + 1) * sizeof(int),
+      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
   int* cumsum_actual_sample_size_ptr =
       reinterpret_cast<int*>(cumsum_actual_sample_size->ptr());
   cudaMemsetAsync(cumsum_actual_sample_size_ptr,
@@ -1091,7 +1093,10 @@ std::vector<std::shared_ptr<phi::Allocation>> GraphDataGenerator::SampleNeighbor
                                            cumsum_actual_sample_size_ptr + 1,
                                            len * edge_to_id_len_,
                                            sample_stream_));
-  auto d_temp_storage = memory::Alloc(place_, temp_storage_bytes);
+  auto d_temp_storage = memory::Alloc(
+      place_,
+      temp_storage_bytes,
+      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
   CUDA_CHECK(cub::DeviceScan::InclusiveSum(d_temp_storage->ptr(),
                                            temp_storage_bytes,
                                            all_sample_count_ptr,
@@ -1196,8 +1201,11 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::FillReindexHashTable(
                                 sample_stream_);
 
   int total_unique_items = 0;
-  cudaMemcpyAsync(&total_unique_items, item_count_ptr + num_input, sizeof(int),
-                  cudaMemcpyDeviceToHost, sample_stream_);
+  cudaMemcpyAsync(&total_unique_items,
+                  item_count_ptr + num_input,
+                  sizeof(int),
+                  cudaMemcpyDeviceToHost,
+                  sample_stream_);
   cudaStreamSynchronize(sample_stream_);
 
   auto unique_items = memory::AllocShared(
