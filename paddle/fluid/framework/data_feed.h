@@ -947,10 +947,11 @@ class GraphDataGenerator {
           int64_t* input, int num_input, int64_t len_hashtable,
           int64_t* keys, int* values, int* key_index, int* final_nodes_len);
   std::shared_ptr<phi::Allocation> GetReindexResult(
-          int64_t* reindex_src_data, const int64_t* center_nodes,
+          int64_t* reindex_src_data, int64_t* center_nodes,
           int* final_nodes_len, int node_len, int64_t neighbor_len);
   std::shared_ptr<phi::Allocation> GenerateSampleGraph(
-          uint64_t* node_ids, int len, int* uniq_len, phi::DenseTensor* inverse);
+          uint64_t* node_ids, int len, int* uniq_len,
+          std::shared_ptr<phi::Allocation>& inverse);
   int InsertTable(const unsigned long* d_keys,
           unsigned long len,
           std::shared_ptr<phi::Allocation> d_uniq_node_num);
@@ -1008,8 +1009,14 @@ class GraphDataGenerator {
   std::shared_ptr<phi::Allocation> d_reindex_table_index_;
   std::vector<std::shared_ptr<phi::Allocation>> edge_type_graph_;
 
+  std::shared_ptr<phi::Allocation> d_sorted_keys_;
+  std::shared_ptr<phi::Allocation> d_sorted_idx_;
+  std::shared_ptr<phi::Allocation> d_offset_;
+  std::shared_ptr<phi::Allocation> d_merged_cnts_;
+  std::shared_ptr<phi::Allocation> d_buf_;
+
   // sage_mode
-  std::vector<phi::DenseTensor *> inverse_vec_;
+  std::vector<std::shared_ptr<phi::Allocation>> inverse_vec_;
   std::vector<std::shared_ptr<phi::Allocation>> final_sage_nodes_vec_; // [id tensor, id tensor...]
   std::vector<int> uniq_instance_vec_;  // used for show and clk.
   std::vector<int> total_instance_vec_;
