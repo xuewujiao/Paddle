@@ -998,6 +998,7 @@ class GraphDataGenerator {
   std::vector<std::vector<int>> meta_path_;
   bool gpu_graph_training_;
   int32_t max_steps_;
+  int32_t steps_;
   bool sage_mode_;
   std::vector<int> samples_;
 };

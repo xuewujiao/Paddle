@@ -733,16 +733,13 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
   return final_nodes_vec[len_samples - 1];
 }
 
-std::atomic_int g_steps(0);
-
 int GraphDataGenerator::GenerateBatch() {
   if (gpu_graph_training_) {
-    if (max_steps_ > 0 && g_steps.load(std::memory_order_relaxed) >= max_steps_) {
-      VLOG(0) << "reach max_steps[" << max_steps_ << "] steps["
-          << g_steps.load(std::memory_order_relaxed) << "]";
+    if (max_steps_ > 0 && steps_ >= max_steps_) {
+      VLOG(0) << "reach max_steps[" << max_steps_ << "] steps[" << steps_ << "]";
       return 0;
     }
-    g_steps++;
+    steps_++;
   }
 
   int total_instance = 0;
@@ -1593,7 +1590,8 @@ void GraphDataGenerator::SetConfig(
   once_sample_startid_len_ = graph_config.once_sample_startid_len();
   debug_mode_ = graph_config.debug_mode();
   gpu_graph_training_ = graph_config.gpu_graph_training();
-  max_steps_ = graph_config.max_steps();
+  max_steps_ = graph_config.max_steps() / 8;
+  steps_ = 0;
   if (debug_mode_ || !gpu_graph_training_) {
     batch_size_ = graph_config.batch_size();
   } else {
