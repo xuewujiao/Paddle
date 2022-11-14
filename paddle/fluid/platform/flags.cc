@@ -980,6 +980,12 @@ PADDLE_DEFINE_EXPORTED_bool(enable_auto_rdma_trans,
 PADDLE_DEFINE_EXPORTED_bool(enable_tracker_all2all,
                             false,
                             "enable tracker all2all log, default false");
+PADDLE_DEFINE_EXPORTED_bool(enable_all2all_use_fp16,
+                            false,
+                            "enable all2all use fp16, default false");
+PADDLE_DEFINE_EXPORTED_bool(enable_sparse_inner_gather,
+                            false,
+                            "enable sparse inner gather, default false");
 
 /**
  * ProcessGroupNCCL related FLAG
