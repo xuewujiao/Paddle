@@ -577,6 +577,9 @@ class concurrent_unordered_map : public managed {
       if (keys_equal(unused_key, old_key) || keys_equal(insert_key, old_key)) {
         update_existing_value(existing_value, x, op);
         insert_success = true;
+        if (local_count != NULL && keys_equal(unused_key, old_key)) {
+          atomicAdd(local_count, 1);
+        }
         break;
       }
       current_index = (current_index + 1) % hashtbl_size;
