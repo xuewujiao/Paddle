@@ -1456,6 +1456,8 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
                              reinterpret_cast<uint32_t* >(d_offset_->ptr()),
                              reinterpret_cast<uint32_t* >(d_merged_cnts_->ptr()),
                              sample_stream_, d_buf_, place_);
+  VLOG(0) << "len: " << len << ", uniq_len: " << uniq_len;
+
   int len_samples = samples_.size();
 
   VLOG(2) << "Sample Neighbors and Reindex";
@@ -1512,6 +1514,9 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
   }
   graph_edges_vec_.emplace_back(graph_edges);
   edges_split_num_vec_.emplace_back(edges_split_num_for_graph);
+
+  *final_len = final_nodes_len_vec[len_samples - 1];
+  return final_nodes_vec[len_samples - 1];
 }
 
 void GraphDataGenerator::DoWalk() {
@@ -1537,6 +1542,7 @@ int GraphDataGenerator::WhileFillInsBuf() {
       }
     }
   }
+  VLOG(0) << "Finish WhileFillInsBuf res = " << res;
   return 1;
 }
 
@@ -1551,7 +1557,7 @@ uint64_t GraphDataGenerator::CopyUniqueNodes() {
                     cudaMemcpyDeviceToHost,
                     sample_stream_);
     cudaStreamSynchronize(sample_stream_);
-    VLOG(2) << "h_uniq_node_num: " << h_uniq_node_num;
+    VLOG(0) << "h_uniq_node_num: " << h_uniq_node_num;
     auto d_uniq_node = memory::AllocShared(
         place_,
         h_uniq_node_num * sizeof(uint64_t),
@@ -1589,15 +1595,35 @@ void GraphDataGenerator::DoWalkandSage() {
   debug_gpu_memory_info(device_id, "DoWalkandSage start");
   if (gpu_graph_training_) {
     FillWalkBuf();
+    VLOG(0) << "Finish FillWalkBuf";
     if (sage_mode_) {
       sage_batch_num_ = 0;
       int total_instance = 0, uniq_instance = 0;
       uint64_t *ins_cursor, *ins_buf;
-      while (WhileFillInsBuf() != 0) {
+      bool ins_pair_flag = true;
+      while (ins_pair_flag) {
+        VLOG(0) << "Begin Generate Pair";
+        int res = 0;
+        while (ins_buf_pair_len_ < batch_size_) {
+          res = FillInsBuf();
+          if (res == -1) {
+            if (ins_buf_pair_len_ == 0) {
+              ins_pair_flag = false;
+            } else {
+              break;
+            }
+          }
+        }
+
+        if (!ins_pair_flag) {
+          break;
+        }
+
         total_instance =
             ins_buf_pair_len_ < batch_size_ ? ins_buf_pair_len_ : batch_size_;
         total_instance *= 2;
 
+        VLOG(0) << "Begin GenerateSampleGraph";
         ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_->ptr());
         ins_cursor = ins_buf + ins_buf_pair_len_ * 2 - total_instance;
         auto inverse = memory::AllocShared(
