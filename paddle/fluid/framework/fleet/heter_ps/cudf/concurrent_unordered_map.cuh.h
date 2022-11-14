@@ -524,6 +524,7 @@ class concurrent_unordered_map : public managed {
   __forceinline__ __device__ iterator
   insert(const value_type& x,
          aggregation_type op,
+         uint64_t* local_count = NULL,
          comparison_type keys_equal = key_equal(),
          bool precomputed_hash = false,
          hash_value_type precomputed_hash_value = 0) {
