@@ -98,10 +98,11 @@ __global__ void dy_mf_search_kernel(Table* table,
       float* cur = (float*)(vals + offset);
       float* input = it->second;
       gpu_accessor.PullValueFill(cur, input);
-    } 
-//    else {
+    } else {
 //      PADDLE_ENFORCE(false, "warning: pull miss key: %lu", keys[i]);
-//    }
+      float* cur = (float*)(&vals[i * pull_feature_value_size]);
+      gpu_accessor.PullZeroValue(cur);
+    }
   }
 }
 

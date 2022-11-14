@@ -71,7 +71,6 @@ __global__ void PullDedupCopy(const size_t N,
     int x = key2slot[i];
     int y = i - slot_lens[x];
 
-    assert(slot_dims[x] == hidden);
     float* dest_ptr = dest[x] + y * hidden;
     // 0 key fill zero
     if (total_keys[i] == 0) {
@@ -92,10 +91,11 @@ __global__ void PullDedupCopy(const size_t N,
         *(dest_ptr + off) = src_ptr[accessor.EmbedWIndex()];
         break;
       default:
-        if (int(src_ptr[accessor.MfSizeIndex()]) == 0) {
+        int embedx_id = off - 3;
+        if (embedx_id >= int(src_ptr[accessor.MfSizeIndex()])) {
           *(dest_ptr + off) = 0;
         } else {
-          *(dest_ptr + off) = src_ptr[accessor.EmbedxWIndex() + off - 3];
+          *(dest_ptr + off) = src_ptr[accessor.EmbedxWIndex() + embedx_id];
         }
         break;
     }

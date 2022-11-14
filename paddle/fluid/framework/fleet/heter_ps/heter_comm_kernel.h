@@ -255,11 +255,11 @@ class HeterCommKernel {
 
   template <typename KeyType, typename T, typename StreamType>
   void calc_node_shard_index(const KeyType* d_keys,
-                          long long len,
-                          T* shard_index,
-                          const int &total_devs,
-                          const int &node_num,
-                          const StreamType& stream);
+                             long long len,
+                             T* shard_index,
+                             const int& total_devs,
+                             const int& node_num,
+                             const StreamType& stream);
 
   template <typename KeyType, typename T, typename StreamType>
   void gather_keys(KeyType* d_shard_keys,
@@ -288,23 +288,41 @@ class HeterCommKernel {
                     size_t value_bytes,
                     const StreamType& stream);
   // scale grad values
-  template<typename StreamType,typename GPUAccessor>
-  void scale_grad(const size_t &len,
-                  char *grads,
-                  const size_t &value_bytes,
-                  const size_t &grad_dim,
+  template <typename StreamType, typename GPUAccessor>
+  void scale_grad(const size_t& len,
+                  char* grads,
+                  const size_t& value_bytes,
+                  const size_t& grad_dim,
                   const StreamType& stream,
-                  GPUAccessor &gpu_accessor);
+                  GPUAccessor& gpu_accessor);
 
   template <typename KeyType, typename StreamType>
-  void check_valid_values(
-                    const int &type,
-                    const size_t &N,
-                    const KeyType *keys,
-                    const char *input,
-                    const size_t &value_bytes,
-                    const StreamType& stream,
-                    bool debug = false);
+  void check_valid_values(const int& type,
+                          const size_t& N,
+                          const KeyType* keys,
+                          const char* input,
+                          const size_t& value_bytes,
+                          const StreamType& stream,
+                          bool debug = false);
+  // compress
+  template <typename StreamType>
+  size_t compress_values(const size_t& len,
+                         const char* in_vals,
+                         char* out_vals,
+                         const size_t& value_bytes,
+                         const size_t& embedx_dim,
+                         const float& max_bound,
+                         const StreamType& stream);
+  // uncompress
+  template <typename StreamType>
+  void uncompress_values(const size_t& len,
+                         const char* in_vals,
+                         char* out_vals,
+                         const size_t& value_bytes,
+                         const size_t& embedx_dim,
+                         const float& max_bound,
+                         const StreamType& stream);
+
  private:
   int block_size_{256};
 };
