@@ -478,9 +478,10 @@ NeighborSampleResultV2 GraphGpuWrapper::graph_neighbor_sample_all_edge_type(
 }
 
 std::vector<std::shared_ptr<phi::Allocation>> GraphGpuWrapper::get_edge_type_graph(
-    int gpu_id, int edge_type_len) {
+    int gpu_id, int edge_type_len, cudaStream_t stream,
+    const paddle::platform::Place& place) {
   return ((GpuPsGraphTable *)graph_table)
-      ->get_edge_type_graph(gpu_id, edge_type_len);
+      ->get_edge_type_graph(gpu_id, edge_type_len, stream, place);
 }
 
 int GraphGpuWrapper::get_feature_of_nodes(int gpu_id,

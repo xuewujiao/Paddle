@@ -1595,23 +1595,20 @@ void GraphDataGenerator::DoWalkandSage() {
   debug_gpu_memory_info(device_id, "DoWalkandSage start");
   if (gpu_graph_training_) {
     FillWalkBuf();
-    VLOG(0) << "Finish FillWalkBuf";
     if (sage_mode_) {
       sage_batch_num_ = 0;
       int total_instance = 0, uniq_instance = 0;
       uint64_t *ins_cursor, *ins_buf;
       bool ins_pair_flag = true;
       while (ins_pair_flag) {
-        VLOG(0) << "Begin Generate Pair";
         int res = 0;
         while (ins_buf_pair_len_ < batch_size_) {
           res = FillInsBuf();
           if (res == -1) {
             if (ins_buf_pair_len_ == 0) {
               ins_pair_flag = false;
-            } else {
-              break;
             }
+            break;
           }
         }
 
@@ -1623,7 +1620,6 @@ void GraphDataGenerator::DoWalkandSage() {
             ins_buf_pair_len_ < batch_size_ ? ins_buf_pair_len_ : batch_size_;
         total_instance *= 2;
 
-        VLOG(0) << "Begin GenerateSampleGraph";
         ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_->ptr());
         ins_cursor = ins_buf + ins_buf_pair_len_ * 2 - total_instance;
         auto inverse = memory::AllocShared(
@@ -2179,7 +2175,9 @@ void GraphDataGenerator::AllocResource(int thread_id,
         reindex_table_size_ * sizeof(int),
         phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
     edge_type_graph_ =
-        gpu_graph_ptr->get_edge_type_graph(gpuid_, edge_to_id_len_);
+        gpu_graph_ptr->get_edge_type_graph(gpuid_, edge_to_id_len_,
+                                           sample_stream_,
+                                           place_);
 
     d_sorted_keys_ = memory::AllocShared(
         place_,

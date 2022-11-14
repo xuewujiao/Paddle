@@ -627,8 +627,8 @@ void GpuPsGraphTable::build_graph_fea_on_single_gpu(const GpuPsCommGraphFea& g,
 }
 
 std::vector<std::shared_ptr<phi::Allocation>> GpuPsGraphTable::get_edge_type_graph(
-    int gpu_id, int edge_type_len) {
-  platform::CUDAPlace place = platform::CUDAPlace(resource_->dev_id(gpu_id));
+    int gpu_id, int edge_type_len, cudaStream_t stream,
+    const paddle::platform::Place& place) {
   platform::CUDADeviceGuard guard(resource_->dev_id(gpu_id));
   int total_gpu = resource_->total_device();
 
@@ -640,8 +640,10 @@ std::vector<std::shared_ptr<phi::Allocation>> GpuPsGraphTable::get_edge_type_gra
       int offset = i * graph_table_num_ + idx;
       graphs[idx] = gpu_graph_list_[offset];
     }
-    auto d_commgraph_mem =
-        memory::AllocShared(place, edge_type_len * sizeof(GpuPsCommGraph));
+    auto d_commgraph_mem = memory::AllocShared(
+        place,
+        edge_type_len * sizeof(GpuPsCommGraph),
+        phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
     GpuPsCommGraph* d_commgraph_ptr =
         reinterpret_cast<GpuPsCommGraph*>(d_commgraph_mem->ptr());
     CUDA_CHECK(cudaMemcpy(
