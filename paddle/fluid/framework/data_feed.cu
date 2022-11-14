@@ -581,6 +581,7 @@ int GraphDataGenerator::FillIdShowClkTensor(int total_instance,
 int GraphDataGenerator::FillGraphIdShowClkTensor(int uniq_instance,
                                                  int total_instance,
                                                  int index) {
+  VLOG(0) << "Enter FillGraphIdShowClkTensor";
   id_tensor_ptr_ =
       feed_vec_[0]->mutable_data<int64_t>({uniq_instance, 1}, this->place_);
   show_tensor_ptr_ =
@@ -789,6 +790,7 @@ int GraphDataGenerator::FillGraphSlotFeature(int total_instance,
 }
 
 int GraphDataGenerator::MakeInsPair() {
+  VLOG(0) << gpuid_ << " Enter MakeInsPair"; 
   uint64_t *walk = reinterpret_cast<uint64_t *>(d_walk_->ptr());
   uint64_t *ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_->ptr());
   int *random_row = reinterpret_cast<int *>(d_random_row_->ptr());
@@ -796,6 +798,7 @@ int GraphDataGenerator::MakeInsPair() {
   cudaMemsetAsync(d_pair_num, 0, sizeof(int), train_stream_);
   int len = buf_state_.len;
   // make pair
+  VLOG(0) << gpuid_ << " at first ins_buf_pair_len_ " << ins_buf_pair_len_;
   GraphFillIdKernel<<<GET_BLOCKS(len), CUDA_NUM_THREADS, 0, train_stream_>>>(
       ins_buf + ins_buf_pair_len_ * 2,
       d_pair_num,
@@ -813,6 +816,7 @@ int GraphDataGenerator::MakeInsPair() {
                   train_stream_);
   cudaStreamSynchronize(train_stream_);
   ins_buf_pair_len_ += h_pair_num;
+  VLOG(0) << gpuid_ << " add h_pair_num ins_buf_pair_len_ " << ins_buf_pair_len_; 
 
   if (debug_mode_) {
     uint64_t h_ins_buf[ins_buf_pair_len_ * 2];
@@ -888,6 +892,7 @@ int GraphDataGenerator::GenerateBatch() {
               << ", ins_buf_pair_len = " << ins_buf_pair_len_;
       FillIdShowClkTensor(total_instance, gpu_graph_training_);
     } else {
+      VLOG(0) << "Begin Train GenerateBatch " << "sage_batch_num: " << sage_batch_num_;
       if (sage_batch_num_ < 0) {
         return 0;
       }
@@ -1456,7 +1461,7 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
                              reinterpret_cast<uint32_t* >(d_offset_->ptr()),
                              reinterpret_cast<uint32_t* >(d_merged_cnts_->ptr()),
                              sample_stream_, d_buf_, place_);
-  VLOG(0) << "len: " << len << ", uniq_len: " << uniq_len;
+  VLOG(0) << gpuid_ << " len: " << len << ", uniq_len: " << uniq_len;
 
   int len_samples = samples_.size();
 
@@ -1530,22 +1535,6 @@ void GraphDataGenerator::DoWalk() {
   debug_gpu_memory_info(device_id, "DoWalk end");
 }
 
-int GraphDataGenerator::WhileFillInsBuf() {
-  int res = 0;
-  while (ins_buf_pair_len_ < batch_size_) {
-    res = FillInsBuf();
-    if (res == -1) {
-      if (ins_buf_pair_len_ == 0) {
-        return 0;
-      } else {
-        break;
-      }
-    }
-  }
-  VLOG(0) << "Finish WhileFillInsBuf res = " << res;
-  return 1;
-}
-
 uint64_t GraphDataGenerator::CopyUniqueNodes() {
   if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
     uint64_t h_uniq_node_num = 0;
@@ -1604,7 +1593,10 @@ void GraphDataGenerator::DoWalkandSage() {
         int res = 0;
         while (ins_buf_pair_len_ < batch_size_) {
           res = FillInsBuf();
+          VLOG(0) << gpuid_ << " FillInsBuf_res: " << res 
+                            << " ins_buf_pair_len_: " << ins_buf_pair_len_;
           if (res == -1) {
+            VLOG(0) << gpuid_ << " Enter res==-1";
             if (ins_buf_pair_len_ == 0) {
               ins_pair_flag = false;
             }
@@ -1612,6 +1604,7 @@ void GraphDataGenerator::DoWalkandSage() {
           }
         }
 
+        VLOG(0) << gpuid_ << " ins_pair_flag: " << ins_pair_flag;
         if (!ins_pair_flag) {
           break;
         }
@@ -1619,6 +1612,7 @@ void GraphDataGenerator::DoWalkandSage() {
         total_instance =
             ins_buf_pair_len_ < batch_size_ ? ins_buf_pair_len_ : batch_size_;
         total_instance *= 2;
+        VLOG(0) << gpuid_ << " total_instance:" << total_instance;
 
         ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_->ptr());
         ins_cursor = ins_buf + ins_buf_pair_len_ * 2 - total_instance;
@@ -1646,7 +1640,7 @@ void GraphDataGenerator::DoWalkandSage() {
       }
 
       uint64_t h_uniq_node_num = CopyUniqueNodes();
-      VLOG(0) << "train stage h_uniq_node_num: " << h_uniq_node_num;
+      VLOG(0) << gpuid_ << " train stage h_uniq_node_num: " << h_uniq_node_num;
     }
   } else {
     FillInferBuf();

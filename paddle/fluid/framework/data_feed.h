@@ -920,7 +920,6 @@ class GraphDataGenerator {
                    int step,
                    int* len_per_row);
   int FillInsBuf();
-  int WhileFillInsBuf();
   int FillIdShowClkTensor(int total_instance,
                           bool gpu_graph_training,
                           size_t cursor = 0);
@@ -1021,7 +1020,7 @@ class GraphDataGenerator {
   std::vector<int> uniq_instance_vec_;  // used for show and clk.
   std::vector<int> total_instance_vec_;
   std::vector<std::vector<std::shared_ptr<phi::Allocation>>> graph_edges_vec_;  // [graph tensor, graph tensor...]
-  std::vector<std::vector<std::vector<int>>> edges_split_num_vec_; // [edges_split_num, edges_split_num, ...] 这块可能需改改
+  std::vector<std::vector<std::vector<int>>> edges_split_num_vec_; // [edges_split_num, edges_split_num, ...]
 
   int64_t reindex_table_size_;
   int sage_batch_num_;
