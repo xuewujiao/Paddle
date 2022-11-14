@@ -789,17 +789,17 @@ int GraphDataGenerator::FillGraphSlotFeature(int total_instance,
   return 0;
 }
 
-int GraphDataGenerator::MakeInsPair() {
+int GraphDataGenerator::MakeInsPair(cudaStream_t stream) {
   VLOG(0) << gpuid_ << " Enter MakeInsPair"; 
   uint64_t *walk = reinterpret_cast<uint64_t *>(d_walk_->ptr());
   uint64_t *ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_->ptr());
   int *random_row = reinterpret_cast<int *>(d_random_row_->ptr());
   int *d_pair_num = reinterpret_cast<int *>(d_pair_num_->ptr());
-  cudaMemsetAsync(d_pair_num, 0, sizeof(int), train_stream_);
+  cudaMemsetAsync(d_pair_num, 0, sizeof(int), stream);
   int len = buf_state_.len;
   // make pair
   VLOG(0) << gpuid_ << " at first ins_buf_pair_len_ " << ins_buf_pair_len_;
-  GraphFillIdKernel<<<GET_BLOCKS(len), CUDA_NUM_THREADS, 0, train_stream_>>>(
+  GraphFillIdKernel<<<GET_BLOCKS(len), CUDA_NUM_THREADS, 0, stream>>>(
       ins_buf + ins_buf_pair_len_ * 2,
       d_pair_num,
       walk,
@@ -813,8 +813,8 @@ int GraphDataGenerator::MakeInsPair() {
                   d_pair_num,
                   sizeof(int),
                   cudaMemcpyDeviceToHost,
-                  train_stream_);
-  cudaStreamSynchronize(train_stream_);
+                  stream);
+  cudaStreamSynchronize(stream);
   ins_buf_pair_len_ += h_pair_num;
   VLOG(0) << gpuid_ << " add h_pair_num ins_buf_pair_len_ " << ins_buf_pair_len_; 
 
@@ -833,7 +833,7 @@ int GraphDataGenerator::MakeInsPair() {
   return ins_buf_pair_len_;
 }
 
-int GraphDataGenerator::FillInsBuf() {
+int GraphDataGenerator::FillInsBuf(cudaStream_t stream) {
   if (ins_buf_pair_len_ >= batch_size_) {
     return batch_size_;
   }
@@ -845,7 +845,7 @@ int GraphDataGenerator::FillInsBuf() {
   if (total_instance == 0) {
     return -1;
   }
-  return MakeInsPair();
+  return MakeInsPair(stream);
 }
 
 int GraphDataGenerator::GenerateBatch() {
@@ -865,7 +865,7 @@ int GraphDataGenerator::GenerateBatch() {
       }
       FillIdShowClkTensor(total_instance, gpu_graph_training_, cursor_);
     } else {
-      if (sage_batch_num_ < 0) {
+      if (sage_batch_num_ <= 0) {
         return 0;
       }
       sage_batch_num_ -= 1;
@@ -876,7 +876,7 @@ int GraphDataGenerator::GenerateBatch() {
   } else {
     if (!sage_mode_) {
       while (ins_buf_pair_len_ < batch_size_) {
-        res = FillInsBuf();
+        res = FillInsBuf(train_stream_);
         if (res == -1) {
           if (ins_buf_pair_len_ == 0) {
             return 0;
@@ -893,7 +893,7 @@ int GraphDataGenerator::GenerateBatch() {
       FillIdShowClkTensor(total_instance, gpu_graph_training_);
     } else {
       VLOG(0) << "Begin Train GenerateBatch " << "sage_batch_num: " << sage_batch_num_;
-      if (sage_batch_num_ < 0) {
+      if (sage_batch_num_ <= 0) {
         return 0;
       }
       sage_batch_num_ -= 1;
@@ -1592,8 +1592,8 @@ void GraphDataGenerator::DoWalkandSage() {
       while (ins_pair_flag) {
         int res = 0;
         while (ins_buf_pair_len_ < batch_size_) {
-          res = FillInsBuf();
-          VLOG(0) << gpuid_ << " FillInsBuf_res: " << res 
+          res = FillInsBuf(sample_stream_);
+          VLOG(0) << gpuid_ << " FillInsBuf_res: " << res
                             << " ins_buf_pair_len_: " << ins_buf_pair_len_;
           if (res == -1) {
             VLOG(0) << gpuid_ << " Enter res==-1";

@@ -919,7 +919,7 @@ class GraphDataGenerator {
                    int cur_degree,
                    int step,
                    int* len_per_row);
-  int FillInsBuf();
+  int FillInsBuf(cudaStream_t stream);
   int FillIdShowClkTensor(int total_instance,
                           bool gpu_graph_training,
                           size_t cursor = 0);
@@ -928,7 +928,7 @@ class GraphDataGenerator {
                                int index);
   int FillGraphSlotFeature(int total_instance, bool gpu_graph_training,
                            std::shared_ptr<phi::Allocation> final_sage_nodes=nullptr);
-  int MakeInsPair();
+  int MakeInsPair(cudaStream_t stream);
   uint64_t CopyUniqueNodes();
   int GetPathNum() { return total_row_; }
   void ResetPathNum() {total_row_ = 0; }
