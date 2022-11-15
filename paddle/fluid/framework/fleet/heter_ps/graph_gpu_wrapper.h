@@ -122,8 +122,7 @@ class GraphGpuWrapper {
                                               std::vector<uint64_t>& key,
                                               int sample_size);
   std::vector<std::shared_ptr<phi::Allocation>> get_edge_type_graph(
-      int gpu_id, int edge_type_len, cudaStream_t stream,
-      const paddle::platform::Place& place);
+      int gpu_id, int edge_type_len);
   std::vector<int> slot_feature_num_map() const ;
   void set_feature_separator(std::string ch);
   void set_slot_feature_separator(std::string ch);

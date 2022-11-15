@@ -28,8 +28,6 @@ limitations under the License. */
 #include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_wrapper.h"
 #include "paddle/fluid/framework/fleet/heter_ps/hashtable.h"
 #include "paddle/fluid/framework/fleet/ps_gpu_wrapper.h"
-#include "paddle/phi/kernels/empty_kernel.h"
-#include "paddle/phi/kernels/unique_kernel.h"
 #include "paddle/phi/kernels/graph_reindex_kernel.h"
 #include "paddle/phi/kernels/gpu/graph_reindex_funcs.h"
 
@@ -581,7 +579,6 @@ int GraphDataGenerator::FillIdShowClkTensor(int total_instance,
 int GraphDataGenerator::FillGraphIdShowClkTensor(int uniq_instance,
                                                  int total_instance,
                                                  int index) {
-  VLOG(0) << "Enter FillGraphIdShowClkTensor";
   id_tensor_ptr_ =
       feed_vec_[0]->mutable_data<int64_t>({uniq_instance, 1}, this->place_);
   show_tensor_ptr_ =
@@ -790,7 +787,6 @@ int GraphDataGenerator::FillGraphSlotFeature(int total_instance,
 }
 
 int GraphDataGenerator::MakeInsPair(cudaStream_t stream) {
-  VLOG(0) << gpuid_ << " Enter MakeInsPair"; 
   uint64_t *walk = reinterpret_cast<uint64_t *>(d_walk_->ptr());
   uint64_t *ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_->ptr());
   int *random_row = reinterpret_cast<int *>(d_random_row_->ptr());
@@ -798,7 +794,6 @@ int GraphDataGenerator::MakeInsPair(cudaStream_t stream) {
   cudaMemsetAsync(d_pair_num, 0, sizeof(int), stream);
   int len = buf_state_.len;
   // make pair
-  VLOG(0) << gpuid_ << " at first ins_buf_pair_len_ " << ins_buf_pair_len_;
   GraphFillIdKernel<<<GET_BLOCKS(len), CUDA_NUM_THREADS, 0, stream>>>(
       ins_buf + ins_buf_pair_len_ * 2,
       d_pair_num,
@@ -816,7 +811,6 @@ int GraphDataGenerator::MakeInsPair(cudaStream_t stream) {
                   stream);
   cudaStreamSynchronize(stream);
   ins_buf_pair_len_ += h_pair_num;
-  VLOG(0) << gpuid_ << " add h_pair_num ins_buf_pair_len_ " << ins_buf_pair_len_; 
 
   if (debug_mode_) {
     uint64_t h_ins_buf[ins_buf_pair_len_ * 2];
@@ -839,7 +833,6 @@ int GraphDataGenerator::FillInsBuf(cudaStream_t stream) {
   }
   int total_instance = AcquireInstance(&buf_state_);
 
-  VLOG(2) << "total_ins: " << total_instance;
   buf_state_.Debug();
 
   if (total_instance == 0) {
@@ -1461,7 +1454,6 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
                              reinterpret_cast<uint32_t* >(d_offset_->ptr()),
                              reinterpret_cast<uint32_t* >(d_merged_cnts_->ptr()),
                              sample_stream_, d_buf_, place_);
-  VLOG(0) << gpuid_ << " len: " << len << ", uniq_len: " << uniq_len;
 
   int len_samples = samples_.size();
 
@@ -1478,8 +1470,8 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
     int64_t neighbors_len = 0;
     if (i == 0) {
       auto sample_results =
-          SampleNeighbors(uniq_nodes_data, uniq_len, samples_[i], edges_split_num,
-                          &neighbors_len);
+          SampleNeighbors(uniq_nodes_data, uniq_len, samples_[i],
+                          edges_split_num, &neighbors_len);
       neighbors = sample_results[0];
       reindex_dst = sample_results[1];
       edges_split_num.push_back(uniq_len);
@@ -1546,7 +1538,6 @@ uint64_t GraphDataGenerator::CopyUniqueNodes() {
                     cudaMemcpyDeviceToHost,
                     sample_stream_);
     cudaStreamSynchronize(sample_stream_);
-    VLOG(0) << "h_uniq_node_num: " << h_uniq_node_num;
     auto d_uniq_node = memory::AllocShared(
         place_,
         h_uniq_node_num * sizeof(uint64_t),
@@ -1582,21 +1573,19 @@ uint64_t GraphDataGenerator::CopyUniqueNodes() {
 void GraphDataGenerator::DoWalkandSage() {
   int device_id = place_.GetDeviceId();
   debug_gpu_memory_info(device_id, "DoWalkandSage start");
+  platform::CUDADeviceGuard guard(gpuid_);
   if (gpu_graph_training_) {
     FillWalkBuf();
     if (sage_mode_) {
       sage_batch_num_ = 0;
       int total_instance = 0, uniq_instance = 0;
-      uint64_t *ins_cursor, *ins_buf;
       bool ins_pair_flag = true;
+      uint64_t *ins_buf, *ins_cursor;
       while (ins_pair_flag) {
         int res = 0;
         while (ins_buf_pair_len_ < batch_size_) {
           res = FillInsBuf(sample_stream_);
-          VLOG(0) << gpuid_ << " FillInsBuf_res: " << res
-                            << " ins_buf_pair_len_: " << ins_buf_pair_len_;
           if (res == -1) {
-            VLOG(0) << gpuid_ << " Enter res==-1";
             if (ins_buf_pair_len_ == 0) {
               ins_pair_flag = false;
             }
@@ -1604,7 +1593,6 @@ void GraphDataGenerator::DoWalkandSage() {
           }
         }
 
-        VLOG(0) << gpuid_ << " ins_pair_flag: " << ins_pair_flag;
         if (!ins_pair_flag) {
           break;
         }
@@ -1612,7 +1600,6 @@ void GraphDataGenerator::DoWalkandSage() {
         total_instance =
             ins_buf_pair_len_ < batch_size_ ? ins_buf_pair_len_ : batch_size_;
         total_instance *= 2;
-        VLOG(0) << gpuid_ << " total_instance:" << total_instance;
 
         ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_->ptr());
         ins_cursor = ins_buf + ins_buf_pair_len_ * 2 - total_instance;
@@ -1633,14 +1620,11 @@ void GraphDataGenerator::DoWalkandSage() {
         inverse_vec_.emplace_back(inverse);
         uniq_instance_vec_.emplace_back(uniq_instance);
         total_instance_vec_.emplace_back(total_instance);
-        // graph_edges_vec_
-        // edges_split_num_vec_
         ins_buf_pair_len_ -= total_instance / 2;
         sage_batch_num_ += 1;
       }
 
       uint64_t h_uniq_node_num = CopyUniqueNodes();
-      VLOG(0) << gpuid_ << " train stage h_uniq_node_num: " << h_uniq_node_num;
     }
   } else {
     FillInferBuf();
@@ -2169,9 +2153,7 @@ void GraphDataGenerator::AllocResource(int thread_id,
         reindex_table_size_ * sizeof(int),
         phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
     edge_type_graph_ =
-        gpu_graph_ptr->get_edge_type_graph(gpuid_, edge_to_id_len_,
-                                           sample_stream_,
-                                           place_);
+        gpu_graph_ptr->get_edge_type_graph(gpuid_, edge_to_id_len_);
 
     d_sorted_keys_ = memory::AllocShared(
         place_,

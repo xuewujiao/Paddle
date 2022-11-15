@@ -627,10 +627,13 @@ void GpuPsGraphTable::build_graph_fea_on_single_gpu(const GpuPsCommGraphFea& g,
 }
 
 std::vector<std::shared_ptr<phi::Allocation>> GpuPsGraphTable::get_edge_type_graph(
-    int gpu_id, int edge_type_len, cudaStream_t stream,
-    const paddle::platform::Place& place) {
-  platform::CUDADeviceGuard guard(resource_->dev_id(gpu_id));
+    int gpu_id, int edge_type_len) {
+
   int total_gpu = resource_->total_device();
+  auto stream = resource_->local_stream(gpu_id, 0);
+
+  platform::CUDAPlace place = platform::CUDAPlace(resource_->dev_id(gpu_id));
+  platform::CUDADeviceGuard guard(resource_->dev_id(gpu_id));
 
   std::vector<std::shared_ptr<phi::Allocation>> graphs_vec;
   for (int i = 0; i < total_gpu; i++) {
