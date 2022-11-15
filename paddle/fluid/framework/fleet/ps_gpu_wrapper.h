@@ -792,6 +792,8 @@ class PSGPUWrapper {
   std::vector<std::shared_ptr<ThreadPool>> hbm_thread_pool_;
   std::vector<std::shared_ptr<ThreadPool>> cpu_work_pool_;
   OptimizerConfig optimizer_config_;
+  // gradient push count
+  uint64_t grad_push_count_ = 0;
 
  protected:
   static bool is_initialized_;

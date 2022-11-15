@@ -1425,6 +1425,12 @@ void PSGPUWrapper::SparseTableToHbm() {
 }
 
 void PSGPUWrapper::HbmToSparseTable() {
+  // hbm no update not need dump
+  if (grad_push_count_ == 0) {
+    return;
+  }
+  grad_push_count_ = 0;
+
   if (!current_task_) {
     PADDLE_THROW(
         platform::errors::Fatal("[EndPass] current task has been ended."));
@@ -1858,6 +1864,7 @@ void PSGPUWrapper::PushSparseGrad(const paddle::platform::Place& place,
                                   const std::vector<int64_t>& slot_lengths,
                                   const int hidden_size,
                                   const int batch_size) {
+  ++grad_push_count_;
   platform::Timer all_timer;
   platform::Timer push_gpups_timer;
   all_timer.Start();
