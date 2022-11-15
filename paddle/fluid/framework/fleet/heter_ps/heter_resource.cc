@@ -41,11 +41,13 @@ GPUResource::GPUResource(std::vector<int>& dev_ids, int index) {
   for (size_t i = 0; i < dev_ids_.size(); ++i) {
     PADDLE_ENFORCE_GPU_SUCCESS(
         cudaStreamCreateWithFlags(&local_streams_[i], cudaStreamNonBlocking));
+    VLOG(0) << " index " << index << " local "<< i << " is " << (uint64_t) local_streams_[i];
     PADDLE_ENFORCE_GPU_SUCCESS(
         cudaStreamCreateWithFlags(&comm_streams_[i], cudaStreamNonBlocking));
     PADDLE_ENFORCE_GPU_SUCCESS(
         cudaStreamCreateWithFlags(&remote_streams_[i], cudaStreamNonBlocking));
   }
+
 }
 
 GPUResource::~GPUResource() {
