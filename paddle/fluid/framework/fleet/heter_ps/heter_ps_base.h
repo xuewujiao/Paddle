@@ -82,6 +82,10 @@ class HeterPsBase {
                                      uint32_t* d_merged_cnts,
                                      bool filter_zero) = 0;
 #endif
+  virtual void reset_table(const int dev_id,
+          size_t capacity,
+          const OptimizerConfig& sgd_config,
+          const OptimizerConfig& embedx_config) = 0;
 };
 
 }  // end namespace framework

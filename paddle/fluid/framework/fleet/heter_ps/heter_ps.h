@@ -79,6 +79,14 @@ class HeterPs : public HeterPsBase {
                              uint32_t* d_merged_cnts,
                              bool filter_zero);
 #endif
+  // reset table
+  void reset_table(const int dev_id,
+            size_t capacity,
+            const OptimizerConfig& sgd_config,
+            const OptimizerConfig& embedx_config) {
+    comm_->reset_table(dev_id, capacity, sgd_config, embedx_config);
+  }
+
  private:
   std::shared_ptr<HeterComm<FeatureKey, float*, float*, GPUAccessor>> comm_;
 #if defined(PADDLE_WITH_CUDA)

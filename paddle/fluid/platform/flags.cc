@@ -1002,10 +1002,9 @@ PADDLE_DEFINE_EXPORTED_bool(enable_all2all_use_fp16,
 PADDLE_DEFINE_EXPORTED_bool(enable_sparse_inner_gather,
                             false,
                             "enable sparse inner gather, default false");
-PADDLE_DEFINE_EXPORTED_bool(
-    gpugraph_load_node_list_into_hbm,
-    true,
-    "enable load_node_list_into_hbm, default true");
+PADDLE_DEFINE_EXPORTED_bool(gpugraph_debug_gpu_memory,
+                            false,
+                            "enable debug gpu memory, default false");
 /**
  * ProcessGroupNCCL related FLAG
  * Name: nccl_blocking_wait

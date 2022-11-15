@@ -243,6 +243,10 @@ class PSGPUWrapper {
     s_instance_ = nullptr;
     VLOG(3) << "PSGPUWrapper Finalize Finished.";
     HeterPs_->show_table_collisions();
+    if (HeterPs_ != NULL) {
+      delete HeterPs_;
+      HeterPs_ = NULL;
+    }
     if (device_caches_ != nullptr) {
       delete[] device_caches_;
       device_caches_ = nullptr;
@@ -703,7 +707,7 @@ class PSGPUWrapper {
       uint64_t,
       std::vector<std::unordered_map<uint64_t, std::vector<float>>>>
       local_tables_;
-  HeterPsBase* HeterPs_;
+  HeterPsBase* HeterPs_ = NULL;
   std::vector<LoDTensor> keys_tensor;  // Cache for pull_sparse
   std::shared_ptr<HeterPsResource> resource_;
   int32_t sleep_seconds_before_fail_exit_;

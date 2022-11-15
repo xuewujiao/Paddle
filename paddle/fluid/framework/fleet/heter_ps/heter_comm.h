@@ -64,7 +64,11 @@ class HeterComm {
   virtual ~HeterComm();
   HeterComm(const HeterComm&) = delete;
   HeterComm& operator=(const HeterComm&) = delete;
-
+  // reset table
+  void reset_table(const int dev_id,
+      size_t capacity,
+      const OptimizerConfig& sgd_config,
+      const OptimizerConfig& embedx_config);
   template <typename StreamType>
   size_t merge_keys(const int gpu_num,
                     const KeyType* d_keys,
