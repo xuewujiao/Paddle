@@ -649,11 +649,15 @@ void PSGPUWrapper::BuildPull(std::shared_ptr<HeterContext> gpu_task) {
 
   resize_gputask(gpu_task);
 
-  platform::Timer time_stage;
-  time_stage.Start();
-  gpu_task->UniqueKeys();
-  time_stage.Pause();
-  VLOG(0) << "BuildPull UniqueKeys cost time: " << time_stage.ElapsedSec();
+  if (slot_num > 0 && FLAGS_gpugraph_storage_mode !=
+                          paddle::framework::GpuGraphStorageMode::WHOLE_HBM) {
+    platform::Timer time_stage;
+    time_stage.Start();
+    gpu_task->UniqueKeys();
+    time_stage.Pause();
+    VLOG(0) << "BuildPull slot feature uniq and sort cost time: "
+            << time_stage.ElapsedSec();
+  }
 
   auto& local_dim_keys = gpu_task->feature_dim_keys_;
   auto& local_dim_ptr = gpu_task->value_dim_ptr_;
