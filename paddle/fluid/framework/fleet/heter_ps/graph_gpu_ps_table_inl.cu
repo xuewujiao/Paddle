@@ -1254,6 +1254,7 @@ int GpuPsGraphTable::get_feature_info_of_nodes(int gpu_id,
     platform::CUDADeviceGuard guard(resource_->dev_id(i));
     auto& node = path_[gpu_id][i].nodes_.back();
     create_tmp_storage(d_fea_info[i], gpu_id, i, shard_len[i] * sizeof(uint64_t));
+    CUDA_CHECK(cudaMemsetAsync(d_fea_info[i], 0, shard_len[i] * sizeof(uint64_t), node.in_stream)); 
     create_tmp_storage(d_fea_size[i], gpu_id, i, shard_len[i] * sizeof(uint32_t));    
     create_tmp_storage(d_fea_size_prefix_sum[i], gpu_id, i, (shard_len[i] + 1) * sizeof(uint32_t)); 
     CUDA_CHECK(cub::DeviceScan::InclusiveSum(NULL,
@@ -1263,18 +1264,18 @@ int GpuPsGraphTable::get_feature_info_of_nodes(int gpu_id,
                                              shard_len[i],
                                              resource_->remote_stream(i, gpu_id)));     
   }
+
   for (int i = 0; i < total_gpu; ++i) { 
     if (h_left[i] == -1) {
       continue;
     }
     platform::CUDADeviceGuard guard(resource_->dev_id(i));
-    CUDA_CHECK(cudaStreamSynchronize(resource_->remote_stream(i, gpu_id))); //wait for calc temp_storage_bytes
-    CUDA_CHECK(cudaMemsetAsync(d_fea_info[i], 0, shard_len[i] * sizeof(uint64_t), resource_->remote_stream(i, gpu_id)));  
+    CUDA_CHECK(cudaStreamSynchronize(resource_->remote_stream(i, gpu_id))); //wait for calc temp_storage_bytes 
+    create_tmp_storage(d_temp_storage[i], gpu_id, i, temp_storage_bytes[i]);
   }
-     
   walk_to_dest(
      gpu_id, total_gpu, h_left, h_right, (uint64_t*)(d_shard_keys_ptr), NULL);
-  
+      
   // no sync so 8 card can parallel execute 
   for (int i = 0; i < total_gpu; ++i) {
     if (h_left[i] == -1) {
@@ -1284,6 +1285,7 @@ int GpuPsGraphTable::get_feature_info_of_nodes(int gpu_id,
     auto& node = path_[gpu_id][i].nodes_.back();
     // If not found, val is -1.
     int table_offset = get_table_offset(i, GraphTableType::FEATURE_TABLE, 0);
+    CUDA_CHECK(cudaStreamSynchronize(node.in_stream));//wait for walk_to_dest and memset 
     tables_[table_offset]->get(reinterpret_cast<uint64_t*>(node.key_storage),
                                (uint64_t *)d_fea_info[i],
                                (size_t)(h_right[i] - h_left[i] + 1),
@@ -1299,21 +1301,14 @@ int GpuPsGraphTable::get_feature_info_of_nodes(int gpu_id,
       (uint32_t *)d_fea_size[i], 
       shard_len[i]);
     CUDA_CHECK(cudaMemsetAsync(d_fea_size_prefix_sum[i], 0, sizeof(uint32_t),  resource_->remote_stream(i, gpu_id))); 
-    create_tmp_storage(d_temp_storage[i], gpu_id, i, temp_storage_bytes[i]);
     CUDA_CHECK(cub::DeviceScan::InclusiveSum(d_temp_storage[i],
                                              temp_storage_bytes[i],
                                              (uint32_t *)d_fea_size[i],
                                              (uint32_t *)d_fea_size_prefix_sum[i] + 1,
                                              shard_len[i],
                                              resource_->remote_stream(i, gpu_id)));
-                                             
-    CUDA_CHECK(cudaMemcpyAsync(&fea_num_list[i],
-                  (uint32_t *)d_fea_size_prefix_sum[i] + shard_len[i],
-                  sizeof(uint32_t),
-                  cudaMemcpyDeviceToHost,
-                  resource_->remote_stream(i, gpu_id)));
   }
-  
+
   // wait for fea_num_list
   for (int i = 0; i < total_gpu; ++i) { 
     platform::CUDADeviceGuard guard(resource_->dev_id(i));
@@ -1321,11 +1316,13 @@ int GpuPsGraphTable::get_feature_info_of_nodes(int gpu_id,
       continue;
     }
     auto& node = path_[gpu_id][i].nodes_.back();
+    CUDA_CHECK(cudaMemcpyAsync(&fea_num_list[i],
+                 (uint32_t *)d_fea_size_prefix_sum[i] + shard_len[i],
+                 sizeof(uint32_t),
+                 cudaMemcpyDeviceToHost,
+                 resource_->remote_stream(i, gpu_id)));
     
     CUDA_CHECK(cudaStreamSynchronize(resource_->remote_stream(i, gpu_id))); //wait for fea_num_list  
-    if (d_temp_storage[i] != NULL) { 
-      destroy_tmp_storage(d_temp_storage[i],gpu_id, i);
-    }
       
     create_storage(gpu_id,
                     i,
@@ -1357,9 +1354,8 @@ int GpuPsGraphTable::get_feature_info_of_nodes(int gpu_id,
         feature_array,
         slot_array,
         shard_len[i]);
-    
   }
-  
+
   for (int i = 0; i < total_gpu; ++i) {
     if (h_left[i] == -1) {
       continue;
@@ -1390,7 +1386,6 @@ int GpuPsGraphTable::get_feature_info_of_nodes(int gpu_id,
                     node_num * sizeof(uint32_t),
                     phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   uint32_t* d_size_list_ptr = reinterpret_cast<uint32_t*>(size_list_tmp->ptr());            
-  CUDA_CHECK(cudaStreamSynchronize(stream));
   
   move_result_to_source_gpu(gpu_id,
                             total_gpu,
@@ -1416,8 +1411,11 @@ int GpuPsGraphTable::get_feature_info_of_nodes(int gpu_id,
     if (d_fea_size_prefix_sum[i] != NULL) {
       destroy_tmp_storage(d_fea_size_prefix_sum[i], gpu_id, i);
     }
+    if (d_temp_storage[i] != NULL) { 
+      destroy_tmp_storage(d_temp_storage[i],gpu_id, i);
+    }
   }
-  
+
   d_fea_info.clear();
   d_fea_size.clear();
   d_fea_size_prefix_sum.clear();
