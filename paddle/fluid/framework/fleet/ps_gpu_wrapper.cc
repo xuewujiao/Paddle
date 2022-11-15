@@ -196,7 +196,12 @@ void PSGPUWrapper::add_key_to_gputask(std::shared_ptr<HeterContext> gpu_task) {
   VLOG(0) << "GpuPs task add keys cost " << timeline.ElapsedSec()
           << " seconds.";
   timeline.Start();
-  gpu_task->UniqueKeys();
+  size_t slot_num = slot_vector_.size() - 1;
+  // no slot_fea mode and whole_hbm mode, only keep one unique_sort action
+  if (slot_num > 0 && FLAGS_gpugraph_storage_mode !=
+                          paddle::framework::GpuGraphStorageMode::WHOLE_HBM) {
+    gpu_task->UniqueKeys();
+  }
   timeline.Pause();
   VLOG(0) << "GpuPs task unique cost " << timeline.ElapsedSec() << " seconds.";
 }
@@ -649,15 +654,12 @@ void PSGPUWrapper::BuildPull(std::shared_ptr<HeterContext> gpu_task) {
 
   resize_gputask(gpu_task);
 
-  if (slot_num > 0 && FLAGS_gpugraph_storage_mode !=
-                          paddle::framework::GpuGraphStorageMode::WHOLE_HBM) {
-    platform::Timer time_stage;
-    time_stage.Start();
-    gpu_task->UniqueKeys();
-    time_stage.Pause();
-    VLOG(0) << "BuildPull slot feature uniq and sort cost time: "
-            << time_stage.ElapsedSec();
-  }
+  platform::Timer time_stage;
+  time_stage.Start();
+  gpu_task->UniqueKeys();
+  time_stage.Pause();
+  VLOG(0) << "BuildPull slot feature uniq and sort cost time: "
+          << time_stage.ElapsedSec();
 
   auto& local_dim_keys = gpu_task->feature_dim_keys_;
   auto& local_dim_ptr = gpu_task->value_dim_ptr_;
