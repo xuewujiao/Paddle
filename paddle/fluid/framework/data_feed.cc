@@ -2122,6 +2122,10 @@ void SlotRecordInMemoryDataFeed::InitGraphResource() {
   gpu_graph_data_generator_.AllocResource(thread_id_, feed_vec_);
 }
 
+void SlotRecordInMemoryDataFeed::InitGraphTrainResource() {
+  gpu_graph_data_generator_.AllocTrainResource(thread_id_);
+}
+
 void SlotRecordInMemoryDataFeed::LoadIntoMemory() {
   VLOG(3) << "SlotRecord LoadIntoMemory() begin, thread_id=" << thread_id_;
   if (!so_parser_name_.empty()) {

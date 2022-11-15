@@ -34,6 +34,7 @@
 DECLARE_bool(graph_load_in_parallel);
 DECLARE_bool(graph_get_neighbor_id);
 DECLARE_int32(gpugraph_storage_mode);
+DECLARE_uint64(gpugraph_slot_feasign_max_num);
 
 namespace paddle {
 namespace distributed {
@@ -56,27 +57,38 @@ int32_t GraphTable::Load_to_ssd(const std::string &path,
 }
 
 paddle::framework::GpuPsCommGraphFea GraphTable::make_gpu_ps_graph_fea(
-    std::vector<uint64_t> &node_ids, int slot_num) {
-  std::vector<std::vector<uint64_t>> bags(task_pool_size_);
-  for (int i = 0; i < task_pool_size_; i++) {
-    auto predsize = node_ids.size() / task_pool_size_;
+    int gpu_id, std::vector<uint64_t> &node_ids, int slot_num) {
+  size_t shard_num = 64;
+  std::vector<std::vector<uint64_t>> bags(shard_num);
+  std::vector<uint64_t> feature_array[shard_num];
+  std::vector<uint8_t> slot_id_array[shard_num];
+  std::vector<uint64_t> node_id_array[shard_num];
+  std::vector<paddle::framework::GpuPsFeaInfo> node_fea_info_array[shard_num];
+  for (size_t i = 0; i < shard_num; i++) {
+    auto predsize = node_ids.size() / shard_num;
     bags[i].reserve(predsize * 1.2);
+    feature_array[i].reserve(predsize * 1.2 * slot_num);
+    slot_id_array[i].reserve(predsize * 1.2 * slot_num);
+    node_id_array[i].reserve(predsize * 1.2);
+    node_fea_info_array[i].reserve(predsize * 1.2);
   }
 
   for (auto x : node_ids) {
-    int location = x % shard_num % task_pool_size_;
+    int location = x % shard_num;
     bags[location].push_back(x);
   }
 
   std::vector<std::future<int>> tasks;
-  std::vector<uint64_t> feature_array[task_pool_size_];
-  std::vector<uint8_t> slot_id_array[task_pool_size_];
-  std::vector<uint64_t> node_id_array[task_pool_size_];
-  std::vector<paddle::framework::GpuPsFeaInfo>
-      node_fea_info_array[task_pool_size_];
+  if (slot_feature_num_map_.size() == 0) {
+    slot_feature_num_map_.resize(slot_num);
+    for (int k = 0; k < slot_num; ++k) {
+      slot_feature_num_map_[k] = 0;
+    }
+  }
+
   for (size_t i = 0; i < bags.size(); i++) {
     if (bags[i].size() > 0) {
-      tasks.push_back(_shards_task_pool[i]->enqueue([&, i, this]() -> int {
+      tasks.push_back(_cpu_worker_pool[gpu_id]->enqueue([&, i, this]() -> int {
         uint64_t node_id;
         paddle::framework::GpuPsFeaInfo x;
         std::vector<uint64_t> feature_ids;
@@ -93,15 +105,11 @@ paddle::framework::GpuPsCommGraphFea GraphTable::make_gpu_ps_graph_fea(
             x.feature_offset = feature_array[i].size();
             int total_feature_size = 0;
             for (int k = 0; k < slot_num; ++k) {
-              v->get_feature_ids(k, &feature_ids);
-              total_feature_size += feature_ids.size();
-              if (!feature_ids.empty()) {
-                feature_array[i].insert(feature_array[i].end(),
-                                        feature_ids.begin(),
-                                        feature_ids.end());
-                slot_id_array[i].insert(
-                    slot_id_array[i].end(), feature_ids.size(), k);
+              auto feature_ids_size = v->get_feature_ids(k, feature_array[i], slot_id_array[i]);
+              if (slot_feature_num_map_[k] < feature_ids_size) {
+                slot_feature_num_map_[k] = feature_ids_size;
               }
+              total_feature_size += feature_ids_size;
             }
             x.feature_size = total_feature_size;
             node_fea_info_array[i].push_back(x);
@@ -113,27 +121,41 @@ paddle::framework::GpuPsCommGraphFea GraphTable::make_gpu_ps_graph_fea(
     }
   }
   for (int i = 0; i < (int)tasks.size(); i++) tasks[i].get();
+
+  std::stringstream ss;
+  for (int k = 0; k < slot_num; ++k) {
+    ss << slot_feature_num_map_[k] << " ";
+  }
+  VLOG(0) << "slot_feature_num_map: " << ss.str();
+
+  tasks.clear();
   paddle::framework::GpuPsCommGraphFea res;
   uint64_t tot_len = 0;
-  for (int i = 0; i < task_pool_size_; i++) {
+  for (int i = 0; i < shard_num; i++) {
     tot_len += feature_array[i].size();
   }
   VLOG(0) << "Loaded feature table on cpu, feature_list_size[" << tot_len
           << "] node_ids_size[" << node_ids.size() << "]";
   res.init_on_cpu(tot_len, (unsigned int)node_ids.size(), slot_num);
   unsigned int offset = 0, ind = 0;
-  for (int i = 0; i < task_pool_size_; i++) {
-    for (int j = 0; j < (int)node_id_array[i].size(); j++) {
-      res.node_list[ind] = node_id_array[i][j];
-      res.fea_info_list[ind] = node_fea_info_array[i][j];
-      res.fea_info_list[ind++].feature_offset += offset;
-    }
-    for (size_t j = 0; j < feature_array[i].size(); j++) {
-      res.feature_list[offset + j] = feature_array[i][j];
-      res.slot_id_list[offset + j] = slot_id_array[i][j];
-    }
+  for (int i = 0; i < shard_num; i++) {
+    tasks.push_back(_cpu_worker_pool[gpu_id]->enqueue([&, i, ind, offset, this]() -> int {
+      auto start = ind;
+      for (int j = 0; j < (int)node_id_array[i].size(); j++) {
+        res.node_list[start] = node_id_array[i][j];
+        res.fea_info_list[start] = node_fea_info_array[i][j];
+        res.fea_info_list[start++].feature_offset += offset;
+      }
+      for (size_t j = 0; j < feature_array[i].size(); j++) {
+        res.feature_list[offset + j] = feature_array[i][j];
+        res.slot_id_list[offset + j] = slot_id_array[i][j];
+      }
+      return 0;
+    }));
     offset += feature_array[i].size();
+    ind += node_id_array[i].size();
   }
+  for (int i = 0; i < (int)tasks.size(); i++) tasks[i].get();
   return res;
 }
 
@@ -483,17 +505,32 @@ void GraphTable::release_graph() {
     build_graph_total_keys();
   }
   // clear graph
-  clear_graph();
+  if (FLAGS_gpugraph_storage_mode == paddle::framework::GpuGraphStorageMode::MEM_EMB_FEATURE_AND_GPU_GRAPH
+          || FLAGS_gpugraph_storage_mode == paddle::framework::GpuGraphStorageMode::SSD_EMB_AND_MEM_FEATURE_GPU_GRAPH) {
+    clear_edge_shard();
+  }
+  else {
+    clear_graph();
+  }
 }
 
 void GraphTable::release_graph_edge() {
-  build_graph_total_keys();
+  if (FLAGS_gpugraph_storage_mode == paddle::framework::GpuGraphStorageMode::WHOLE_HBM) {
+    build_graph_total_keys();
+  }
   clear_edge_shard();
 }
 
 void GraphTable::release_graph_node() {
   build_graph_type_keys();
-  clear_feature_shard();
+  if (FLAGS_gpugraph_storage_mode != paddle::framework::GpuGraphStorageMode::MEM_EMB_FEATURE_AND_GPU_GRAPH
+           && FLAGS_gpugraph_storage_mode != paddle::framework::GpuGraphStorageMode::SSD_EMB_AND_MEM_FEATURE_GPU_GRAPH) {
+    clear_feature_shard();
+  }
+  else {
+    merge_feature_shard();
+    feature_shrink_to_fit();
+  }
 }
 
 void GraphTable::clear_edge_shard() {
@@ -530,6 +567,36 @@ void GraphTable::clear_feature_shard() {
   for (auto &shards : feature_shards) shards.clear();
   feature_shards.clear();
   VLOG(0) << "finish clear feature shard";
+}
+
+void GraphTable::feature_shrink_to_fit() {
+  std::vector<std::future<int>> tasks;
+  for (auto &type_shards : feature_shards) {
+      for (auto &shard : type_shards) {
+        tasks.push_back(
+          load_node_edge_task_pool->enqueue([&shard, this]() -> int {
+             shard->shrink_to_fit();
+             return 0;
+        }));
+      }
+  }
+  for(size_t i = 0; i < tasks.size(); i++) tasks[i].get(); 
+}
+
+void GraphTable::merge_feature_shard() {
+  VLOG(0) << "begin merge_feature_shard";
+  std::vector<std::future<int>> tasks;
+  for (size_t i = 0; i < feature_shards[0].size(); i++) {
+    tasks.push_back(
+      load_node_edge_task_pool->enqueue([i, this]() -> int {
+        for (size_t j = 1; j < feature_shards.size(); j++) {
+          feature_shards[0][i]->merge_shard(feature_shards[j][i]);
+        }
+        return 0;
+    }));
+  }
+  for (size_t i = 0; i < tasks.size(); i++) tasks[i].get();
+  feature_shards.resize(1);
 }
 
 void GraphTable::clear_graph() {
@@ -1210,23 +1277,27 @@ int32_t GraphTable::parse_node_and_load(std::string ntype2files,
     VLOG(0) << "parse node type and nodedir failed!";
     return -1;
   }
-
-  std::string delim = ";";
-  std::string npath = node_to_nodedir[ntypes[0]];
-  auto npath_list = paddle::framework::localfs_list(npath);
-  std::string npath_str;
-  if (part_num > 0 && part_num < (int)npath_list.size()) {
-    std::vector<std::string> sub_npath_list(
-      npath_list.begin(), npath_list.begin() + part_num);
-    npath_str = paddle::string::join_strings(sub_npath_list, delim);
-  } else {
-    npath_str = paddle::string::join_strings(npath_list, delim);
-  }
   if (ntypes.size() == 0) {
     VLOG(0) << "node_type not specified, nothing will be loaded ";
     return 0;
   }
 
+  std::string delim = ";";
+  std::vector<std::string> type_npath_strs;
+  for (size_t i = 0; i <ntypes.size(); i++) {
+    std::string npath = node_to_nodedir[ntypes[i]];
+    auto npath_list = paddle::framework::localfs_list(npath);
+    std::string type_npath_str;
+    if (part_num > 0 && part_num < (int)npath_list.size()) {
+      std::vector<std::string> sub_npath_list(
+        npath_list.begin(), npath_list.begin() + part_num);
+      type_npath_str = paddle::string::join_strings(sub_npath_list, delim);
+    } else {
+      type_npath_str = paddle::string::join_strings(npath_list, delim);
+    }
+    type_npath_strs.push_back(type_npath_str);
+  }
+  std::string npath_str = paddle::string::join_strings(type_npath_strs, delim);
   if (FLAGS_graph_load_in_parallel) {
     this->load_nodes(npath_str, "");
   } else {
@@ -1303,7 +1374,6 @@ int32_t GraphTable::load_node_and_edge_file(std::string etype2files,
               VLOG(0) << "node_type not specified, nothing will be loaded ";
               return 0;
             }
-
             if (FLAGS_graph_load_in_parallel) {
               this->load_nodes(npath_str, "");
             } else {
@@ -1985,9 +2055,13 @@ int GraphTable::parse_feature(int idx,
   // "")
   thread_local std::vector<paddle::string::str_ptr> fields;
   fields.clear();
-  const char c = feature_separator_.at(0);
+  char c = slot_feature_separator_.at(0);
   paddle::string::split_string_ptr(feat_str, len, c, &fields);
 
+  thread_local std::vector<paddle::string::str_ptr> fea_fields;
+  fea_fields.clear();
+  c = feature_separator_.at(0);
+  paddle::string::split_string_ptr(fields[1].ptr, fields[1].len, c, &fea_fields, FLAGS_gpugraph_slot_feasign_max_num);
   std::string name = fields[0].to_string();
   auto it = feat_id_map[idx].find(name);
   if (it != feat_id_map[idx].end()) {
@@ -1998,26 +2072,26 @@ int GraphTable::parse_feature(int idx,
       //      string_vector_2_string(fields.begin() + 1, fields.end(), ' ',
       //      fea_ptr);
       FeatureNode::parse_value_to_bytes<uint64_t>(
-          fields.begin() + 1, fields.end(), fea_ptr);
+          fea_fields.begin(), fea_fields.end(), fea_ptr);
       return 0;
     } else if (dtype == "string") {
-      string_vector_2_string(fields.begin() + 1, fields.end(), ' ', fea_ptr);
+      string_vector_2_string(fea_fields.begin(), fea_fields.end(), ' ', fea_ptr);
       return 0;
     } else if (dtype == "float32") {
       FeatureNode::parse_value_to_bytes<float>(
-          fields.begin() + 1, fields.end(), fea_ptr);
+          fea_fields.begin(), fea_fields.end(), fea_ptr);
       return 0;
     } else if (dtype == "float64") {
       FeatureNode::parse_value_to_bytes<double>(
-          fields.begin() + 1, fields.end(), fea_ptr);
+          fea_fields.begin(), fea_fields.end(), fea_ptr);
       return 0;
     } else if (dtype == "int32") {
       FeatureNode::parse_value_to_bytes<int32_t>(
-          fields.begin() + 1, fields.end(), fea_ptr);
+          fea_fields.begin(), fea_fields.end(), fea_ptr);
       return 0;
     } else if (dtype == "int64") {
       FeatureNode::parse_value_to_bytes<uint64_t>(
-          fields.begin() + 1, fields.end(), fea_ptr);
+          fea_fields.begin(), fea_fields.end(), fea_ptr);
       return 0;
     }
   } else {
@@ -2254,6 +2328,10 @@ void GraphTable::set_feature_separator(const std::string &ch) {
   feature_separator_ = ch;
 }
 
+void GraphTable::set_slot_feature_separator(const std::string &ch) {
+  slot_feature_separator_ = ch;
+}
+
 int32_t GraphTable::get_server_index_by_id(uint64_t id) {
   return id % shard_num / shard_num_per_server;
 }
@@ -2403,6 +2481,13 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
   }
 
   return 0;
+}
+
+void GraphTable::init_worker_poll(int gpu_num) {
+  _cpu_worker_pool.resize(gpu_num);
+  for (int i = 0; i < gpu_num; i++) {
+    _cpu_worker_pool[i].reset(new ::ThreadPool(16));
+  }
 }
 
 void GraphTable::build_graph_total_keys() {

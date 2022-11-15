@@ -581,6 +581,7 @@ int64_t SSDSparseTable::LocalSize() {
 
 int32_t SSDSparseTable::Save(const std::string& path,
                              const std::string& param) {
+  std::lock_guard<std::mutex> guard(_table_mutex);
   if (_real_local_shard_num == 0) {
     _local_show_threshold = -1;
     return 0;
@@ -1227,7 +1228,7 @@ std::pair<int64_t, int64_t> SSDSparseTable::PrintTableStat() {
 }
 
 int32_t SSDSparseTable::CacheTable(uint16_t pass_id) {
-  // acquire_table_mutex();
+  std::lock_guard<std::mutex> guard(_table_mutex);
   VLOG(0) << "cache_table";
   std::atomic<uint32_t> count{0};
   auto thread_num = _real_local_shard_num;
@@ -1376,7 +1377,6 @@ int32_t SSDSparseTable::CacheTable(uint16_t pass_id) {
 
   VLOG(0) << "Table>> cache ssd count: " << count.load();
   VLOG(0) << "Table>> after update, mem feasign size:" << LocalSize();
-  // release_table_mutex();
   return 0;
 }
 

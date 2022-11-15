@@ -52,6 +52,8 @@ class GraphGpuWrapper {
                     int slice_num,
                     const std::string& edge_type);
   void upload_batch(int type, int slice_num, int slot_num);
+  std::vector<GpuPsCommGraphFea> get_sub_graph_fea(std::vector<std::vector<uint64_t>> &node_ids, int slot_num);
+  void build_gpu_graph_fea(GpuPsCommGraphFea &sub_graph_fea, int i);
   void add_table_feat_conf(std::string table_name,
                            std::string feat_name,
                            std::string feat_dtype,
@@ -116,12 +118,25 @@ class GraphGpuWrapper {
                                               int idx,
                                               std::vector<uint64_t>& key,
                                               int sample_size);
+  std::vector<std::shared_ptr<phi::Allocation>> get_edge_type_graph(
+      int gpu_id, int edge_type_len);
+  std::vector<int> slot_feature_num_map() const ;
   void set_feature_separator(std::string ch);
+  void set_slot_feature_separator(std::string ch);
   int get_feature_of_nodes(int gpu_id,
                            uint64_t* d_walk,
                            uint64_t* d_offset,
                            uint32_t size,
-                           int slot_num);
+                           int slot_num,
+                           int* d_slot_feature_num_map,
+                           int fea_num_per_node);
+  int get_feature_info_of_nodes(int gpu_id,
+                                uint64_t* d_nodes,
+                                int node_num,
+                                uint32_t * size_list,
+                                uint32_t * size_list_prefix_sum,
+                                std::shared_ptr<phi::Allocation> & feature_list,
+                                std::shared_ptr<phi::Allocation> & slot_list);
 
   void release_graph();
   void release_graph_edge();
@@ -157,6 +172,7 @@ class GraphGpuWrapper {
   std::vector<std::vector<std::shared_ptr<phi::Allocation>>>
       d_graph_all_type_total_keys_;
   std::vector<std::vector<uint64_t>> h_graph_all_type_keys_len_;
+  std::string slot_feature_separator_ = std::string(" ");
 };
 #endif
 }  // namespace framework

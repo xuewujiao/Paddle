@@ -1,4 +1,4 @@
-/* Copyright (c) 2018 PaddlePaddle Authors. All Rights Reserved.
+    /* Copyright (c) 2018 PaddlePaddle Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -901,12 +901,14 @@ class GraphDataGenerator {
   virtual ~GraphDataGenerator(){};
   void SetConfig(const paddle::framework::DataFeedDesc& data_feed_desc);
   void AllocResource(int thread_id, std::vector<LoDTensor*> feed_vec);
+  void AllocTrainResource(int thread_id);
   void SetFeedVec(std::vector<LoDTensor*> feed_vec);
   int AcquireInstance(BufState* state);
   int GenerateBatch();
   int FillWalkBuf();
   int FillInferBuf();
   void DoWalk();
+  int FillSlotFeature(uint64_t* d_walk);
   int FillFeatureBuf(uint64_t* d_walk, uint64_t* d_feature, size_t key_num);
   int FillFeatureBuf(std::shared_ptr<phi::Allocation> d_walk,
                      std::shared_ptr<phi::Allocation> d_feature);
@@ -922,6 +924,7 @@ class GraphDataGenerator {
                           bool gpu_graph_training,
                           size_t cursor = 0);
   int FillGraphSlotFeature(int total_instance, bool gpu_graph_training);
+  int FillSlotFeature(uint64_t *d_walk, size_t key_num);
   int MakeInsPair();
   int GetPathNum() { return total_row_; }
   void ResetPathNum() {total_row_ = 0; }
@@ -934,10 +937,6 @@ class GraphDataGenerator {
   int InsertTable(const unsigned long* d_keys,
                   unsigned long len,
                   std::shared_ptr<phi::Allocation> d_uniq_node_num);
-  std::shared_ptr<phi::Allocation> GetTableKeys(
-      std::shared_ptr<phi::Allocation> d_uniq_node_num,
-      uint64_t& h_uniq_node_num);
-  void CopyFeaFromTable(std::shared_ptr<phi::Allocation> d_uniq_fea_num);
   std::vector<uint64_t>& GetHostVec() { return host_vec_; }
   bool get_epoch_finish() {return epoch_finish_; }
   void clear_gpu_mem();
@@ -971,6 +970,9 @@ class GraphDataGenerator {
   std::shared_ptr<phi::Allocation> d_len_per_row_;
   std::shared_ptr<phi::Allocation> d_random_row_;
   std::shared_ptr<phi::Allocation> d_uniq_node_num_;
+  std::shared_ptr<phi::Allocation> d_slot_feature_num_map_;
+  std::shared_ptr<phi::Allocation> d_actual_slot_id_map_;
+  std::shared_ptr<phi::Allocation> d_fea_offset_map_;
   //
   std::vector<std::shared_ptr<phi::Allocation>> d_sampleidx2rows_;
   int cur_sampleidx2row_;
@@ -979,7 +981,8 @@ class GraphDataGenerator {
   int sample_keys_len_;
 
   std::shared_ptr<phi::Allocation> d_ins_buf_;
-  std::shared_ptr<phi::Allocation> d_feature_buf_;
+  std::shared_ptr<phi::Allocation> d_feature_size_list_buf_;
+  std::shared_ptr<phi::Allocation> d_feature_size_prefixsum_buf_;
   std::shared_ptr<phi::Allocation> d_pair_num_;
   std::shared_ptr<phi::Allocation> d_slot_tensor_ptr_;
   std::shared_ptr<phi::Allocation> d_slot_lod_tensor_ptr_;
@@ -991,6 +994,8 @@ class GraphDataGenerator {
   BufState buf_state_;
   int batch_size_;
   int slot_num_;
+  std::vector<int> h_slot_feature_num_map_;
+  int fea_num_per_node_;
   int shuffle_seed_;
   int debug_mode_;
   bool gpu_graph_training_;
@@ -1067,6 +1072,7 @@ class DataFeed {
   virtual void SetEnablePvMerge(bool enable_pv_merge) {}
   virtual void SetCurrentPhase(int current_phase) {}
   virtual void InitGraphResource() {}
+  virtual void InitGraphTrainResource() {}
   virtual void SetDeviceKeys(std::vector<uint64_t>* device_keys, int type) {
 #if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
     gpu_graph_data_generator_.SetDeviceKeys(device_keys, type);
@@ -1714,6 +1720,7 @@ class SlotRecordInMemoryDataFeed : public InMemoryDataFeed<SlotRecord> {
   virtual void PutToFeedVec(const std::vector<SlotRecord>& ins_vec) {}
 
   virtual void InitGraphResource(void);
+  virtual void InitGraphTrainResource(void);
   virtual void LoadIntoMemoryByCommand(void);
   virtual void LoadIntoMemoryByLib(void);
   virtual void LoadIntoMemoryByLine(void);
