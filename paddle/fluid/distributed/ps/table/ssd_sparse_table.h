@@ -125,6 +125,15 @@ class SSDSparseTable : public MemorySparseTable {
 
   int32_t CacheTable(uint16_t pass_id) override;
 
+  virtual void AcquireTableMutex() override {
+    VLOG(0) << "AcquireTableMutex";
+    _table_mutex.lock();
+  }
+  virtual void ReleaseTableMutex() override {
+    VLOG(0) << "ReleaseTableMutex";
+    _table_mutex.unlock();
+  }
+
  private:
   RocksDBHandler* _db;
   int64_t _cache_tk_size;

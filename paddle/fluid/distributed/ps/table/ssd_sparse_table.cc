@@ -2038,8 +2038,6 @@ int32_t SSDSparseTable::LoadWithString(
       size_t value_size =
           _value_accesor->ParseFromString(++end, data_buffer_ptr);
       // _value_accesor->UpdatePassId(data_buffer_ptr, 0);
-      // VLOG(0) << "load key: " << key << "    " << value_size << "
-      // ParseFromString: " << end; ssd or mem video slot filter
       filter_begin = butil::gettimeofday_ms();
       if (!_value_accesor->FilterSlot(data_buffer_ptr)) {
         filter_time += butil::gettimeofday_ms() - filter_begin;
@@ -2066,12 +2064,7 @@ int32_t SSDSparseTable::LoadWithString(
         } else {
           auto& value = shard[key];
           value.resize(value_size);
-          if (value_size != 108) {
-            VLOG(1) << " key:" << key << " string:" << end
-                    << "  size:" << value_size;
-          }
           _value_accesor->ParseFromString(end, value.data());
-          // _value_accesor->UpdatePassId(value.data(), 0);
           mem_count++;
           if (value_size > feature_value_size - mf_value_size) {
             mem_mf_count++;

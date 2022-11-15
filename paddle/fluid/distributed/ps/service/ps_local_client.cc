@@ -350,5 +350,15 @@ int32_t PsLocalClient::Initialize() {
   table_ptr->Push(table_context);
   return done();
 }
+void PsLocalClient::AcquireTableMutex(size_t table_id) {
+  auto* table_ptr = GetTable(table_id);
+  table_ptr->AcquireTableMutex();
+}
+
+void PsLocalClient::ReleaseTableMutex(size_t table_id) {
+  auto* table_ptr = GetTable(table_id);
+  table_ptr->ReleaseTableMutex();
+}
+
 }  // namespace distributed
 }  // namespace paddle

@@ -195,6 +195,9 @@ class PsLocalClient : public PSClient {
     return fut;
   }
 
+  virtual void AcquireTableMutex(size_t table_id) override;
+  virtual void ReleaseTableMutex(size_t table_id) override;
+
  private:
   virtual int32_t Initialize() override;
 
