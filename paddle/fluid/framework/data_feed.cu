@@ -886,7 +886,6 @@ int GraphDataGenerator::GenerateBatch() {
               << ", ins_buf_pair_len = " << ins_buf_pair_len_;
       FillIdShowClkTensor(total_instance, gpu_graph_training_);
     } else {
-      VLOG(0) << gpuid_ << ": Begin Train GenerateBatch " << "sage_batch_count: " << sage_batch_count_;
       if (sage_batch_count_ == sage_batch_num_) {
         return 0;
       }
@@ -2028,7 +2027,7 @@ void GraphDataGenerator::AllocResource(int thread_id,
   if (!sage_mode_) {
     slot_num_ = (feed_vec.size() - 3) / 2;
   } else {
-    slot_num_ = (feed_vec_.size() - 4 - samples_.size() * 5) / 2;
+    slot_num_ = (feed_vec.size() - 4 - samples_.size() * 5) / 2;
   }
 
   // infer_node_type_start_ = std::vector<int>(h_device_keys_.size(), 0);
