@@ -1023,6 +1023,7 @@ class GraphDataGenerator {
   std::vector<std::vector<std::vector<int>>> edges_split_num_vec_; // [edges_split_num, edges_split_num, ...]
 
   int64_t reindex_table_size_;
+  int sage_batch_count_;
   int sage_batch_num_;
   int ins_buf_pair_len_;
   // size of a d_walk buf

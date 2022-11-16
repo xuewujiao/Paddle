@@ -601,6 +601,7 @@ int GraphDataGenerator::FillGraphIdShowClkTensor(int uniq_instance,
   for (int i = 0; i < len_samples; i++) {
     int offset = 3 + 2 * slot_num_ + 5 * i;
     std::vector<int> edges_split_num = edges_split_num_for_graph[i];
+
     int neighbor_len = edges_split_num[edge_to_id_len_ + 2];
     num_nodes_tensor_ptr_[i] =
         feed_vec_[offset]->mutable_data<int>({1}, this->place_);
@@ -640,6 +641,7 @@ int GraphDataGenerator::FillGraphIdShowClkTensor(int uniq_instance,
                     cudaMemcpyDeviceToDevice,
                     train_stream_);
   }
+
   cudaMemcpyAsync(id_tensor_ptr_,
                   final_sage_nodes_vec_[index]->ptr(),
                   sizeof(int64_t) * uniq_instance,
@@ -858,13 +860,12 @@ int GraphDataGenerator::GenerateBatch() {
       }
       FillIdShowClkTensor(total_instance, gpu_graph_training_, cursor_);
     } else {
-      if (sage_batch_num_ <= 0) {
+      if (sage_batch_count_ == sage_batch_num_) {
         return 0;
       }
-      sage_batch_num_ -= 1;
-      FillGraphIdShowClkTensor(uniq_instance_vec_[sage_batch_num_],
-                               total_instance_vec_[sage_batch_num_],
-                               sage_batch_num_);
+      FillGraphIdShowClkTensor(uniq_instance_vec_[sage_batch_count_],
+                               total_instance_vec_[sage_batch_count_],
+                               sage_batch_count_);
     }
   } else {
     if (!sage_mode_) {
@@ -885,14 +886,13 @@ int GraphDataGenerator::GenerateBatch() {
               << ", ins_buf_pair_len = " << ins_buf_pair_len_;
       FillIdShowClkTensor(total_instance, gpu_graph_training_);
     } else {
-      VLOG(0) << "Begin Train GenerateBatch " << "sage_batch_num: " << sage_batch_num_;
-      if (sage_batch_num_ <= 0) {
+      VLOG(0) << gpuid_ << ": Begin Train GenerateBatch " << "sage_batch_count: " << sage_batch_count_;
+      if (sage_batch_count_ == sage_batch_num_) {
         return 0;
       }
-      sage_batch_num_ -= 1;
-      FillGraphIdShowClkTensor(uniq_instance_vec_[sage_batch_num_],
-                               total_instance_vec_[sage_batch_num_],
-                               sage_batch_num_);
+      FillGraphIdShowClkTensor(uniq_instance_vec_[sage_batch_count_],
+                               total_instance_vec_[sage_batch_count_],
+                               sage_batch_count_);
     }
   }
 
@@ -900,9 +900,9 @@ int GraphDataGenerator::GenerateBatch() {
     if (!sage_mode_) {
       FillGraphSlotFeature(total_instance, gpu_graph_training_);
     } else {
-      FillGraphSlotFeature(uniq_instance_vec_[sage_batch_num_],
+      FillGraphSlotFeature(uniq_instance_vec_[sage_batch_count_],
                            gpu_graph_training_,
-                           final_sage_nodes_vec_[sage_batch_num_]);
+                           final_sage_nodes_vec_[sage_batch_count_]);
     }
   }
   offset_.clear();
@@ -910,7 +910,8 @@ int GraphDataGenerator::GenerateBatch() {
   if (!sage_mode_) {
     offset_.push_back(total_instance);
   } else {
-    offset_.push_back(uniq_instance_vec_[sage_batch_num_]);
+    offset_.push_back(uniq_instance_vec_[sage_batch_count_]);
+    sage_batch_count_ += 1;
   }
   LoD lod{offset_};
   feed_vec_[0]->set_lod(lod);
@@ -1625,6 +1626,7 @@ void GraphDataGenerator::DoWalkandSage() {
       }
 
       uint64_t h_uniq_node_num = CopyUniqueNodes();
+      VLOG(0) << "train stage h_uniq_node_num: " << h_uniq_node_num;
     }
   } else {
     FillInferBuf();
@@ -2254,6 +2256,7 @@ void GraphDataGenerator::SetConfig(
 
   auto edge_to_id = gpu_graph_ptr->edge_to_id;
   edge_to_id_len_ = edge_to_id.size();
+  sage_batch_count_ = 0;
   auto samples = paddle::string::split_string<std::string>(str_samples, ";");
   for (size_t i = 0; i < samples.size(); i++) {
     int sample_size = std::stoi(samples[i]);
