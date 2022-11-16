@@ -2708,6 +2708,10 @@ int SlotRecordInMemoryDataFeed::Next() {
 void SlotRecordInMemoryDataFeed::DoWalk() {
   gpu_graph_data_generator_.DoWalk();
 }
+
+void SlotRecordInMemoryDataFeed::DoWalkandSage() {
+  gpu_graph_data_generator_.DoWalkandSage();
+}
 #endif
 
 #if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_HETERPS)
