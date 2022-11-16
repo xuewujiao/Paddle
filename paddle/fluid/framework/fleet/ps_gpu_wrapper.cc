@@ -791,17 +791,14 @@ void PSGPUWrapper::BuildPull(std::shared_ptr<HeterContext> gpu_task) {
   std::vector<std::future<void>> task_futures;
   for (int i = 0; i < thread_keys_shard_num_; i++) {
     for (int j = 0; j < multi_mf_dim_; j++) {
-      // task_futures.emplace_back(
-      //     pull_thread_pool_[i]->enqueue(ptl_dynamic_mf_func, i, j));
-      VLOG(0) << " BUILD PULL SHARD:" << i << "  " << j;
-      ptl_dynamic_mf_func(i, j);
-      VLOG(0) << " BUILD PULL SHARD:" << i << " DONE";
+      task_futures.emplace_back(
+          pull_thread_pool_[i]->enqueue(ptl_dynamic_mf_func, i, j));
     }
   }
 
-  // for (auto& f : task_futures) {
-  //   f.wait();
-  // }
+  for (auto& f : task_futures) {
+    f.wait();
+  }
 
 #ifdef PADDLE_WITH_PSCORE
   fleet_ptr->worker_ptr_->ReleaseTableMutex(0);
