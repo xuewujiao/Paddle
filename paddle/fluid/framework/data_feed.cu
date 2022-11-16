@@ -1694,6 +1694,15 @@ void GraphDataGenerator::clear_gpu_mem() {
     d_sampleidx2rows_[i].reset();
   }
   delete table_;
+  if (sage_mode_) {
+    d_reindex_table_key_.reset();
+    d_reindex_table_value_.reset();
+    d_reindex_table_index_.reset();
+    d_sorted_keys_.reset();
+    d_sorted_idx_.reset();
+    d_offset_.reset();
+    d_merged_cnts_.reset();
+  }
 }
 
 int GraphDataGenerator::FillInferBuf() {
@@ -1712,7 +1721,6 @@ int GraphDataGenerator::FillInferBuf() {
       }
     }
     size_t device_key_size = h_device_keys_len_[infer_cursor];
-    // 对于sage模式下，这里不该用infer_table_cap_，待讨论.
     total_row_ =
         (global_infer_node_type_start[infer_cursor] + infer_table_cap_ <=
          device_key_size)
