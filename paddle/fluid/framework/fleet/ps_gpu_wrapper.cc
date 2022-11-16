@@ -196,7 +196,12 @@ void PSGPUWrapper::add_key_to_gputask(std::shared_ptr<HeterContext> gpu_task) {
   VLOG(0) << "GpuPs task add keys cost " << timeline.ElapsedSec()
           << " seconds.";
   timeline.Start();
-  gpu_task->UniqueKeys();
+  size_t slot_num = slot_vector_.size() - 1;
+  // no slot_fea mode and whole_hbm mode, only keep one unique_sort action
+  if (slot_num > 0 && FLAGS_gpugraph_storage_mode !=
+                          paddle::framework::GpuGraphStorageMode::WHOLE_HBM) {
+    gpu_task->UniqueKeys();
+  }
   timeline.Pause();
   VLOG(0) << "GpuPs task unique cost " << timeline.ElapsedSec() << " seconds.";
 }
@@ -609,11 +614,6 @@ void PSGPUWrapper::add_slot_feature(std::shared_ptr<HeterContext> gpu_task) {
                              &feature_id_set,
                              &local_dim_keys,
                              set_num](int shard_num, int j) {
-    // set_num = device_num * 8,  a % set_num = b , a = set_num * m + b , a %
-    // device_num = b % device_num size_t key_num = 0; for (size_t i = dev; i <
-    // set_num; i += device_num) {
-    //   key_num += feature_id_set[i].size();
-    // }
     local_dim_keys[shard_num][j].reserve(local_dim_keys[shard_num][j].size() +
                                          feature_id_set[shard_num].size());
     for (auto it = feature_id_set[shard_num].begin();
@@ -622,24 +622,8 @@ void PSGPUWrapper::add_slot_feature(std::shared_ptr<HeterContext> gpu_task) {
       local_dim_keys[shard_num][j].push_back(*it);
     }
     feature_id_set[shard_num].clear();
-
-    // std::cout << "DEV " << dev << "ADD KEY:" ;
-    // for (size_t i = dev; i < set_num; i += device_num) {
-    //   for (auto it = feature_id_set[i].begin(); it !=
-    //   feature_id_set[i].end(); it++) {
-    //     std::cout << " " << *it;
-    //     local_dim_keys[dev][0].push_back(*it);
-    //   }
-    //   feature_id_set[i].clear();
-    // }
   };
   time_stage.Start();
-  // threads.resize(device_num);
-  // for (size_t i = 0; i < device_num; i++) {
-  //   // threads[i] = std::thread(add_feature_to_key, i);
-  //   add_feature_to_key(i);
-  // }
-
   threads.resize(thread_keys_shard_num_ * multi_mf_dim_);
   for (int i = 0; i < thread_keys_shard_num_; i++) {
     for (int j = 0; j < multi_mf_dim_; j++) {
@@ -674,7 +658,8 @@ void PSGPUWrapper::BuildPull(std::shared_ptr<HeterContext> gpu_task) {
   time_stage.Start();
   gpu_task->UniqueKeys();
   time_stage.Pause();
-  VLOG(0) << "BuildPull UniqueKeys cost time: " << time_stage.ElapsedSec();
+  VLOG(0) << "BuildPull slot feature uniq and sort cost time: "
+          << time_stage.ElapsedSec();
 
   auto& local_dim_keys = gpu_task->feature_dim_keys_;
   auto& local_dim_ptr = gpu_task->value_dim_ptr_;
