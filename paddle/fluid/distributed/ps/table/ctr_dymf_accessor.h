@@ -16,7 +16,6 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#include <unordered_set>
 #include <vector>
 
 #include "paddle/fluid/distributed/common/registerer.h"
