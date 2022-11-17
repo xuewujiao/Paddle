@@ -1632,12 +1632,16 @@ void GraphDataGenerator::DoWalkandSage() {
     if (sage_mode_) {
       sage_batch_num_ = 0;
       int total_instance = 0, uniq_instance = 0;
-
       total_instance = (infer_node_start_ + batch_size_ <= infer_node_end_)
                             ? batch_size_
                             : infer_node_end_ - infer_node_start_;
       total_instance *= 2;
       while (total_instance != 0) {
+        VLOG(0) << gpuid_ << " in infer graph_data generator:batch_size = " << batch_size_
+                << " instance = " << total_instance
+                << " infer_node_start_ = " << infer_node_start_
+                << " infer_node_end_ = " << infer_node_end_;
+
         uint64_t *d_type_keys =
             reinterpret_cast<uint64_t *>(d_device_keys_[cursor_]->ptr());
         d_type_keys += infer_node_start_;
@@ -1677,6 +1681,7 @@ void GraphDataGenerator::DoWalkandSage() {
         total_instance = (infer_node_start_ + batch_size_ <= infer_node_end_)
                              ? batch_size_
                              : infer_node_end_ - infer_node_start_;
+        total_instance *= 2;
       }
 
       uint64_t h_uniq_node_num = CopyUniqueNodes();
@@ -1737,10 +1742,6 @@ int GraphDataGenerator::FillInferBuf() {
                       cudaMemcpyDeviceToHost,
                       sample_stream_);
       cudaStreamSynchronize(sample_stream_);
-    } else {
-      InsertTable(d_type_keys + global_infer_node_type_start[infer_cursor],
-                  total_row_,
-                  d_uniq_node_num_);
     }
     VLOG(1) << "cursor: " << infer_cursor
             << " start: " << global_infer_node_type_start[infer_cursor]
