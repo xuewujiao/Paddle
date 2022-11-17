@@ -219,6 +219,11 @@ class PSGPUWrapper {
   void build_pull_thread();
   void build_task();
   void DumpToMem();
+  // set mode
+  void SetMode(bool infer_mode) {
+    infer_mode_ = infer_mode;
+    VLOG(0) << "set infer mode=" << infer_mode;
+  }
 
   void Finalize() {
     VLOG(3) << "PSGPUWrapper Begin Finalize.";
@@ -794,6 +799,8 @@ class PSGPUWrapper {
   OptimizerConfig optimizer_config_;
   // gradient push count
   uint64_t grad_push_count_ = 0;
+  // infer mode
+  bool infer_mode_ = false;
 
  protected:
   static bool is_initialized_;

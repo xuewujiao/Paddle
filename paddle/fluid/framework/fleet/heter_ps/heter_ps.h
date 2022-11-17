@@ -83,8 +83,9 @@ class HeterPs : public HeterPsBase {
   void reset_table(const int dev_id,
             size_t capacity,
             const OptimizerConfig& sgd_config,
-            const OptimizerConfig& embedx_config) {
-    comm_->reset_table(dev_id, capacity, sgd_config, embedx_config);
+            const OptimizerConfig& embedx_config,
+            bool infer_mode) {
+    comm_->reset_table(dev_id, capacity, sgd_config, embedx_config, infer_mode);
   }
 
  private:

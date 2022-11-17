@@ -68,7 +68,8 @@ class HeterComm {
   void reset_table(const int dev_id,
       size_t capacity,
       const OptimizerConfig& sgd_config,
-      const OptimizerConfig& embedx_config);
+      const OptimizerConfig& embedx_config,
+      bool infer_mode);
   template <typename StreamType>
   size_t merge_keys(const int gpu_num,
                     const KeyType* d_keys,

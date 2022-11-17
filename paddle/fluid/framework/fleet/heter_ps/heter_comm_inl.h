@@ -237,7 +237,7 @@ template <typename KeyType,
           typename GPUAccessor>
 void HeterComm<KeyType, ValType, GradType, GPUAccessor>::reset_table(
     const int dev_id, size_t capacity, const OptimizerConfig& sgd_config,
-    const OptimizerConfig& embedx_config) {
+    const OptimizerConfig& embedx_config, bool infer_mode) {
   PADDLE_ENFORCE(dev_id < device_num_,
           "dev id %d more than device num %d", dev_id, device_num_);
 #if defined(PADDLE_WITH_CUDA)
@@ -255,6 +255,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::reset_table(
     } else {
       table->clear();
     }
+    table->set_mode(infer_mode);
   } else {
     auto table = ptr_tables_[dev_id];
     if (static_cast<size_t>(table->size()) < need_capacity) {
@@ -267,6 +268,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::reset_table(
     } else {
       table->clear();
     }
+    table->set_mode(infer_mode);
   }
 }
 // debug time

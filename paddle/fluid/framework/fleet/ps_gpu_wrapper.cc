@@ -1121,7 +1121,7 @@ void PSGPUWrapper::BuildGPUTask(std::shared_ptr<HeterContext> gpu_task) {
   auto build_dymf_hbm_pool = [this, &gpu_task, &accessor_wrapper_ptr, &feature_keys_count](int i) {
     platform::CUDADeviceGuard guard(resource_->dev_id(i));
     // reset table
-    this->HeterPs_->reset_table(i, feature_keys_count[i], optimizer_config_, optimizer_config_);
+    this->HeterPs_->reset_table(i, feature_keys_count[i], optimizer_config_, optimizer_config_, infer_mode_);
     // insert hbm table
     std::vector<std::thread> threads(multi_mf_dim_);
     for (int j = 0; j < multi_mf_dim_; j++) {
