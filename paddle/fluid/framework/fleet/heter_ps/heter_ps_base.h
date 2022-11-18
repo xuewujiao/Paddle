@@ -48,7 +48,7 @@ class HeterPsBase {
   virtual void set_nccl_comm_and_size(
       const std::vector<ncclComm_t>& inner_comms,
       const std::vector<ncclComm_t>& inter_comms,
-      int comm_size) = 0;
+      int comm_size, int rank_id) = 0;
   virtual void set_multi_mf_dim(int multi_mf_dim, int max_mf_dim) = 0;
 
 #endif

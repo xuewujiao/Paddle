@@ -1082,7 +1082,7 @@ void PSGPUWrapper::BuildGPUTask(std::shared_ptr<HeterContext> gpu_task) {
   HeterPs_ = HeterPsBase::get_instance(
       size_max, resource_, fleet_config_, accessor_class_, optimizer_type_);
 #ifdef PADDLE_WITH_CUDA
-  HeterPs_->set_nccl_comm_and_size(inner_comms_, inter_comms_, node_size_);
+  HeterPs_->set_nccl_comm_and_size(inner_comms_, inter_comms_, node_size_, rank_id_);
   HeterPs_->set_sparse_sgd(optimizer_config_);
   HeterPs_->set_embedx_sgd(optimizer_config_);
 #endif
