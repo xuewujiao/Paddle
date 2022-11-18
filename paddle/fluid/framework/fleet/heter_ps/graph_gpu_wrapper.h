@@ -112,6 +112,13 @@ class GraphGpuWrapper {
                            int slot_num,
                            int* d_slot_feature_num_map,
                            int fea_num_per_node);
+  int get_feature_info_of_nodes(int gpu_id,
+                                uint64_t* d_nodes,
+                                int node_num,
+                                uint32_t * size_list,
+                                uint32_t * size_list_prefix_sum,
+                                std::shared_ptr<phi::Allocation> & feature_list,
+                                std::shared_ptr<phi::Allocation> & slot_list);
 
   std::unordered_map<std::string, int> edge_to_id, feature_to_id;
   std::vector<std::string> id_to_feature, id_to_edge;
