@@ -1625,7 +1625,8 @@ void GraphDataGenerator::DoWalkandSage() {
       }
 
       uint64_t h_uniq_node_num = CopyUniqueNodes();
-      VLOG(0) << "train stage h_uniq_node_num: " << h_uniq_node_num;
+      VLOG(0) << "train stage h_uniq_node_num: " << h_uniq_node_num
+              << " sage_batch_num: " << sage_batch_num_;
     }
   } else {
     FillInferBuf();
@@ -1637,11 +1638,6 @@ void GraphDataGenerator::DoWalkandSage() {
                             : infer_node_end_ - infer_node_start_;
       total_instance *= 2;
       while (total_instance != 0) {
-        VLOG(0) << gpuid_ << " in infer graph_data generator:batch_size = " << batch_size_
-                << " instance = " << total_instance
-                << " infer_node_start_ = " << infer_node_start_
-                << " infer_node_end_ = " << infer_node_end_;
-
         uint64_t *d_type_keys =
             reinterpret_cast<uint64_t *>(d_device_keys_[cursor_]->ptr());
         d_type_keys += infer_node_start_;
@@ -1685,7 +1681,8 @@ void GraphDataGenerator::DoWalkandSage() {
       }
 
       uint64_t h_uniq_node_num = CopyUniqueNodes();
-      VLOG(0) << "infer stage h_uniq_node_num: " << h_uniq_node_num;
+      VLOG(0) << "infer stage h_uniq_node_num: " << h_uniq_node_num
+              << " sage_batch_num: " << sage_batch_num_;;
     }
   }
   debug_gpu_memory_info(device_id, "DoWalkandSage end");
@@ -2023,7 +2020,7 @@ void GraphDataGenerator::AllocResource(int thread_id,
   platform::CUDADeviceGuard guard(gpuid_);
   if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
     table_ = new HashTable<uint64_t, uint64_t>(
-        train_table_cap_ / FLAGS_gpugraph_hbm_table_load_factor);
+        infer_table_cap_ / FLAGS_gpugraph_hbm_table_load_factor);
   }
   VLOG(1) << "AllocResource gpuid " << gpuid_
           << " feed_vec.size: " << feed_vec.size()
