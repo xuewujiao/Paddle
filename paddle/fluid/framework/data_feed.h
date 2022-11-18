@@ -906,6 +906,7 @@ class GraphDataGenerator {
   int AcquireInstance(BufState* state);
   int GenerateBatch();
   int FillWalkBuf();
+  int FillWalkBufMultiPath();
   int FillInferBuf();
   void DoWalk();
   int FillSlotFeature(uint64_t* d_walk);
@@ -974,6 +975,7 @@ class GraphDataGenerator {
   std::vector<size_t> offset_;
   std::shared_ptr<phi::Allocation> d_prefix_sum_;
   std::vector<std::shared_ptr<phi::Allocation>> d_device_keys_;
+  std::shared_ptr<phi::Allocation> d_train_metapath_keys_;
 
   std::shared_ptr<phi::Allocation> d_walk_;
   std::shared_ptr<phi::Allocation> d_feature_list_;
@@ -1020,6 +1022,7 @@ class GraphDataGenerator {
   bool epoch_finish_;
   std::vector<uint64_t> host_vec_;
   std::vector<uint64_t> h_device_keys_len_;
+  uint64_t h_train_metapath_keys_len_;
   uint64_t train_table_cap_;
   uint64_t infer_table_cap_;
   int total_row_;
