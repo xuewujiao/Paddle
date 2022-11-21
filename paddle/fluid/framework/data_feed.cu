@@ -1633,11 +1633,10 @@ void GraphDataGenerator::DoWalkandSage() {
           ins_buf_pair_len_ -= total_instance / 2;
           sage_batch_num_ += 1;
         }
+        uint64_t h_uniq_node_num = CopyUniqueNodes();
+        VLOG(0) << "train stage h_uniq_node_num: " << h_uniq_node_num
+                << " sage_batch_num: " << sage_batch_num_;
       }
-
-      uint64_t h_uniq_node_num = CopyUniqueNodes();
-      VLOG(0) << "train stage h_uniq_node_num: " << h_uniq_node_num
-              << " sage_batch_num: " << sage_batch_num_;
     }
   } else {
     bool infer_flag = FillInferBuf();
