@@ -867,7 +867,7 @@ int GraphDataGenerator::GenerateBatch() {
       } else {
         walk_buf = reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
       }
-      FillSlotFeature(walk_buf, total_instance);
+      FillSlotFeature(walk_buf, slot_instance);
   } 
 
   offset_.clear();
@@ -1613,6 +1613,10 @@ void GraphDataGenerator::AllocResource(const paddle::platform::Place &place,
         memory::AllocShared(place_, slot_num_ * sizeof(uint64_t *));
     d_slot_lod_tensor_ptr_ =
         memory::AllocShared(place_, slot_num_ * sizeof(uint64_t *));
+    d_feature_size_list_buf_ = memory::AllocShared(
+        place_, (batch_size_ * 2)  * sizeof(uint32_t));
+    d_feature_size_prefixsum_buf_ = memory::AllocShared(
+        place_, (batch_size_ * 2 + 1)  * sizeof(uint32_t));
   }
 
   if (sage_mode_) {
