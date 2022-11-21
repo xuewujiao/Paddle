@@ -74,7 +74,10 @@ void cub_sort_pairs(int len, const K* in_keys, K* out_keys,
   CUDA_CHECK(cub::DeviceRadixSort::SortPairs(NULL, temp_storage_bytes,
       in_keys, out_keys, in_vals, out_vals, len, 0, 8 * sizeof(K), stream, false));
   if (d_buf_ == NULL || d_buf_->size() < temp_storage_bytes) {
-    d_buf_ = memory::AllocShared(place_, temp_storage_bytes);
+    d_buf_ = memory::AllocShared(
+        place_,
+        temp_storage_bytes,
+        phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   }
   CUDA_CHECK(cub::DeviceRadixSort::SortPairs(d_buf_->ptr(), temp_storage_bytes,
       in_keys, out_keys, in_vals, out_vals, len, 0, 8 * sizeof(K),
@@ -93,7 +96,10 @@ void cub_runlength_encode(int N, const K* in_keys, K* out_keys,
   CUDA_CHECK(cub::DeviceRunLengthEncode::Encode(NULL, temp_storage_bytes,
       in_keys, out_keys, out_sizes, d_out_len, N, stream));
   if (d_buf_ == NULL || d_buf_->size() < temp_storage_bytes) {
-    d_buf_ = memory::AllocShared(place_, temp_storage_bytes);
+    d_buf_ = memory::AllocShared(
+        place_,
+        temp_storage_bytes,
+        phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   }
   CUDA_CHECK(cub::DeviceRunLengthEncode::Encode(d_buf_->ptr(),
       temp_storage_bytes, in_keys, out_keys, out_sizes, d_out_len, N, stream));
@@ -110,7 +116,10 @@ void cub_exclusivesum(int N, const K* in, K* out, cudaStream_t stream,
   CUDA_CHECK(cub::DeviceScan::ExclusiveSum(NULL, temp_storage_bytes,
       in, out, N, stream));
   if (d_buf_ == NULL || d_buf_->size() < temp_storage_bytes) {
-    d_buf_ = memory::AllocShared(place_, temp_storage_bytes);
+    d_buf_ = memory::AllocShared(
+        place_,
+        temp_storage_bytes,
+        phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   }
   CUDA_CHECK(cub::DeviceScan::ExclusiveSum(d_buf_->ptr(),
       temp_storage_bytes, in, out, N, stream));
@@ -167,7 +176,6 @@ int dedup_keys_and_fillidx(int total_nodes_num,
                            std::shared_ptr<phi::Allocation>& d_buf_,
                            const paddle::platform::Place& place_) {
   int merged_size = 0;  // Final num
-
   auto d_index_in = memory::Alloc(
       place_, sizeof(uint32_t) * (total_nodes_num + 1),
       phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
@@ -185,7 +193,6 @@ int dedup_keys_and_fillidx(int total_nodes_num,
   CUDA_CHECK(cudaMemcpyAsync((void*)&merged_size, (void*)d_merged_size,
              sizeof(int), cudaMemcpyDeviceToHost, stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
-
   cub_exclusivesum(merged_size, d_merged_cnts, d_offset, stream, d_buf_,
                    place_);
 
@@ -544,6 +551,7 @@ int GraphDataGenerator::FillIdShowClkTensor(int total_instance,
       feed_vec_[1]->mutable_data<int64_t>({total_instance}, this->place_);
   clk_tensor_ptr_ =
       feed_vec_[2]->mutable_data<int64_t>({total_instance}, this->place_);
+
   if (gpu_graph_training) {
     uint64_t *ins_cursor, *ins_buf;
     ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_->ptr());
@@ -563,6 +571,7 @@ int GraphDataGenerator::FillIdShowClkTensor(int total_instance,
                         0,
                         train_stream_>>>(
         id_tensor_ptr_, d_type_keys, total_instance / 2);
+
   }
 
   GraphFillCVMKernel<<<GET_BLOCKS(total_instance),
@@ -1439,6 +1448,7 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
     uint64_t* node_ids, int len, int* final_len,
     std::shared_ptr<phi::Allocation>& inverse) {
   VLOG(2) << "Get Unique Nodes";
+
   auto uniq_nodes = memory::Alloc(
       place_, len * sizeof(uint64_t),
       phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
@@ -1454,7 +1464,6 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
                              reinterpret_cast<uint32_t* >(d_offset_->ptr()),
                              reinterpret_cast<uint32_t* >(d_merged_cnts_->ptr()),
                              sample_stream_, d_buf_, place_);
-
   int len_samples = samples_.size();
 
   VLOG(2) << "Sample Neighbors and Reindex";
@@ -1575,53 +1584,55 @@ void GraphDataGenerator::DoWalkandSage() {
   debug_gpu_memory_info(device_id, "DoWalkandSage start");
   platform::CUDADeviceGuard guard(gpuid_);
   if (gpu_graph_training_) {
-    FillWalkBuf();
+    bool train_flag = FillWalkBuf();
     if (sage_mode_) {
       sage_batch_num_ = 0;
-      int total_instance = 0, uniq_instance = 0;
-      bool ins_pair_flag = true;
-      uint64_t *ins_buf, *ins_cursor;
-      while (ins_pair_flag) {
-        int res = 0;
-        while (ins_buf_pair_len_ < batch_size_) {
-          res = FillInsBuf(sample_stream_);
-          if (res == -1) {
-            if (ins_buf_pair_len_ == 0) {
-              ins_pair_flag = false;
+      if (train_flag) {
+        int total_instance = 0, uniq_instance = 0;
+        bool ins_pair_flag = true;
+        uint64_t *ins_buf, *ins_cursor;
+        while (ins_pair_flag) {
+          int res = 0;
+          while (ins_buf_pair_len_ < batch_size_) {
+            res = FillInsBuf(sample_stream_);
+            if (res == -1) {
+              if (ins_buf_pair_len_ == 0) {
+                ins_pair_flag = false;
+              }
+              break;
             }
+          }
+
+          if (!ins_pair_flag) {
             break;
           }
-        }
 
-        if (!ins_pair_flag) {
-          break;
-        }
+          total_instance =
+              ins_buf_pair_len_ < batch_size_ ? ins_buf_pair_len_ : batch_size_;
+          total_instance *= 2;
 
-        total_instance =
-            ins_buf_pair_len_ < batch_size_ ? ins_buf_pair_len_ : batch_size_;
-        total_instance *= 2;
-
-        ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_->ptr());
-        ins_cursor = ins_buf + ins_buf_pair_len_ * 2 - total_instance;
-        auto inverse = memory::AllocShared(
-            place_, total_instance * sizeof(int),
-            phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-        auto final_sage_nodes =
-            GenerateSampleGraph(ins_cursor, total_instance, &uniq_instance, inverse);
-        if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
-          uint64_t *final_sage_nodes_ptr =
-              reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
-          if (InsertTable(final_sage_nodes_ptr, uniq_instance, d_uniq_node_num_) != 0) {
-            VLOG(2) << "in train sage mode, insert uniq nodes stage, table is full";
-            break;
+          ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_->ptr());
+          ins_cursor = ins_buf + ins_buf_pair_len_ * 2 - total_instance;
+          auto inverse = memory::AllocShared(
+              place_, total_instance * sizeof(int),
+              phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+          auto final_sage_nodes =
+              GenerateSampleGraph(ins_cursor, total_instance, &uniq_instance, inverse);
+          if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
+            uint64_t *final_sage_nodes_ptr =
+                reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
+            if (InsertTable(final_sage_nodes_ptr, uniq_instance, d_uniq_node_num_) != 0) {
+              VLOG(2) << "in train sage mode, insert uniq nodes stage, table is full";
+              break;
+            }
           }
+          final_sage_nodes_vec_.emplace_back(final_sage_nodes);
+          inverse_vec_.emplace_back(inverse);
+          uniq_instance_vec_.emplace_back(uniq_instance);
+          total_instance_vec_.emplace_back(total_instance);
+          ins_buf_pair_len_ -= total_instance / 2;
+          sage_batch_num_ += 1;
         }
-        final_sage_nodes_vec_.emplace_back(final_sage_nodes);
-        inverse_vec_.emplace_back(inverse);
-        uniq_instance_vec_.emplace_back(uniq_instance);
-        total_instance_vec_.emplace_back(total_instance);
-        ins_buf_pair_len_ -= total_instance / 2;
-        sage_batch_num_ += 1;
       }
 
       uint64_t h_uniq_node_num = CopyUniqueNodes();
@@ -1629,60 +1640,62 @@ void GraphDataGenerator::DoWalkandSage() {
               << " sage_batch_num: " << sage_batch_num_;
     }
   } else {
-    FillInferBuf();
+    bool infer_flag = FillInferBuf();
     if (sage_mode_) {
       sage_batch_num_ = 0;
-      int total_instance = 0, uniq_instance = 0;
-      total_instance = (infer_node_start_ + batch_size_ <= infer_node_end_)
-                            ? batch_size_
-                            : infer_node_end_ - infer_node_start_;
-      total_instance *= 2;
-      while (total_instance != 0) {
-        uint64_t *d_type_keys =
-            reinterpret_cast<uint64_t *>(d_device_keys_[cursor_]->ptr());
-        d_type_keys += infer_node_start_;
-        infer_node_start_ += total_instance / 2;
-        auto node_buf = memory::AllocShared(
-            place_,
-            total_instance * sizeof(uint64_t),
-            phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-        int64_t *node_buf_ptr = reinterpret_cast<int64_t *>(node_buf->ptr());
-        CopyDuplicateKeys<<<GET_BLOCKS(total_instance / 2),
-                            CUDA_NUM_THREADS,
-                            0,
-                            sample_stream_>>>(
-            node_buf_ptr, d_type_keys, total_instance / 2);
-        uint64_t* node_buf_ptr_ = reinterpret_cast<uint64_t *>(node_buf->ptr());
-        auto inverse = memory::AllocShared(
-            place_, total_instance * sizeof(int),
-            phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-        auto final_sage_nodes =
-            GenerateSampleGraph(node_buf_ptr_, total_instance, &uniq_instance,
-                                inverse);
-
-        if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
-          uint64_t *final_sage_nodes_ptr =
-              reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
-          if (InsertTable(final_sage_nodes_ptr, uniq_instance, d_uniq_node_num_) != 0) {
-            VLOG(2) << "in infer sage mode, insert uniq nodes stage, table is full";
-            break;
-          }
-        }
-        final_sage_nodes_vec_.emplace_back(final_sage_nodes);
-        inverse_vec_.emplace_back(inverse);
-        uniq_instance_vec_.emplace_back(uniq_instance);
-        total_instance_vec_.emplace_back(total_instance);
-        sage_batch_num_ += 1;
-
+      if (infer_flag) {
+        int total_instance = 0, uniq_instance = 0;
         total_instance = (infer_node_start_ + batch_size_ <= infer_node_end_)
-                             ? batch_size_
-                             : infer_node_end_ - infer_node_start_;
+                              ? batch_size_
+                              : infer_node_end_ - infer_node_start_;
         total_instance *= 2;
-      }
+        while (total_instance != 0) {
+          uint64_t *d_type_keys =
+              reinterpret_cast<uint64_t *>(d_device_keys_[cursor_]->ptr());
+          d_type_keys += infer_node_start_;
+          infer_node_start_ += total_instance / 2;
+          auto node_buf = memory::AllocShared(
+              place_,
+              total_instance * sizeof(uint64_t),
+              phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+          int64_t *node_buf_ptr = reinterpret_cast<int64_t *>(node_buf->ptr());
+          CopyDuplicateKeys<<<GET_BLOCKS(total_instance / 2),
+                              CUDA_NUM_THREADS,
+                              0,
+                              sample_stream_>>>(
+              node_buf_ptr, d_type_keys, total_instance / 2);
+          uint64_t* node_buf_ptr_ = reinterpret_cast<uint64_t *>(node_buf->ptr());
+          auto inverse = memory::AllocShared(
+              place_, total_instance * sizeof(int),
+              phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+          auto final_sage_nodes =
+              GenerateSampleGraph(node_buf_ptr_, total_instance, &uniq_instance,
+                                  inverse);
+          cudaStreamSynchronize(sample_stream_);
+          if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
+            uint64_t *final_sage_nodes_ptr =
+                reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
+            if (InsertTable(final_sage_nodes_ptr, uniq_instance, d_uniq_node_num_) != 0) {
+              VLOG(0) << "in infer sage mode, insert uniq nodes stage, table is full";
+              break;
+            }
+          }
+          final_sage_nodes_vec_.emplace_back(final_sage_nodes);
+          inverse_vec_.emplace_back(inverse);
+          uniq_instance_vec_.emplace_back(uniq_instance);
+          total_instance_vec_.emplace_back(total_instance);
+          sage_batch_num_ += 1;
 
-      uint64_t h_uniq_node_num = CopyUniqueNodes();
-      VLOG(0) << "infer stage h_uniq_node_num: " << h_uniq_node_num
-              << " sage_batch_num: " << sage_batch_num_;;
+          total_instance = (infer_node_start_ + batch_size_ <= infer_node_end_)
+                               ? batch_size_
+                               : infer_node_end_ - infer_node_start_;
+          total_instance *= 2;
+        }
+
+        uint64_t h_uniq_node_num = CopyUniqueNodes();
+        VLOG(0) << "infer stage h_uniq_node_num: " << h_uniq_node_num
+                << " sage_batch_num: " << sage_batch_num_;;
+      }
     }
   }
   debug_gpu_memory_info(device_id, "DoWalkandSage end");
@@ -1748,7 +1761,7 @@ int GraphDataGenerator::FillInferBuf() {
     infer_node_end_ = global_infer_node_type_start[infer_cursor];
     cursor_ = infer_cursor;
   }
-  return 0;
+  return 1;
 }
 
 void GraphDataGenerator::ClearSampleState() {
