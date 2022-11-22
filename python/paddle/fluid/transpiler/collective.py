@@ -586,7 +586,6 @@ class SingleProcessMultiThread(GradAllReduce):
             })
         global_offset += 1
 
-
 class MultiThread(GradAllReduce):
     '''
     '''
