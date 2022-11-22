@@ -1195,11 +1195,13 @@ int GraphDataGenerator::FillFeatureBuf(
   return ret;
 }
 
-// 尝试插入table, 0表示插入成功
+// 对于deepwalk模式，尝试插入table，0表示插入成功，1表示插入失败；
+// 对于sage模式，尝试插入table，table数量不够则清空table重新插入，返回值无影响。
 int GraphDataGenerator::InsertTable(
     const unsigned long *d_keys,
     unsigned long len,
     std::shared_ptr<phi::Allocation> d_uniq_node_num) {
+  // Used under NOT WHOLE_HBM.
   uint64_t h_uniq_node_num = 0;
   uint64_t *d_uniq_node_num_ptr =
       reinterpret_cast<uint64_t *>(d_uniq_node_num->ptr());
@@ -1209,18 +1211,28 @@ int GraphDataGenerator::InsertTable(
                   cudaMemcpyDeviceToHost,
                   sample_stream_);
   cudaStreamSynchronize(sample_stream_);
-  // 产生了足够多的node，采样结束
+
   if (gpu_graph_training_) {
     VLOG(2) << "table capacity: " << train_table_cap_ << ", " << h_uniq_node_num
             << " used";
     if (h_uniq_node_num + len >= train_table_cap_) {
-      return 1;
+      if (!sage_mode_) {
+        return 1;
+      } else {
+        // Copy unique nodes first.
+        uint64_t copy_len = CopyUniqueNodes();
+        copy_unique_len_ += copy_len;
+        table_->clear(sample_stream_);
+        cudaMemsetAsync(d_uniq_node_num_ptr, 0, sizeof(uint64_t), sample_stream_);
+      }
     }
   } else {
-    VLOG(2) << "table capacity: " << infer_table_cap_ << ", " << h_uniq_node_num
-            << " used";
+    // used only for sage_mode.
     if (h_uniq_node_num + len >= infer_table_cap_) {
-      return 1;
+      uint64_t copy_len = CopyUniqueNodes();
+      copy_unique_len_ += copy_len;
+      table_->clear(sample_stream_);
+      cudaMemsetAsync(d_uniq_node_num_ptr, 0, sizeof(uint64_t), sample_stream_);
     }
   }
   table_->insert(d_keys, len, d_uniq_node_num_ptr, sample_stream_);
@@ -1525,17 +1537,6 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
   return final_nodes_vec[len_samples - 1];
 }
 
-void GraphDataGenerator::DoWalk() {
-  int device_id = place_.GetDeviceId();
-  debug_gpu_memory_info(device_id, "DoWalk start");
-  if (gpu_graph_training_) {
-    FillWalkBuf();
-  } else {
-    FillInferBuf();
-  }
-  debug_gpu_memory_info(device_id, "DoWalk end");
-}
-
 uint64_t GraphDataGenerator::CopyUniqueNodes() {
   if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
     uint64_t h_uniq_node_num = 0;
@@ -1567,8 +1568,8 @@ uint64_t GraphDataGenerator::CopyUniqueNodes() {
 
     cudaStreamSynchronize(sample_stream_);
 
-    host_vec_.resize(h_uniq_node_num);
-    cudaMemcpyAsync(host_vec_.data(),
+    host_vec_.resize(h_uniq_node_num + copy_unique_len_);
+    cudaMemcpyAsync(host_vec_.data() + copy_unique_len_,
                     d_uniq_node_ptr,
                     sizeof(uint64_t) * h_uniq_node_num,
                     cudaMemcpyDeviceToHost,
@@ -1621,10 +1622,7 @@ void GraphDataGenerator::DoWalkandSage() {
           if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
             uint64_t *final_sage_nodes_ptr =
                 reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
-            if (InsertTable(final_sage_nodes_ptr, uniq_instance, d_uniq_node_num_) != 0) {
-              VLOG(2) << "in train sage mode, insert uniq nodes stage, table is full";
-              break;
-            }
+            InsertTable(final_sage_nodes_ptr, uniq_instance, d_uniq_node_num_);
           }
           final_sage_nodes_vec_.emplace_back(final_sage_nodes);
           inverse_vec_.emplace_back(inverse);
@@ -1634,8 +1632,7 @@ void GraphDataGenerator::DoWalkandSage() {
           sage_batch_num_ += 1;
         }
         uint64_t h_uniq_node_num = CopyUniqueNodes();
-        VLOG(0) << "train stage h_uniq_node_num: " << h_uniq_node_num
-                << " sage_batch_num: " << sage_batch_num_;
+        VLOG(0) << "train sage_batch_num: " << sage_batch_num_;
       }
     }
   } else {
@@ -1674,10 +1671,7 @@ void GraphDataGenerator::DoWalkandSage() {
           if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
             uint64_t *final_sage_nodes_ptr =
                 reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
-            if (InsertTable(final_sage_nodes_ptr, uniq_instance, d_uniq_node_num_) != 0) {
-              VLOG(0) << "in infer sage mode, insert uniq nodes stage, table is full";
-              break;
-            }
+            InsertTable(final_sage_nodes_ptr, uniq_instance, d_uniq_node_num_);
           }
           final_sage_nodes_vec_.emplace_back(final_sage_nodes);
           inverse_vec_.emplace_back(inverse);
@@ -1692,8 +1686,7 @@ void GraphDataGenerator::DoWalkandSage() {
         }
 
         uint64_t h_uniq_node_num = CopyUniqueNodes();
-        VLOG(0) << "infer stage h_uniq_node_num: " << h_uniq_node_num
-                << " sage_batch_num: " << sage_batch_num_;;
+        VLOG(0) << "infer sage_batch_num: " << sage_batch_num_;
       }
     }
   }
@@ -2279,6 +2272,7 @@ void GraphDataGenerator::SetConfig(
     int sample_size = std::stoi(samples[i]);
     samples_.emplace_back(sample_size);
   }
+  copy_unique_len_ = 0;
 };
 
 }  // namespace framework

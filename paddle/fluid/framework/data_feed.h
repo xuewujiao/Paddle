@@ -907,7 +907,6 @@ class GraphDataGenerator {
   int GenerateBatch();
   int FillWalkBuf();
   int FillInferBuf();
-  void DoWalk();
   void DoWalkandSage();
   int FillFeatureBuf(uint64_t* d_walk, uint64_t* d_feature, size_t key_num);
   int FillFeatureBuf(std::shared_ptr<phi::Allocation> d_walk,
@@ -1045,6 +1044,7 @@ class GraphDataGenerator {
   std::vector<uint64_t> h_device_keys_len_;
   uint64_t train_table_cap_;
   uint64_t infer_table_cap_;
+  uint64_t copy_unique_len_;
   int total_row_;
   size_t infer_node_start_;
   size_t infer_node_end_;
@@ -1181,10 +1181,6 @@ class DataFeed {
   virtual void LoadIntoMemory() {
     PADDLE_THROW(platform::errors::Unimplemented(
         "This function(LoadIntoMemory) is not implemented."));
-  }
-  virtual void DoWalk() {
-    PADDLE_THROW(platform::errors::Unimplemented(
-        "This function(DoWalk) is not implemented."));
   }
   virtual void DoWalkandSage() {
     PADDLE_THROW(platform::errors::Unimplemented(
@@ -1800,7 +1796,6 @@ class SlotRecordInMemoryDataFeed : public InMemoryDataFeed<SlotRecord> {
                      const int float_slot_size,
                      const UsedSlotGpuType* used_slots);
 #endif
-  virtual void DoWalk();
   virtual void DoWalkandSage();
 
   float sample_rate_ = 1.0f;
