@@ -2024,8 +2024,13 @@ void GraphDataGenerator::AllocResource(int thread_id,
 
   platform::CUDADeviceGuard guard(gpuid_);
   if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
-    table_ = new HashTable<uint64_t, uint64_t>(
-        infer_table_cap_ / FLAGS_gpugraph_hbm_table_load_factor);
+    if (gpu_graph_training_) {
+      table_ = new HashTable<uint64_t, uint64_t>(
+          train_table_cap_ / FLAGS_gpugraph_hbm_table_load_factor);
+    } else {
+      table_ = new HashTable<uint64_t, uint64_t>(
+          infer_table_cap_ / FLAGS_gpugraph_hbm_table_load_factor);
+    }
   }
   VLOG(1) << "AllocResource gpuid " << gpuid_
           << " feed_vec.size: " << feed_vec.size()
