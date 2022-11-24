@@ -427,8 +427,8 @@ class SingleProcessMultiThread(GradAllReduce):
         self.mode = "single_process_multi_thread"
         self.fuse_allreduce = int(os.getenv("PADDLE_FUSE_ALLREDUCE", "1"))
         self.loss_scale = int(os.getenv("PADDLE_LOSS_SCALE", "1"))
-        self.gpu_nums = os.getenv("FLAGS_selected_gpus",
-                             "0,1,2,3,4,5,6,7,8").split(",")
+        self.gpu_nums = len(os.getenv("FLAGS_selected_gpus",
+                             "0,1,2,3,4,5,6,7").split(","))
 
     def _transpile_startup_program(self):
         nodes_num = 0
