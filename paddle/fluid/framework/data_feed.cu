@@ -749,6 +749,13 @@ int GraphDataGenerator::FillInsBuf(cudaStream_t stream) {
 }
 
 int GraphDataGenerator::GenerateBatch() {
+  if (gpu_graph_training_) {
+    if (max_steps_ > 0 && steps_ >= max_steps_) {
+      VLOG(0) << "reach max_steps[" << max_steps_ << "] steps[" << steps_ << "]";
+      return 0;
+    }
+    steps_++;
+  }
   int total_instance = 0;
   platform::CUDADeviceGuard guard(gpuid_);
   int res = 0;
@@ -2615,6 +2622,8 @@ void GraphDataGenerator::SetConfig(
   once_sample_startid_len_ = graph_config.once_sample_startid_len();
   debug_mode_ = graph_config.debug_mode();
   gpu_graph_training_ = graph_config.gpu_graph_training();
+  max_steps_ = graph_config.max_steps() / 8;
+  steps_ = 0;
   if (debug_mode_ || !gpu_graph_training_) {
     batch_size_ = graph_config.batch_size();
   } else {
@@ -2632,7 +2641,8 @@ void GraphDataGenerator::SetConfig(
           << ", sample_times_one_chunk : " << repeat_time_
           << ", batch_size: " << batch_size_
           << ", train_table_cap: " << train_table_cap_
-          << ", infer_table_cap: " << infer_table_cap_;
+          << ", infer_table_cap: " << infer_table_cap_
+          << ", max_steps: " << max_steps_;
   std::string first_node_type = graph_config.first_node_type();
   std::string meta_path = graph_config.meta_path();
   sage_mode_ = graph_config.sage_mode();

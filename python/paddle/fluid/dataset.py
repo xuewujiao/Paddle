@@ -1083,6 +1083,7 @@ class InMemoryDataset(DatasetBase):
             "gpu_graph_training", True)
         self.proto_desc.graph_config.sage_mode = config.get("sage_mode", False)
         self.proto_desc.graph_config.samples = config.get("samples", "")
+        self.proto_desc.graph_config.max_steps = config.get("max_steps", 0)
         self.proto_desc.graph_config.train_table_cap = config.get(
             "train_table_cap", 800000)
         self.proto_desc.graph_config.infer_table_cap = config.get(
