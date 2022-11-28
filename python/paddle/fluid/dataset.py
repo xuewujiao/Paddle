@@ -1087,6 +1087,7 @@ class InMemoryDataset(DatasetBase):
             "train_table_cap", 800000)
         self.proto_desc.graph_config.infer_table_cap = config.get(
             "infer_table_cap", 800000)
+        self.proto_desc.graph_config.max_steps = config.get("max_steps", 0)
         self.dataset.set_gpu_graph_mode(True)
 
     def set_pass_id(self, pass_id):

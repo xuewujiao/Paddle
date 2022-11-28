@@ -804,9 +804,21 @@ int GraphDataGenerator::FillInsBuf(cudaStream_t stream) {
   return MakeInsPair(stream);
 }
 
+static int g_steps[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+
 int GraphDataGenerator::GenerateBatch() {
   int total_instance = 0;
   platform::CUDADeviceGuard guard(gpuid_);
+
+  if (gpu_graph_training_) {
+    if (max_steps_ > 0 && g_steps[gpuid_] >= max_steps_) {
+      VLOG(0) << "reach max_steps[" << max_steps_ << "] steps["
+          << g_steps[gpuid_] << "]";
+      return 0;
+    }
+    g_steps[gpuid_]++;
+  }
+
   int res = 0;
   if (!gpu_graph_training_) {
     if (!sage_mode_) {
@@ -2757,12 +2769,15 @@ void GraphDataGenerator::AllocTrainResource(int thread_id) {
 void GraphDataGenerator::SetConfig(
     const paddle::framework::DataFeedDesc &data_feed_desc) {
   auto graph_config = data_feed_desc.graph_config();
+  auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   walk_degree_ = graph_config.walk_degree();
   walk_len_ = graph_config.walk_len();
   window_ = graph_config.window();
   once_sample_startid_len_ = graph_config.once_sample_startid_len();
   debug_mode_ = graph_config.debug_mode();
   gpu_graph_training_ = graph_config.gpu_graph_training();
+  max_steps_ =
+      graph_config.max_steps() / gpu_graph_ptr->device_id_mapping.size();
   if (debug_mode_ || !gpu_graph_training_) {
     batch_size_ = graph_config.batch_size();
   } else {
@@ -2785,7 +2800,6 @@ void GraphDataGenerator::SetConfig(
   std::string meta_path = graph_config.meta_path();
   sage_mode_ = graph_config.sage_mode();
   std::string str_samples = graph_config.samples();
-  auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   debug_gpu_memory_info("init_conf start");
   gpu_graph_ptr->init_conf(first_node_type, meta_path);
   debug_gpu_memory_info("init_conf end");

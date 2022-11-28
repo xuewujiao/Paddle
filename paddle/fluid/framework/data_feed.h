@@ -1054,6 +1054,7 @@ class GraphDataGenerator {
   int shuffle_seed_;
   int debug_mode_;
   bool gpu_graph_training_;
+  int32_t max_steps_;
   bool sage_mode_;
   std::vector<int> samples_;
   bool epoch_finish_;
