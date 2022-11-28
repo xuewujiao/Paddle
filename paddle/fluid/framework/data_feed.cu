@@ -814,7 +814,6 @@ int GraphDataGenerator::GenerateBatch() {
     if (max_steps_ > 0 && g_steps[gpuid_] >= max_steps_) {
       VLOG(0) << "reach max_steps[" << max_steps_ << "] steps["
           << g_steps[gpuid_] << "]";
-      epoch_finish_ = true;
       return 0;
     }
     g_steps[gpuid_]++;
