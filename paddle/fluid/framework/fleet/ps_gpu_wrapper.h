@@ -600,7 +600,10 @@ class PSGPUWrapper {
     slot_vector_ = slot_vector;
     VLOG(0) << "slot_vector size is " << slot_vector_.size();
   }
-
+  void SetSlotNum(int slot_num) {
+	slot_num_ = slot_num;
+    VLOG(0) << "slot_num_ is " << slot_num_;
+  }
   void SetSlotOffsetVector(const std::vector<int>& slot_offset_vector) {
     slot_offset_vector_ = slot_offset_vector;
     std::cout << "yxf set: ";
@@ -723,6 +726,7 @@ class PSGPUWrapper {
   std::vector<int> index_dim_vec_;
   int multi_mf_dim_{0};
   int max_mf_dim_{0};
+  int slot_num_{0};
   size_t val_type_size_{0};
   size_t grad_type_size_{0};
   size_t pull_type_size_{0};
