@@ -811,12 +811,11 @@ int GraphDataGenerator::GenerateBatch() {
   platform::CUDADeviceGuard guard(gpuid_);
 
   if (gpu_graph_training_) {
-    if (max_steps_ > 0 && g_steps[gpuid_] >= max_steps_) {
+    if (max_steps_ > 0 && g_steps[gpuid_] > max_steps_) {
       VLOG(0) << "reach max_steps[" << max_steps_ << "] steps["
           << g_steps[gpuid_] << "]";
       return 0;
     }
-    g_steps[gpuid_]++;
   }
 
   int res = 0;
@@ -865,6 +864,7 @@ int GraphDataGenerator::GenerateBatch() {
       FillGraphIdShowClkTensor(uniq_instance_vec_[sage_batch_count_],
                                total_instance_vec_[sage_batch_count_],
                                sage_batch_count_);
+      g_steps[gpuid_] += 1;
     }
   }
 
