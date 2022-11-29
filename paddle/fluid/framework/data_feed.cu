@@ -245,66 +245,21 @@ int GraphDataGenerator::AcquireInstance(BufState *state) {
   return 0;
 }
 
-// TODO opt
-__global__ void GraphFillFeatureKernel(uint64_t *id_tensor,
-                                       int *fill_ins_num,
-                                       uint64_t *walk,
-                                       uint64_t *feature,
-                                       int *row,
-                                       int central_word,
-                                       int step,
-                                       int len,
-                                       int col_num,
-                                       int slot_num) {
-  __shared__ int32_t local_key[CUDA_NUM_THREADS * 16];
-  __shared__ int local_num;
-  __shared__ int global_num;
-
-  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (threadIdx.x == 0) {
-    local_num = 0;
-  }
-  __syncthreads();
-  if (idx < len) {
-    int src = row[idx] * col_num + central_word;
-    if (walk[src] != 0 && walk[src + step] != 0) {
-      size_t dst = atomicAdd(&local_num, 1);
-      for (int i = 0; i < slot_num; ++i) {
-        local_key[dst * 2 * slot_num + i * 2] = feature[src * slot_num + i];
-        local_key[dst * 2 * slot_num + i * 2 + 1] =
-            feature[(src + step) * slot_num + i];
-      }
-    }
-  }
-
-  __syncthreads();
-
-  if (threadIdx.x == 0) {
-    global_num = atomicAdd(fill_ins_num, local_num);
-  }
-  __syncthreads();
-
-  if (threadIdx.x < local_num) {
-    for (int i = 0; i < slot_num; ++i) {
-      id_tensor[(global_num * 2 + 2 * threadIdx.x) * slot_num + i] =
-          local_key[(2 * threadIdx.x) * slot_num + i];
-      id_tensor[(global_num * 2 + 2 * threadIdx.x + 1) * slot_num + i] =
-          local_key[(2 * threadIdx.x + 1) * slot_num + i];
-    }
-  }
-}
-
 __global__ void GraphFillIdKernel(uint64_t *id_tensor,
                                   int *fill_ins_num,
                                   uint64_t *walk,
+                                  uint8_t *walk_ntype,
                                   int *row,
                                   int central_word,
                                   int step,
                                   int len,
-                                  int col_num) {
+                                  int col_num,
+                                  uint8_t* exclude_path,
+                                  int exclude_path_len) {
   __shared__ uint64_t local_key[CUDA_NUM_THREADS * 2];
   __shared__ int local_num;
   __shared__ int global_num;
+  bool need_filter = false;
 
   size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (threadIdx.x == 0) {
@@ -318,8 +273,21 @@ __global__ void GraphFillIdKernel(uint64_t *id_tensor,
     int src = row[idx] * col_num + central_word;
     if (walk[src] != 0 && walk[src + step] != 0) {
       size_t dst = atomicAdd(&local_num, 1);
-      local_key[dst * 2] = walk[src];
-      local_key[dst * 2 + 1] = walk[src + step];
+      for (int i = 0; i < exclude_path_len; i += 2) {
+        if (walk_ntype[src] == exclude_path[i]
+                && walk_ntype[src + step] == exclude_path[i + 1]) {
+          // filter this pair
+          need_filter = true;
+          break;
+        }
+      }
+      if (!need_filter) {
+        local_key[dst * 2] = walk[src];
+        local_key[dst * 2 + 1] = walk[src + step];
+      } else {
+        local_key[dst * 2] = 0;
+        local_key[dst * 2 + 1] = 0;
+      }
     }
   }
 
@@ -423,42 +391,28 @@ int GraphDataGenerator::FillInsBuf() {
   }
 
   uint64_t *walk = reinterpret_cast<uint64_t *>(d_walk_->ptr());
+  uint8_t *walk_ntype = reinterpret_cast<uint8_t *>(d_walk_ntype_->ptr());
   uint64_t *ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_->ptr());
   int *random_row = reinterpret_cast<int *>(d_random_row_->ptr());
   int *d_pair_num = reinterpret_cast<int *>(d_pair_num_->ptr());
   cudaMemsetAsync(d_pair_num, 0, sizeof(int), stream_);
   int len = buf_state_.len;
+  uint8_t *exclude_path = reinterpret_cast<uint8_t *>(d_exclude_path_->ptr());
   GraphFillIdKernel<<<GET_BLOCKS(len), CUDA_NUM_THREADS, 0, stream_>>>(
       ins_buf + ins_buf_pair_len_ * 2,
       d_pair_num,
       walk,
+      walk_ntype,
       random_row + buf_state_.cursor,
       buf_state_.central_word,
       window_step_[buf_state_.step],
       len,
-      walk_len_);
+      walk_len_,
+      exclude_path,
+      exclude_path_len_);
   int h_pair_num;
   cudaMemcpyAsync(
       &h_pair_num, d_pair_num, sizeof(int), cudaMemcpyDeviceToHost, stream_);
-  if (!FLAGS_enable_opt_get_features && slot_num_ > 0) {
-    uint64_t *feature_buf = reinterpret_cast<uint64_t *>(d_feature_buf_->ptr());
-    uint64_t *feature = reinterpret_cast<uint64_t *>(d_feature_->ptr());
-    cudaMemsetAsync(d_pair_num, 0, sizeof(int), stream_);
-    int len = buf_state_.len;
-    VLOG(2) << "feature_buf start[" << ins_buf_pair_len_ * 2 * slot_num_
-            << "] len[" << len << "]";
-    GraphFillFeatureKernel<<<GET_BLOCKS(len), CUDA_NUM_THREADS, 0, stream_>>>(
-        feature_buf + ins_buf_pair_len_ * 2 * slot_num_,
-        d_pair_num,
-        walk,
-        feature,
-        random_row + buf_state_.cursor,
-        buf_state_.central_word,
-        window_step_[buf_state_.step],
-        len,
-        walk_len_,
-        slot_num_);
-  }
 
   cudaStreamSynchronize(stream_);
   ins_buf_pair_len_ += h_pair_num;
@@ -1092,6 +1046,7 @@ __global__ void GraphFillSampleKeysKernel(uint64_t *neighbors,
 
 __global__ void GraphDoWalkKernel(uint64_t *neighbors,
                                   uint64_t *walk,
+                                  uint8_t *walk_ntype,
                                   int *d_prefix_sum,
                                   int *actual_sample_size,
                                   int cur_degree,
@@ -1099,7 +1054,8 @@ __global__ void GraphDoWalkKernel(uint64_t *neighbors,
                                   int len,
                                   int *id_cnt,
                                   int *sampleidx2row,
-                                  int col_size) {
+                                  int col_size,
+                                  uint8_t edge_dst_id) {
   CUDA_KERNEL_LOOP(i, len) {
     for (int k = 0; k < actual_sample_size[i]; k++) {
       // int idx = sampleidx2row[i];
@@ -1108,6 +1064,7 @@ __global__ void GraphDoWalkKernel(uint64_t *neighbors,
       size_t col = step;
       size_t offset = (row * col_size + col);
       walk[offset] = neighbors[i * cur_degree + k];
+      walk_ntype[offset] = edge_dst_id;
     }
   }
 }
@@ -1116,7 +1073,10 @@ __global__ void GraphDoWalkKernel(uint64_t *neighbors,
 __global__ void GraphFillFirstStepKernel(int *prefix_sum,
                                          int *sampleidx2row,
                                          uint64_t *walk,
+                                         uint8_t *walk_ntype,
                                          uint64_t *keys,
+                                         uint8_t edge_src_id,
+                                         uint8_t edge_dst_id,
                                          int len,
                                          int walk_degree,
                                          int col_size,
@@ -1131,19 +1091,27 @@ __global__ void GraphFillFirstStepKernel(int *prefix_sum,
 
       size_t offset = col_size * row;
       walk[offset] = keys[idx];
+      walk_ntype[offset] = edge_src_id;
       walk[offset + 1] = neighbors[idx * walk_degree + k];
+      walk_ntype[offset + 1] = edge_dst_id;
     }
   }
 }
 
 // Fill sample_res to the stepth column of walk
 void GraphDataGenerator::FillOneStep(uint64_t *d_start_ids,
+                                     int etype_id,
                                      uint64_t *walk,
+                                     uint8_t *walk_ntype,
                                      int len,
                                      NeighborSampleResult &sample_res,
                                      int cur_degree,
                                      int step,
                                      int *len_per_row) {
+  auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
+  uint64_t node_id = edge_to_node_map_[etype_id];
+  uint8_t edge_src_id = node_id >> 32;
+  uint8_t edge_dst_id = node_id;
   size_t temp_storage_bytes = 0;
   int *d_actual_sample_size = sample_res.actual_sample_size;
   uint64_t *d_neighbors = sample_res.val;
@@ -1176,7 +1144,10 @@ void GraphDataGenerator::FillOneStep(uint64_t *d_start_ids,
         d_prefix_sum,
         d_tmp_sampleidx2row,
         walk,
+        walk_ntype,
         d_start_ids,
+        edge_src_id,
+        edge_dst_id,
         len,
         walk_degree_,
         walk_len_,
@@ -1200,6 +1171,7 @@ void GraphDataGenerator::FillOneStep(uint64_t *d_start_ids,
     GraphDoWalkKernel<<<GET_BLOCKS(len), CUDA_NUM_THREADS, 0, stream_>>>(
         d_neighbors,
         walk,
+        walk_ntype,
         d_prefix_sum,
         d_actual_sample_size,
         cur_degree,
@@ -1207,7 +1179,8 @@ void GraphDataGenerator::FillOneStep(uint64_t *d_start_ids,
         len,
         len_per_row,
         d_tmp_sampleidx2row,
-        walk_len_);
+        walk_len_,
+        edge_dst_id);
   }
   if (debug_mode_) {
     size_t once_max_sample_keynum = walk_degree_ * once_sample_startid_len_;
@@ -1286,9 +1259,11 @@ int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
   ///////
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   uint64_t *walk = reinterpret_cast<uint64_t *>(d_walk->ptr());
+  uint8_t *walk_ntype = reinterpret_cast<uint8_t *>(d_walk_ntype_->ptr());
   int *len_per_row = reinterpret_cast<int *>(d_len_per_row_->ptr());
   uint64_t *d_sample_keys = reinterpret_cast<uint64_t *>(d_sample_keys_->ptr());
   cudaMemsetAsync(walk, 0, buf_size_ * sizeof(uint64_t), stream_);
+  cudaMemsetAsync(walk_ntype, 0, buf_size_ * sizeof(uint8_t), stream_);
   cudaMemsetAsync(
       len_per_row, 0, once_max_sample_keynum * sizeof(int), stream_);
   int i = 0;
@@ -1332,6 +1307,7 @@ int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
             << " tmp_len = " << tmp_len << " cursor = " << cursor_
             << " once_max_sample_keynum = " << once_max_sample_keynum;
     uint64_t *cur_walk = walk + i;
+    uint8_t *cur_walk_ntype = walk_ntype + i;
 
     NeighborSampleQuery q;
     q.initialize(gpuid_,
@@ -1345,7 +1321,9 @@ int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
     VLOG(2) << "sample edge type: " << path[0] << " step: " << 1;
     jump_rows_ = sample_res.total_sample_size;
     FillOneStep(d_type_keys + start,
+                path[0],
                 cur_walk,
+                cur_walk_ntype,
                 tmp_len,
                 sample_res,
                 walk_degree_,
@@ -1381,7 +1359,9 @@ int GraphDataGenerator::FillWalkBuf(std::shared_ptr<phi::Allocation> d_walk) {
       sample_res = gpu_graph_ptr->graph_neighbor_sample_v3(q, false, true);
 
       FillOneStep(d_type_keys + start,
+                  edge_type_id,
                   cur_walk,
+                  cur_walk_ntype,
                   sample_key_len,
                   sample_res,
                   1,
@@ -1509,6 +1489,12 @@ void GraphDataGenerator::AllocResource(const paddle::platform::Place &place,
   jump_rows_ = 0;
   d_walk_ = memory::AllocShared(place_, buf_size_ * sizeof(uint64_t));
   cudaMemsetAsync(d_walk_->ptr(), 0, buf_size_ * sizeof(uint64_t), stream_);
+  d_walk_ntype_ = memory::AllocShared(place_, buf_size_ * sizeof(uint8_t));
+  cudaMemsetAsync(d_walk_ntype_->ptr(), 0, buf_size_ * sizeof(uint8_t), stream_);
+  d_exclude_path_ = memory::AllocShared(place_, exclude_path_len_ * sizeof(uint8_t));
+  CUDA_CHECK(cudaMemcpyAsync(d_exclude_path_->ptr(), exclude_path_.data(),
+              exclude_path_len_ * sizeof(uint8_t), cudaMemcpyHostToDevice, stream_));
+
   if (!FLAGS_enable_opt_get_features && slot_num_ > 0) {
     d_feature_ =
         memory::AllocShared(place_, buf_size_ * slot_num_ * sizeof(uint64_t));
@@ -1636,17 +1622,41 @@ void GraphDataGenerator::SetConfig(
 
   for (size_t i = 0; i < meta_paths.size(); i++) {
     auto path = meta_paths[i];
-    auto nodes = paddle::string::split_string<std::string>(path, "-");
-    for (auto &node : nodes) {
-      auto iter = edge_to_id.find(node);
+    auto edges = paddle::string::split_string<std::string>(path, "-");
+    for (auto &edge : edges) {
+      auto iter = edge_to_id.find(edge);
       PADDLE_ENFORCE_NE(
           iter,
           edge_to_id.end(),
-          platform::errors::NotFound("(%s) is not found in edge_to_id.", node));
-      VLOG(2) << "edge_to_id[" << node << "] = " << iter->second;
+          platform::errors::NotFound("(%s) is not found in edge_to_id.", edge));
+      VLOG(2) << "edge_to_id[" << edge << "] = " << iter->second;
       meta_path_[i].push_back(iter->second);
+      if (edge_to_node_map_.find(iter->second) == edge_to_node_map_.end()) {
+        auto nodes = paddle::string::split_string<std::string>(edge, "2");
+        uint64_t src_node_id = node_to_id.find(nodes[0])->second;
+        uint64_t dst_node_id = node_to_id.find(nodes[1])->second;
+        edge_to_node_map_[iter->second] = src_node_id << 32 | dst_node_id;
+      }
     }
   }
+
+  std::string exclude_path_str = graph_config.exclude_path();
+  auto paths = paddle::string::split_string<std::string>(exclude_path_str, ";");
+  VLOG(2) << "exclude_path[" << exclude_path_str << "]";
+  for (auto &path: paths) {
+    auto nodes = paddle::string::split_string<std::string>(path, "2");
+    for (auto &node : nodes) {
+      auto iter = node_to_id.find(node);
+      PADDLE_ENFORCE_NE(iter,
+              edge_to_id.end(),
+              platform::errors::NotFound(
+                  "(%s) is not found in edge_to_id.", node));
+      VLOG(2) << "edge_to_id[" << node << "] = " << iter->second;
+      exclude_path_.push_back(iter->second);
+    }
+  }
+
+  exclude_path_len_ = exclude_path_.size();
 
   auto samples = paddle::string::split_string<std::string>(str_samples, ";");
   for (size_t i = 0; i < samples.size(); i++) {
