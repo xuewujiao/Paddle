@@ -807,6 +807,20 @@ PADDLE_DEFINE_EXPORTED_bool(graph_load_in_parallel,
 
 /**
  * Distributed related FLAG
+ * Name: FLAGS_graph_metapath_split_opt
+ * Since Version: 2.2.0
+ * Value Range: bool, default=false
+ * Example:
+ * Note: Control whether load graph node and edge with multi threads parallely
+ *       If it is not set, load graph data with one thread
+ */
+PADDLE_DEFINE_EXPORTED_bool(graph_metapath_split_opt,
+                            false,
+                            "It controls whether load graph node and edge with "
+                            "mutli threads parallely.");
+
+/**
+ * Distributed related FLAG
  * Name: FLAGS_graph_get_neighbor_id
  * Since Version: 2.2.0
  * Value Range: bool, default=false
@@ -973,10 +987,9 @@ PADDLE_DEFINE_EXPORTED_uint64(
     gpugraph_merge_grads_segment_size,
     128,
     "segment size with segment gradient merge, default 128");
-PADDLE_DEFINE_EXPORTED_uint64(
-    gpugraph_slot_feasign_max_num,
-    5,
-    "max feasign number in one slot, default 5");
+PADDLE_DEFINE_EXPORTED_uint64(gpugraph_slot_feasign_max_num,
+                              5,
+                              "max feasign number in one slot, default 5");
 PADDLE_DEFINE_EXPORTED_int32(
     gpugraph_dedup_pull_push_mode,
     0,

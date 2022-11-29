@@ -50,7 +50,7 @@ class MemoryPool {
   size_t block_size_;
 };
 
-// derived from managed, alloced by managed hbm
+// Derived from managed, alloced managed hbm
 class HBMMemoryPool : public managed {
  public:
   HBMMemoryPool(size_t capacity, size_t block_size)
@@ -99,7 +99,7 @@ class HBMMemoryPoolFix : public managed {
  public:
   HBMMemoryPoolFix() {
     capacity_ = 0;
-    size_ = 0 ;
+    size_ = 0;
     block_size_ = 0;
     max_byte_capacity_ = 0;
   }

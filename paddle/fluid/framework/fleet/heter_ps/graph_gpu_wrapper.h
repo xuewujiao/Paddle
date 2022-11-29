@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #pragma once
+#include <algorithm>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -52,8 +53,9 @@ class GraphGpuWrapper {
                     int slice_num,
                     const std::string& edge_type);
   void upload_batch(int type, int slice_num, int slot_num);
-  std::vector<GpuPsCommGraphFea> get_sub_graph_fea(std::vector<std::vector<uint64_t>> &node_ids, int slot_num);
-  void build_gpu_graph_fea(GpuPsCommGraphFea &sub_graph_fea, int i);
+  std::vector<GpuPsCommGraphFea> get_sub_graph_fea(
+      std::vector<std::vector<uint64_t>>& node_ids, int slot_num);
+  void build_gpu_graph_fea(GpuPsCommGraphFea& sub_graph_fea, int i);
   void add_table_feat_conf(std::string table_name,
                            std::string feat_name,
                            std::string feat_dtype,
@@ -114,7 +116,11 @@ class GraphGpuWrapper {
                                              int walk_degree,
                                              int len);
   NeighborSampleResultV2 graph_neighbor_sample_all_edge_type(
-      int gpu_id, int edge_type_len, uint64_t* key, int sample_size, int len,
+      int gpu_id,
+      int edge_type_len,
+      uint64_t* key,
+      int sample_size,
+      int len,
       std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs);
   gpuStream_t get_local_stream(int gpuid);
   std::vector<uint64_t> graph_neighbor_sample(int gpu_id,
@@ -123,7 +129,7 @@ class GraphGpuWrapper {
                                               int sample_size);
   std::vector<std::shared_ptr<phi::Allocation>> get_edge_type_graph(
       int gpu_id, int edge_type_len);
-  std::vector<int> slot_feature_num_map() const ;
+  std::vector<int> slot_feature_num_map() const;
   void set_feature_separator(std::string ch);
   void set_slot_feature_separator(std::string ch);
   int get_feature_of_nodes(int gpu_id,
@@ -136,10 +142,14 @@ class GraphGpuWrapper {
   int get_feature_info_of_nodes(int gpu_id,
                                 uint64_t* d_nodes,
                                 int node_num,
-                                uint32_t * size_list,
-                                uint32_t * size_list_prefix_sum,
-                                std::shared_ptr<phi::Allocation> & feature_list,
-                                std::shared_ptr<phi::Allocation> & slot_list);
+                                uint32_t* size_list,
+                                uint32_t* size_list_prefix_sum,
+                                std::shared_ptr<phi::Allocation>& feature_list,
+                                std::shared_ptr<phi::Allocation>& slot_list);
+  void init_metapath(std::string cur_metapath,
+                     int cur_metapath_index,
+                     int cur_metapath_len);
+  void clear_metapath_state();
   void release_graph();
   void release_graph_edge();
   void release_graph_node();
@@ -147,6 +157,8 @@ class GraphGpuWrapper {
   std::vector<uint64_t>& get_graph_total_keys();
   std::vector<std::vector<uint64_t>>& get_graph_type_keys();
   std::unordered_map<int, int>& get_graph_type_to_index();
+  std::string& get_node_type_size(std::string first_node_type);
+  std::string& get_edge_type_size();
 
   std::unordered_map<std::string, int> edge_to_id, feature_to_id;
   std::vector<std::string> id_to_feature, id_to_edge;
@@ -167,13 +179,25 @@ class GraphGpuWrapper {
 
   std::vector<std::set<int>> finish_node_type_;
   std::vector<std::unordered_map<int, size_t>> node_type_start_;
+  std::vector<size_t> cur_metapath_start_;
   std::vector<std::unordered_map<int, size_t>> global_infer_node_type_start_;
   std::vector<size_t> infer_cursor_;
   std::vector<size_t> cursor_;
+  std::vector<std::shared_ptr<phi::Allocation>> d_graph_train_total_keys_;
+  std::vector<size_t> h_graph_train_keys_len_;
   std::vector<std::vector<std::shared_ptr<phi::Allocation>>>
       d_graph_all_type_total_keys_;
   std::vector<std::vector<uint64_t>> h_graph_all_type_keys_len_;
   std::string slot_feature_separator_ = std::string(" ");
+
+  std::string cur_metapath_;
+  std::vector<int> cur_parse_metapath_;
+  std::vector<int> cur_parse_reverse_metapath_;
+  int cur_metapath_index_;
+  int cur_metapath_len_;
+  std::set<std::string> uniq_first_node_;
+  std::string node_type_size_str_;
+  std::string edge_type_size_str_;
 };
 #endif
 }  // namespace framework

@@ -1,10 +1,10 @@
-    /* Copyright (c) 2018 PaddlePaddle Authors. All Rights Reserved.
+/* Copyright (c) 2018 PaddlePaddle Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
 
-    http://www.apache.org/licenses/LICENSE-2.0
+http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -906,6 +906,7 @@ class GraphDataGenerator {
   int AcquireInstance(BufState* state);
   int GenerateBatch();
   int FillWalkBuf();
+  int FillWalkBufMultiPath();
   int FillInferBuf();
   void DoWalkandSage();
   int FillSlotFeature(uint64_t* d_walk);
@@ -926,14 +927,16 @@ class GraphDataGenerator {
   int FillGraphIdShowClkTensor(int uniq_instance,
                                int total_instance,
                                int index);
-  int FillGraphSlotFeature(int total_instance, bool gpu_graph_training,
-                           std::shared_ptr<phi::Allocation> final_sage_nodes=nullptr);
-  int FillSlotFeature(uint64_t *d_walk, size_t key_num);
+  int FillGraphSlotFeature(
+      int total_instance,
+      bool gpu_graph_training,
+      std::shared_ptr<phi::Allocation> final_sage_nodes = nullptr);
+  int FillSlotFeature(uint64_t* d_walk, size_t key_num);
   int MakeInsPair(cudaStream_t stream);
   uint64_t CopyUniqueNodes();
   int GetPathNum() { return total_row_; }
-  void ResetPathNum() {total_row_ = 0; }
-  void ResetEpochFinish() {epoch_finish_ = false; }
+  void ResetPathNum() { total_row_ = 0; }
+  void ResetEpochFinish() { epoch_finish_ = false; }
   void ClearSampleState();
   void SetDeviceKeys(std::vector<uint64_t>* device_keys, int type) {
     // type_to_index_[type] = h_device_keys_.size();
@@ -941,22 +944,33 @@ class GraphDataGenerator {
   }
 
   std::vector<std::shared_ptr<phi::Allocation>> SampleNeighbors(
-          int64_t* uniq_nodes, int len, int sample_size,
-          std::vector<int>& edges_split_num, int64_t* neighbor_len);
-  std::shared_ptr<phi::Allocation> FillReindexHashTable(
-          int64_t* input, int num_input, int64_t len_hashtable,
-          int64_t* keys, int* values, int* key_index, int* final_nodes_len);
-  std::shared_ptr<phi::Allocation> GetReindexResult(
-          int64_t* reindex_src_data, int64_t* center_nodes,
-          int* final_nodes_len, int node_len, int64_t neighbor_len);
+      int64_t* uniq_nodes,
+      int len,
+      int sample_size,
+      std::vector<int>& edges_split_num,
+      int64_t* neighbor_len);
+  std::shared_ptr<phi::Allocation> FillReindexHashTable(int64_t* input,
+                                                        int num_input,
+                                                        int64_t len_hashtable,
+                                                        int64_t* keys,
+                                                        int* values,
+                                                        int* key_index,
+                                                        int* final_nodes_len);
+  std::shared_ptr<phi::Allocation> GetReindexResult(int64_t* reindex_src_data,
+                                                    int64_t* center_nodes,
+                                                    int* final_nodes_len,
+                                                    int node_len,
+                                                    int64_t neighbor_len);
   std::shared_ptr<phi::Allocation> GenerateSampleGraph(
-          uint64_t* node_ids, int len, int* uniq_len,
-          std::shared_ptr<phi::Allocation>& inverse);
+      uint64_t* node_ids,
+      int len,
+      int* uniq_len,
+      std::shared_ptr<phi::Allocation>& inverse);
   int InsertTable(const unsigned long* d_keys,
-          unsigned long len,
-          std::shared_ptr<phi::Allocation> d_uniq_node_num);
+                  unsigned long len,
+                  std::shared_ptr<phi::Allocation> d_uniq_node_num);
   std::vector<uint64_t>& GetHostVec() { return host_vec_; }
-  bool get_epoch_finish() {return epoch_finish_; }
+  bool get_epoch_finish() { return epoch_finish_; }
   void clear_gpu_mem();
 
  protected:
@@ -982,6 +996,7 @@ class GraphDataGenerator {
   std::vector<size_t> offset_;
   std::shared_ptr<phi::Allocation> d_prefix_sum_;
   std::vector<std::shared_ptr<phi::Allocation>> d_device_keys_;
+  std::shared_ptr<phi::Allocation> d_train_metapath_keys_;
 
   std::shared_ptr<phi::Allocation> d_walk_;
   std::shared_ptr<phi::Allocation> d_feature_list_;
@@ -1044,6 +1059,7 @@ class GraphDataGenerator {
   bool epoch_finish_;
   std::vector<uint64_t> host_vec_;
   std::vector<uint64_t> h_device_keys_len_;
+  uint64_t h_train_metapath_keys_len_;
   uint64_t train_table_cap_;
   uint64_t infer_table_cap_;
   uint64_t copy_unique_len_;
@@ -1166,7 +1182,7 @@ class DataFeed {
     gpu_graph_data_generator_.ResetPathNum();
 #endif
   }
-  
+
   virtual void ClearSampleState() {
 #if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
     gpu_graph_data_generator_.ClearSampleState();
@@ -1177,7 +1193,7 @@ class DataFeed {
 #if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
     gpu_graph_data_generator_.ResetEpochFinish();
 #endif
-}
+  }
 
   virtual bool IsTrainMode() { return train_mode_; }
   virtual void LoadIntoMemory() {
