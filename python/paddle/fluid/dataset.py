@@ -1083,6 +1083,8 @@ class InMemoryDataset(DatasetBase):
         self.proto_desc.graph_config.sage_mode = config.get("sage_mode", False)
         self.proto_desc.graph_config.samples = config.get("samples", "")
         self.proto_desc.graph_config.max_steps = config.get("max_steps", 0)
+        self.proto_desc.graph_config.exclude_path = config.get(
+            "exclude_path", "")
         self.dataset.set_gpu_graph_mode(True)
 
 
