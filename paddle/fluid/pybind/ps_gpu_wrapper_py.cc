@@ -41,8 +41,8 @@ void BindPSGPUWrapper(py::module* m) {
       .def("set_slot_vector",
            &framework::PSGPUWrapper::SetSlotVector,
            py::call_guard<py::gil_scoped_release>())
-	  .def("set_slot_num",
-		   &framework::PSGPUWrapper::SetSlotNum,
+	  .def("set_slot_num_for_pull_feature",
+		   &framework::PSGPUWrapper::SetPullFeatureSlotNum,
 		   py::call_guard<py::gil_scoped_release>())
 #ifdef PADDLE_WITH_CUDA
       .def("set_slot_dim_vector",
