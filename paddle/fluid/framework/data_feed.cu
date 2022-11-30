@@ -272,7 +272,6 @@ __global__ void GraphFillIdKernel(uint64_t *id_tensor,
   if (idx < len) {
     int src = row[idx] * col_num + central_word;
     if (walk[src] != 0 && walk[src + step] != 0) {
-      size_t dst = atomicAdd(&local_num, 1);
       for (int i = 0; i < exclude_path_len; i += 2) {
         if (walk_ntype[src] == exclude_path[i]
                 && walk_ntype[src + step] == exclude_path[i + 1]) {
@@ -282,11 +281,9 @@ __global__ void GraphFillIdKernel(uint64_t *id_tensor,
         }
       }
       if (!need_filter) {
+        size_t dst = atomicAdd(&local_num, 1);
         local_key[dst * 2] = walk[src];
         local_key[dst * 2 + 1] = walk[src + step];
-      } else {
-        local_key[dst * 2] = 0;
-        local_key[dst * 2 + 1] = 0;
       }
     }
   }
@@ -425,10 +422,9 @@ int GraphDataGenerator::FillInsBuf() {
                cudaMemcpyDeviceToHost);
     VLOG(2) << "h_pair_num = " << h_pair_num
             << ", ins_buf_pair_len = " << ins_buf_pair_len_;
-    for (int xx = 0; xx < 2 * ins_buf_pair_len_; xx++) {
-      VLOG(2) << "h_ins_buf[" << xx << "]: " << h_ins_buf[xx];
+    for (int xx = 0; xx < ins_buf_pair_len_; xx++) {
+      VLOG(2) << "h_ins_buf: " << h_ins_buf[xx * 2] << ", " << h_ins_buf[xx * 2 + 1];
     }
-    delete[] h_ins_buf;
 
     if (!FLAGS_enable_opt_get_features && slot_num_ > 0) {
       uint64_t *feature_buf =
@@ -702,6 +698,7 @@ int GraphDataGenerator::GenerateBatch() {
 
   std::shared_ptr<phi::Allocation> final_sage_nodes;
   if (!gpu_graph_training_) {
+    // infer
     while (cursor_ < h_device_keys_.size()) {
       size_t device_key_size = h_device_keys_[cursor_]->size();
       if (infer_node_type_start_[cursor_] >= device_key_size) {
@@ -788,6 +785,7 @@ int GraphDataGenerator::GenerateBatch() {
       return 0;
     }
   } else {
+    // train
     while (ins_buf_pair_len_ < batch_size_) {
       res = FillInsBuf();
       if (res == -1) {
