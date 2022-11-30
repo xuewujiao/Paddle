@@ -700,6 +700,20 @@ int GraphDataGenerator::GenerateBatch() {
   if (!gpu_graph_training_) {
     // infer
     while (cursor_ < h_device_keys_.size()) {
+      while (cursor_ < h_device_keys_.size()) {
+        if (infer_node_type_index_set_.find(cursor_) == infer_node_type_index_set_.end()) {
+          VLOG(2) << "Skip cursor[" << cursor_ << "]";
+          cursor_++;
+          continue;
+        } else {
+          VLOG(2) << "Not skip cursor[" << cursor_ << "]";
+          break;
+        }
+      }
+      if (cursor_ >= h_device_keys_.size()) {
+        break;
+      }
+
       size_t device_key_size = h_device_keys_[cursor_]->size();
       if (infer_node_type_start_[cursor_] >= device_key_size) {
         cursor_++;
@@ -1562,6 +1576,23 @@ void GraphDataGenerator::AllocResource(const paddle::platform::Place &place,
         gpu_graph_ptr->get_edge_type_graph(gpuid_, edge_to_id_len_);
   }
 
+  // parse infer_node_type
+  if (!gpu_graph_training_) {
+    auto node_types = paddle::string::split_string<std::string>(infer_node_type_, ";");
+    auto node_to_id = gpu_graph_ptr->feature_to_id;
+    for (auto &type : node_types) {
+      auto iter = node_to_id.find(type);
+      PADDLE_ENFORCE_NE(
+          iter,
+          node_to_id.end(),
+          platform::errors::NotFound("(%s) is not found in node_to_id.", type));
+      int node_type = iter->second;
+      int type_index = type_to_index_[node_type];
+      infer_node_type_index_set_.insert(type_index);
+    }
+    VLOG(2) << "infer_node_type_index_set_num: " << infer_node_type_index_set_.size();
+  }
+
   cudaStreamSynchronize(stream_);
 }
 
@@ -1660,6 +1691,9 @@ void GraphDataGenerator::SetConfig(
   for (size_t i = 0; i < samples.size(); i++) {
     int sample_size = std::stoi(samples[i]);
     samples_.emplace_back(sample_size);
+  }
+  if (!gpu_graph_training_) {
+    infer_node_type_ = graph_config.infer_node_type();
   }
 };
 

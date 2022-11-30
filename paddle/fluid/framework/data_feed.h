@@ -1012,6 +1012,8 @@ class GraphDataGenerator {
   int32_t steps_;
   bool sage_mode_;
   std::vector<int> samples_;
+  std::set<int> infer_node_type_index_set_;
+  std::string infer_node_type_;
 };
 
 class DataFeed {
