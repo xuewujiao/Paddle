@@ -958,7 +958,7 @@ class GraphDataGenerator {
 
   std::shared_ptr<phi::Allocation> d_walk_;
   std::shared_ptr<phi::Allocation> d_walk_ntype_;
-  std::shared_ptr<phi::Allocation> d_exclude_path_;
+  std::shared_ptr<phi::Allocation> d_excluded_train_pair_;
   std::shared_ptr<phi::Allocation> d_feature_;
   std::shared_ptr<phi::Allocation> d_len_per_row_;
   std::shared_ptr<phi::Allocation> d_random_row_;
@@ -990,8 +990,8 @@ class GraphDataGenerator {
            uint64_t     // src_node_id << 32 | dst_node_id
           > edge_to_node_map_;
 
-  std::vector<uint8_t> exclude_path_;
-  int exclude_path_len_;
+  std::vector<uint8_t> excluded_train_pair_;
+  int excluded_train_pair_len_;
   int64_t reindex_table_size_;
   int ins_buf_pair_len_;
   // size of a d_walk buf
