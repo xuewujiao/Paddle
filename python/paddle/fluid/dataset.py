@@ -945,6 +945,17 @@ class InMemoryDataset(DatasetBase):
         """
         return self.dataset.get_pv_data_size()
 
+    def get_epoch_finish(self):
+        return self.dataset.get_epoch_finish()
+        """
+        Used under gpu_graph_mode, user can call this function to know whether
+        the epoch is finished or not.
+
+        Returns:
+            Bool, whether the current epoch is finished or not.
+        """
+        return self.dataset.get_epoch_finish()
+
     @deprecated(
         since="2.0.0",
         update_to="paddle.distributed.InMemoryDataset.get_memory_data_size")
