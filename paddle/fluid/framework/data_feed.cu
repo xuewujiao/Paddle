@@ -700,18 +700,20 @@ int GraphDataGenerator::GenerateBatch() {
   if (!gpu_graph_training_) {
     // infer
     while (cursor_ < h_device_keys_.size()) {
-      while (cursor_ < h_device_keys_.size()) {
-        if (infer_node_type_index_set_.find(cursor_) == infer_node_type_index_set_.end()) {
-          VLOG(2) << "Skip cursor[" << cursor_ << "]";
-          cursor_++;
-          continue;
-        } else {
-          VLOG(2) << "Not skip cursor[" << cursor_ << "]";
+      if (!infer_node_type_index_set_.empty()) {
+        while (cursor_ < h_device_keys_.size()) {
+          if (infer_node_type_index_set_.find(cursor_) == infer_node_type_index_set_.end()) {
+            VLOG(2) << "Skip cursor[" << cursor_ << "]";
+            cursor_++;
+            continue;
+          } else {
+            VLOG(2) << "Not skip cursor[" << cursor_ << "]";
+            break;
+          }
+        }
+        if (cursor_ >= h_device_keys_.size()) {
           break;
         }
-      }
-      if (cursor_ >= h_device_keys_.size()) {
-        break;
       }
 
       size_t device_key_size = h_device_keys_[cursor_]->size();
