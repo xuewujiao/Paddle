@@ -41,7 +41,7 @@ message GraphConfig {
   optional bool sage_mode = 11 [ default = false ];
   optional string samples = 12;
   optional int32 max_steps = 13 [ default = 0 ];
-  optional string exclude_path = 14;
+  optional string excluded_train_pair = 14;
   optional string infer_node_type = 15;
 }
 

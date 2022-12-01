@@ -254,8 +254,8 @@ __global__ void GraphFillIdKernel(uint64_t *id_tensor,
                                   int step,
                                   int len,
                                   int col_num,
-                                  uint8_t* exclude_path,
-                                  int exclude_path_len) {
+                                  uint8_t* excluded_train_pair,
+                                  int excluded_train_pair_len) {
   __shared__ uint64_t local_key[CUDA_NUM_THREADS * 2];
   __shared__ int local_num;
   __shared__ int global_num;
@@ -272,9 +272,9 @@ __global__ void GraphFillIdKernel(uint64_t *id_tensor,
   if (idx < len) {
     int src = row[idx] * col_num + central_word;
     if (walk[src] != 0 && walk[src + step] != 0) {
-      for (int i = 0; i < exclude_path_len; i += 2) {
-        if (walk_ntype[src] == exclude_path[i]
-                && walk_ntype[src + step] == exclude_path[i + 1]) {
+      for (int i = 0; i < excluded_train_pair_len; i += 2) {
+        if (walk_ntype[src] == excluded_train_pair[i]
+                && walk_ntype[src + step] == excluded_train_pair[i + 1]) {
           // filter this pair
           need_filter = true;
           break;
@@ -394,7 +394,7 @@ int GraphDataGenerator::FillInsBuf() {
   int *d_pair_num = reinterpret_cast<int *>(d_pair_num_->ptr());
   cudaMemsetAsync(d_pair_num, 0, sizeof(int), stream_);
   int len = buf_state_.len;
-  uint8_t *exclude_path = reinterpret_cast<uint8_t *>(d_exclude_path_->ptr());
+  uint8_t *excluded_train_pair = reinterpret_cast<uint8_t *>(d_excluded_train_pair_->ptr());
   GraphFillIdKernel<<<GET_BLOCKS(len), CUDA_NUM_THREADS, 0, stream_>>>(
       ins_buf + ins_buf_pair_len_ * 2,
       d_pair_num,
@@ -405,8 +405,8 @@ int GraphDataGenerator::FillInsBuf() {
       window_step_[buf_state_.step],
       len,
       walk_len_,
-      exclude_path,
-      exclude_path_len_);
+      excluded_train_pair,
+      excluded_train_pair_len_);
   int h_pair_num;
   cudaMemcpyAsync(
       &h_pair_num, d_pair_num, sizeof(int), cudaMemcpyDeviceToHost, stream_);
@@ -1505,9 +1505,9 @@ void GraphDataGenerator::AllocResource(const paddle::platform::Place &place,
   cudaMemsetAsync(d_walk_->ptr(), 0, buf_size_ * sizeof(uint64_t), stream_);
   d_walk_ntype_ = memory::AllocShared(place_, buf_size_ * sizeof(uint8_t));
   cudaMemsetAsync(d_walk_ntype_->ptr(), 0, buf_size_ * sizeof(uint8_t), stream_);
-  d_exclude_path_ = memory::AllocShared(place_, exclude_path_len_ * sizeof(uint8_t));
-  CUDA_CHECK(cudaMemcpyAsync(d_exclude_path_->ptr(), exclude_path_.data(),
-              exclude_path_len_ * sizeof(uint8_t), cudaMemcpyHostToDevice, stream_));
+  d_excluded_train_pair_ = memory::AllocShared(place_, excluded_train_pair_len_ * sizeof(uint8_t));
+  CUDA_CHECK(cudaMemcpyAsync(d_excluded_train_pair_->ptr(), excluded_train_pair_.data(),
+              excluded_train_pair_len_ * sizeof(uint8_t), cudaMemcpyHostToDevice, stream_));
 
   if (!FLAGS_enable_opt_get_features && slot_num_ > 0) {
     d_feature_ =
@@ -1671,9 +1671,9 @@ void GraphDataGenerator::SetConfig(
     }
   }
 
-  std::string exclude_path_str = graph_config.exclude_path();
-  auto paths = paddle::string::split_string<std::string>(exclude_path_str, ";");
-  VLOG(2) << "exclude_path[" << exclude_path_str << "]";
+  std::string excluded_train_pair_str = graph_config.excluded_train_pair();
+  auto paths = paddle::string::split_string<std::string>(excluded_train_pair_str, ";");
+  VLOG(2) << "excluded_train_pair[" << excluded_train_pair_str << "]";
   for (auto &path: paths) {
     auto nodes = paddle::string::split_string<std::string>(path, "2");
     for (auto &node : nodes) {
@@ -1683,11 +1683,11 @@ void GraphDataGenerator::SetConfig(
               platform::errors::NotFound(
                   "(%s) is not found in edge_to_id.", node));
       VLOG(2) << "edge_to_id[" << node << "] = " << iter->second;
-      exclude_path_.push_back(iter->second);
+      excluded_train_pair_.push_back(iter->second);
     }
   }
 
-  exclude_path_len_ = exclude_path_.size();
+  excluded_train_pair_len_ = excluded_train_pair_.size();
 
   auto samples = paddle::string::split_string<std::string>(str_samples, ";");
   for (size_t i = 0; i < samples.size(); i++) {
