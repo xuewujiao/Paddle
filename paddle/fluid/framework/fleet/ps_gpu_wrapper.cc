@@ -144,7 +144,7 @@ void PSGPUWrapper::add_key_to_local(const std::vector<uint64_t>& vec_data) {
          iter++) {
       uint64_t cur_key = *iter;
       int shard_id = cur_key % thread_keys_shard_num_;
-      // TODO: feasign <-> slot <-> multi_dim
+      // feasign <-> slot <-> multi_dim
       this->thread_dim_keys_[i][shard_id][0].insert(cur_key);
     }
   };
@@ -247,7 +247,8 @@ void PSGPUWrapper::PreBuildTask(std::shared_ptr<HeterContext> gpu_task) {
   if (!gpu_graph_mode_) {
     if (data_set_name.find("SlotRecordDataset") != std::string::npos) {
       VLOG(0) << "ps_gpu_wrapper use SlotRecordDataset";
-      SlotRecordDataset* dataset = (SlotRecordDataset*)(dataset_);
+      SlotRecordDataset* dataset =
+          reinterpret_cast<SlotRecordDataset*>(dataset_);
       auto input_channel = dataset->GetInputChannel();
       VLOG(0) << "psgpu wrapperinputslotchannle size: "
               << input_channel->Size();
@@ -301,7 +302,7 @@ void PSGPUWrapper::PreBuildTask(std::shared_ptr<HeterContext> gpu_task) {
     } else {
       CHECK(data_set_name.find("MultiSlotDataset") != std::string::npos);
       VLOG(0) << "ps_gpu_wrapper use MultiSlotDataset";
-      MultiSlotDataset* dataset = (MultiSlotDataset*)(dataset_);
+      MultiSlotDataset* dataset = reinterpret_cast<MultiSlotDataset*>(dataset_);
       auto input_channel = dataset->GetInputChannel();
 
       const std::deque<Record>& vec_data = input_channel->GetData();
@@ -341,7 +342,7 @@ void PSGPUWrapper::PreBuildTask(std::shared_ptr<HeterContext> gpu_task) {
               << " seconds.";
     }
   } else {
-    SlotRecordDataset* dataset = (SlotRecordDataset*)(dataset_);
+    SlotRecordDataset* dataset = reinterpret_cast<SlotRecordDataset*>(dataset_);
     const std::vector<uint64_t>& vec_data = dataset->GetGpuGraphTotalKeys();
     timeline.Start();
     add_key_to_local(vec_data);
@@ -427,7 +428,8 @@ void PSGPUWrapper::add_slot_feature(std::shared_ptr<HeterContext> gpu_task) {
   threads.clear();
   time_stage.Pause();
   divide_nodeid_cost = time_stage.ElapsedSec();
-  gpu_task->sub_graph_feas = (void*)(new std::vector<GpuPsCommGraphFea>);
+  gpu_task->sub_graph_feas =
+      reinterpret_cast<void*>(new std::vector<GpuPsCommGraphFea>);
   std::vector<GpuPsCommGraphFea>& sub_graph_feas =
       *((std::vector<GpuPsCommGraphFea>*)gpu_task->sub_graph_feas);
   std::vector<std::vector<uint64_t>> feature_ids(device_num);
@@ -456,15 +458,15 @@ void PSGPUWrapper::add_slot_feature(std::shared_ptr<HeterContext> gpu_task) {
       int* d_slot_feature_num_map;
       uint64_t* d_node_list_ptr;
       uint64_t* d_feature_list_ptr;
-      CUDA_CHECK(
-          cudaMalloc((void**)&d_slot_feature_num_map, slot_num * sizeof(int)));
+      CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_slot_feature_num_map),
+                            slot_num * sizeof(int)));
       CUDA_CHECK(cudaMemcpy(d_slot_feature_num_map,
                             h_slot_feature_num_map.data(),
                             sizeof(int) * slot_num,
                             cudaMemcpyHostToDevice));
-      CUDA_CHECK(
-          cudaMalloc((void**)&d_node_list_ptr, batch * sizeof(uint64_t)));
-      CUDA_CHECK(cudaMalloc((void**)&d_feature_list_ptr,
+      CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_node_list_ptr),
+                            batch * sizeof(uint64_t)));
+      CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_feature_list_ptr),
                             batch * fea_num_per_node * sizeof(uint64_t)));
       auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
       uint64_t pos = 0;
@@ -744,7 +746,8 @@ void PSGPUWrapper::BuildPull(std::shared_ptr<HeterContext> gpu_task) {
               this->table_id_,
               local_dim_keys[i][j].data(),
               key_size,
-              gpu_task->pass_id_);
+              gpu_task->pass_id_,
+              j);
           bool flag = true;
 
           tt.wait();
@@ -806,9 +809,208 @@ void PSGPUWrapper::BuildPull(std::shared_ptr<HeterContext> gpu_task) {
       gloo_wrapper->Init();
     }
     gloo_wrapper->Barrier();
+    // merge pull
+    MergePull(gpu_task);
   }
 }
+void PSGPUWrapper::MergePull(std::shared_ptr<HeterContext> gpu_task) {
+#ifdef PADDLE_WITH_GPU_GRAPH
+  platform::Timer timeline;
+  timeline.Start();
+  auto fleet_ptr = paddle::distributed::FleetWrapper::GetInstance();
+  std::vector<std::future<void>> task_futures;
+  for (int dim_id = 0; dim_id < multi_mf_dim_; ++dim_id) {
+    auto pass_values = fleet_ptr->worker_ptr_->TakePassSparseReferedValues(
+        table_id_, gpu_task->pass_id_, dim_id);
+    for (int shard_id = 0; shard_id < thread_keys_shard_num_; ++shard_id) {
+      auto& merge_values = pass_values->at(shard_id);
+      task_futures.emplace_back(pull_thread_pool_[shard_id]->enqueue(
+          [this, &gpu_task, &merge_values](int shard_id, int dim_id) {
+            auto& shard_keys = gpu_task->feature_dim_keys_[shard_id][dim_id];
+            auto& shard_values = gpu_task->value_dim_ptr_[shard_id][dim_id];
 
+            size_t dedup_size = 0;
+            for (size_t pos = 0; pos < shard_keys.size(); ++pos) {
+              auto& key = shard_keys[pos];
+              if (PartitionKeyForRank(key) != rank_id_) {
+                continue;
+              }
+              if (dedup_size == pos) {
+                ++dedup_size;
+                continue;
+              }
+              shard_keys[dedup_size] = shard_keys[pos];
+              ++dedup_size;
+            }
+
+            size_t merge_num = merge_values.keys.size();
+            size_t total = merge_num + dedup_size;
+            shard_keys.resize(total);
+            shard_values.resize(total);
+
+            size_t dedup_index = dedup_size;
+            uint64_t last_key = shard_keys[0];
+
+            size_t i = 0;
+            size_t k = 0;
+
+            int num_ranks = node_size_ - 1;
+            if (num_ranks == 1) {
+              while (i < dedup_size && k < merge_num) {
+                auto& merge_key = merge_values.keys[k];
+                auto& key = shard_keys[i];
+                if ((key == merge_key) || (last_key == merge_key)) {
+                  ++k;
+                  continue;
+                }
+                if (key < merge_key) {
+                  ++i;
+                  continue;
+                }
+                last_key = merge_key;
+                shard_keys[dedup_index] = merge_key;
+                shard_values[dedup_index] =
+                    CONV2FEATURE_PTR(merge_values.values[k]);
+                ++k;
+                ++dedup_index;
+              }
+              uint64_t& key = shard_keys[dedup_size - 1];
+              while (k < merge_num) {
+                auto& merge_key = merge_values.keys[k];
+                if (key == merge_key || last_key == merge_key) {
+                  ++k;
+                  continue;
+                }
+                last_key = merge_key;
+                shard_keys[dedup_index] = merge_key;
+                shard_values[dedup_index] =
+                    CONV2FEATURE_PTR(merge_values.values[k]);
+                ++k;
+                ++dedup_index;
+              }
+            } else {
+              merge_values.offsets.push_back(merge_num);
+              CHECK(merge_values.offsets.size() ==
+                    static_cast<size_t>(node_size_));
+              std::vector<size_t> ranks_pos(num_ranks);
+              for (int rank = 0; rank < num_ranks; ++rank) {
+                ranks_pos[rank] = merge_values.offsets[rank];
+              }
+              ssize_t pos = -1;
+              int sel_rank = -1;
+              uint64_t min_key = last_key;
+              while (i < dedup_size && k < merge_num) {
+                auto& key = shard_keys[i];
+                if (key < min_key) {
+                  ++i;
+                  continue;
+                }
+                if (pos == -1) {
+                  for (int rank = 0; rank < num_ranks; ++rank) {
+                    size_t& max = merge_values.offsets[rank + 1];
+                    size_t& off = ranks_pos[rank];
+                    while (off < max) {
+                      auto& mkey = merge_values.keys[off];
+                      if (key == mkey || last_key == mkey || min_key == mkey) {
+                        ++k;
+                        ++off;
+                        continue;
+                      }
+                      if (pos == -1 || min_key > mkey) {
+                        min_key = mkey;
+                        pos = off;
+                        sel_rank = rank;
+                      }
+                      break;
+                    }
+                  }
+                  if (pos == -1) {
+                    PADDLE_ENFORCE((k == merge_num),
+                                   "shardid=%d, k=%d, merge_num=%d",
+                                   shard_id,
+                                   k,
+                                   merge_num);
+                    break;
+                  }
+                  if (key < min_key) {
+                    ++i;
+                    continue;
+                  }
+                }
+                if (min_key != key) {
+                  last_key = merge_values.keys[pos];
+                  shard_keys[dedup_index] = last_key;
+                  shard_values[dedup_index] =
+                      CONV2FEATURE_PTR(merge_values.values[pos]);
+                  ++dedup_index;
+                }
+                pos = -1;
+                ++k;
+                ++ranks_pos[sel_rank];
+              }
+              uint64_t& key = shard_keys[dedup_size - 1];
+              while (k < merge_num) {
+                if (pos == -1) {
+                  for (int rank = 0; rank < num_ranks; ++rank) {
+                    size_t& max = merge_values.offsets[rank + 1];
+                    size_t& off = ranks_pos[rank];
+                    while (off < max) {
+                      auto& mkey = merge_values.keys[off];
+                      if (key == mkey || last_key == mkey || min_key == mkey) {
+                        ++k;
+                        ++off;
+                        continue;
+                      }
+                      if (pos == -1 || min_key > mkey) {
+                        min_key = mkey;
+                        pos = off;
+                        sel_rank = rank;
+                      }
+                      break;
+                    }
+                  }
+                  if (pos == -1) {
+                    PADDLE_ENFORCE((k == merge_num),
+                                   "shardid=%d, k=%d, merge_num=%d",
+                                   shard_id,
+                                   k,
+                                   merge_num);
+                    break;
+                  }
+                }
+                last_key = merge_values.keys[pos];
+                shard_keys[dedup_index] = last_key;
+                shard_values[dedup_index] =
+                    CONV2FEATURE_PTR(merge_values.values[pos]);
+                ++dedup_index;
+                pos = -1;
+                ++k;
+                ++ranks_pos[sel_rank];
+              }
+            }
+            shard_keys.resize(dedup_index);
+            shard_values.resize(dedup_index);
+          },
+          shard_id,
+          dim_id));
+    }
+  }
+  for (auto& f : task_futures) {
+    f.wait();
+  }
+  task_futures.clear();
+
+  uint64_t total_key = 0;
+  for (int shard_id = 0; shard_id < thread_keys_shard_num_; ++shard_id) {
+    for (int dim_id = 0; dim_id < multi_mf_dim_; ++dim_id) {
+      total_key += gpu_task->feature_dim_keys_[shard_id][dim_id].size();
+    }
+  }
+  timeline.Pause();
+  VLOG(0) << "merge pull sparse from CpuPS into GpuPS total keys " << total_key
+          << ", cost " << timeline.ElapsedSec() << " seconds.";
+#endif
+}
 void PSGPUWrapper::divide_to_device(std::shared_ptr<HeterContext> gpu_task) {
   platform::Timer timeline;
   int device_num = heter_devices_.size();
@@ -1094,8 +1296,8 @@ void PSGPUWrapper::BuildGPUTask(std::shared_ptr<HeterContext> gpu_task) {
     char* test_build_values = build_values.get();
     for (size_t k = start; k < end; k++) {
 #ifdef PADDLE_WITH_PSLIB
-      float* val =
-          (float*)(test_build_values + (k - start) * feature_value_size);
+      float* val = reinterpret_cast<float*>(test_build_values +
+                                            (k - start) * feature_value_size);
       float* ptr_val = device_dim_ptrs[k]->data();
       size_t dim = device_dim_ptrs[k]->size();
       val->delta_score =
@@ -1105,8 +1307,9 @@ void PSGPUWrapper::BuildGPUTask(std::shared_ptr<HeterContext> gpu_task) {
                               DownpourCtrDymfFeatureValue::show_index()];
       val->clk = ptr_val[paddle::ps::DownpourCtrDymfAccessor::
                              DownpourCtrDymfFeatureValue::click_index()];
-      val->slot = int(ptr_val[paddle::ps::DownpourCtrDymfAccessor::
-                                  DownpourCtrDymfFeatureValue::slot_index()]);
+      val->slot = static_cast<int>(
+          ptr_val[paddle::ps::DownpourCtrDymfAccessor::
+                      DownpourCtrDymfFeatureValue::slot_index()]);
       val->lr = ptr_val[paddle::ps::DownpourCtrDymfAccessor::
                             DownpourCtrDymfFeatureValue::embed_w_index()];
       val->lr_g2sum =
@@ -1114,7 +1317,7 @@ void PSGPUWrapper::BuildGPUTask(std::shared_ptr<HeterContext> gpu_task) {
                       DownpourCtrDymfFeatureValue::embed_g2sum_index()];
       // TODO(xuefeng) set mf_dim while using DownpourCtrDymfAccessor
       ptr_val[paddle::ps::DownpourCtrDymfAccessor::DownpourCtrDymfFeatureValue::
-                  mf_dim_index()] = float(mf_dim);
+                  mf_dim_index()] = static_cast<float>(mf_dim);
       val->mf_dim = mf_dim;
       if (dim > 8) {  // CpuPS alreay expand as mf_dim
         val->mf_size = mf_dim + 1;
@@ -1133,8 +1336,8 @@ void PSGPUWrapper::BuildGPUTask(std::shared_ptr<HeterContext> gpu_task) {
                      feature_value_accessor_.common_feature_value.Dim(mf_dim));
 #endif
 #ifdef PADDLE_WITH_PSCORE
-      void* val =
-          (float*)(test_build_values + (k - start) * feature_value_size);
+      void* val = reinterpret_cast<float*>(test_build_values +
+                                           (k - start) * feature_value_size);
       accessor_wrapper_ptr->BuildFill(
           val, device_dim_ptrs[k], cpu_table_accessor_, mf_dim);
 #endif
@@ -1145,7 +1348,7 @@ void PSGPUWrapper::BuildGPUTask(std::shared_ptr<HeterContext> gpu_task) {
     task.device_id = i;
     task.multi_mf_dim = j;
     task.start = 0;
-    task.end = int(real_len);
+    task.end = static_cast<int>(real_len);
     cpu_reday_channels_[i]->Put(task);
   };
 
@@ -1543,9 +1746,10 @@ void PSGPUWrapper::HbmToSparseTable() {
           continue;
         }
         size_t local_offset = i * feature_value_size;
-        float* gpu_val = (float*)(test_build_values + local_offset);
+        float* gpu_val =
+            reinterpret_cast<float*>(test_build_values + local_offset);
 #ifdef PADDLE_WITH_PSLIB
-        // TODO: PSLIB DumpFill
+        // PSLIB DumpFill
 #endif
 #ifdef PADDLE_WITH_PSCORE
         accessor_wrapper_ptr->DumpFill(gpu_val, cpu_table_accessor_, mf_dim);
