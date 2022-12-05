@@ -58,7 +58,7 @@ limitations under the License. */
 #include "paddle/fluid/distributed/the_one_ps.pb.h"
 #endif
 #ifdef PADDLE_WITH_PSLIB
-#include "afs_api.h"
+#include "afs_api.h"  // NOLINT
 #endif
 #ifdef PADDLE_WITH_PSLIB
 #include "downpour_accessor.h"  // NOLINT
@@ -218,6 +218,7 @@ class PSGPUWrapper {
   void build_pull_thread();
   void build_task();
   void DumpToMem();
+  void MergePull(std::shared_ptr<HeterContext> gpu_task);
   // set mode
   void SetMode(bool infer_mode) {
     infer_mode_ = infer_mode;
@@ -346,6 +347,7 @@ class PSGPUWrapper {
       gpu_free_channel_->Put(current_task_);
 
       table_id_ = 0;
+      device_num_ = static_cast<int>(heter_devices_.size());
 
       // start build cpu&gpu ps thread
       start_build_thread();
@@ -570,7 +572,7 @@ class PSGPUWrapper {
     // set optimizer type(naive,adagrad,std_adagrad,adam,share_adam)
     optimizer_type_ = (config.find("optimizer_type") == config.end())
                           ? 1
-                          : int(config["optimizer_type"]);
+                          : static_cast<int>(config["optimizer_type"]);
 
     VLOG(0) << "InitializeGPUServer optimizer_type_:" << optimizer_type_
             << " nodeid_slot:" << nodeid_slot
@@ -623,7 +625,7 @@ class PSGPUWrapper {
     if (slot_info_initialized_) {
       return;
     }
-    SlotRecordDataset* dataset = (SlotRecordDataset*)(dataset_);
+    SlotRecordDataset* dataset = reinterpret_cast<SlotRecordDataset*>(dataset_);
     auto slots_vec = dataset->GetSlots();
     slot_offset_vector_.clear();
     for (auto& slot : slot_vector_) {
@@ -702,6 +704,10 @@ class PSGPUWrapper {
     cpu_table_accessor_ = accessor;
   }
 #endif
+  // for node rank
+  int PartitionKeyForRank(const uint64_t& key) {
+    return ((key / device_num_) % node_size_);
+  }
 
  private:
   static std::shared_ptr<PSGPUWrapper> s_instance_;
@@ -738,6 +744,7 @@ class PSGPUWrapper {
   int multi_node_{0};
   int rank_id_;
   int node_size_;
+  int device_num_ = 8;
   uint64_t table_id_;
   int gpu_graph_mode_ = 0;
 #ifdef PADDLE_WITH_CUDA
@@ -795,9 +802,9 @@ class PSGPUWrapper {
   std::thread pre_build_threads_;
   std::thread buildpull_threads_;
   bool running_ = false;
-  std::vector<std::shared_ptr<ThreadPool>> pull_thread_pool_;
-  std::vector<std::shared_ptr<ThreadPool>> hbm_thread_pool_;
-  std::vector<std::shared_ptr<ThreadPool>> cpu_work_pool_;
+  std::vector<std::shared_ptr<::ThreadPool>> pull_thread_pool_;
+  std::vector<std::shared_ptr<::ThreadPool>> hbm_thread_pool_;
+  std::vector<std::shared_ptr<::ThreadPool>> cpu_work_pool_;
   OptimizerConfig optimizer_config_;
   // gradient push count
   uint64_t grad_push_count_ = 0;
