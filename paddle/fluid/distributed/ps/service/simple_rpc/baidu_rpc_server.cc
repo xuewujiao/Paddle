@@ -149,7 +149,6 @@ void BaiduRpcServer::initialize() {
   option.idle_timeout_sec = _connection_idle_timeout_sec;
   option.auth = nullptr;
   option.num_threads = _thread_num;
-  option.use_rdma = _use_rdma;
   _service_impl = std::make_shared<BRpcServiceImpl>(_gloo->Rank());
   int ret =
       _server->AddService(_service_impl.get(), brpc::SERVER_DOESNT_OWN_SERVICE);
@@ -168,7 +167,6 @@ void BaiduRpcServer::initialize() {
     option.timeout_ms = _client_timeout_ms;
     option.connect_timeout_ms = _connect_timeout_ms;
     option.max_retry = _max_retry;
-    option.use_rdma = _use_rdma;
 
     butil::EndPoint cep;
     cep.ip = butil::int2ip(_ips[i]);

@@ -125,7 +125,6 @@ class MultiTrainer : public TrainerBase {
 
  protected:
   int thread_num_;
-  std::vector<std::thread> threads_;
   std::vector<DataFeed*> readers_;
   std::vector<std::shared_ptr<DeviceWorker>> workers_;
   std::vector<std::string> need_merge_var_names_;
@@ -156,6 +155,7 @@ class DistMultiTrainer : public MultiTrainer {
 
  protected:
   std::shared_ptr<paddle::framework::PullDenseWorker> pull_dense_worker_;
+  std::vector<std::thread> threads_;
 };
 
 #if (defined PADDLE_WITH_CUDA || defined PADDLE_WITH_HIP || \

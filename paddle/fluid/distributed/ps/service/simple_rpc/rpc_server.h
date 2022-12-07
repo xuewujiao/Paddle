@@ -77,7 +77,6 @@ class RpcServer {
  public:
   void set_connection_num(int n);
   void set_thread_num(int n);
-  void set_use_rdma(bool rdma) { _use_rdma = rdma; }
   void set_connection_idle_timeout_sec(int timeout_sec) {
     _connection_idle_timeout_sec = timeout_sec;
   }
@@ -139,7 +138,6 @@ class RpcServer {
   std::vector<uint32_t> _ips;
   paddle::framework::GlooWrapper *_gloo = NULL;
   // configure for rpc
-  bool _use_rdma = false;
   int _connection_idle_timeout_sec = 3600;
   int _max_retry = 1000;
   int _connect_timeout_ms = -1;

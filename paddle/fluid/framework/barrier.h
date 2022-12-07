@@ -24,19 +24,25 @@ class Barrier {
  public:
   explicit Barrier(int count = 1) {
     CHECK_GE(count, 1);
-    CHECK_EQ(0, pthread_barrier_init(&_barrier, NULL, count));
+    int ret = pthread_barrier_init(&_barrier, NULL, count);
+    CHECK_EQ(0, ret);
   }
-  ~Barrier() { CHECK_EQ(0, pthread_barrier_destroy(&_barrier)); }
+  ~Barrier() {
+    int ret = pthread_barrier_destroy(&_barrier);
+    CHECK_EQ(0, ret);
+  }
   void reset(int count) {
     CHECK_GE(count, 1);
-    CHECK_EQ(0, pthread_barrier_destroy(&_barrier));
-    CHECK_EQ(0, pthread_barrier_init(&_barrier, NULL, count));
+    int ret = pthread_barrier_destroy(&_barrier);
+    CHECK_EQ(0, ret);
+    ret = pthread_barrier_init(&_barrier, NULL, count);
+    CHECK_EQ(0, ret);
   }
   void wait() {
     int err = pthread_barrier_wait(&_barrier);
+    err = pthread_barrier_wait(&_barrier);
     CHECK_EQ(true,
-             (err = pthread_barrier_wait(&_barrier),
-              err == 0 || err == PTHREAD_BARRIER_SERIAL_THREAD));
+            (err == 0 || err == PTHREAD_BARRIER_SERIAL_THREAD));
   }
 
  private:
@@ -58,15 +64,26 @@ auto ignore_signal_call(FUNC &&func, ARGS &&...args) ->
 }
 class Semaphore {
  public:
-  Semaphore() { CHECK_EQ(0, sem_init(&_sem, 0, 0)); }
-  ~Semaphore() { CHECK_EQ(0, sem_destroy(&_sem)); }
-  void post() { CHECK_EQ(0, sem_post(&_sem)); }
-  void wait() { CHECK_EQ(0, ignore_signal_call(sem_wait, &_sem)); }
+  Semaphore() {
+    int ret = sem_init(&_sem, 0, 0);
+    CHECK_EQ(0, ret);
+  }
+  ~Semaphore() {
+    int ret = sem_destroy(&_sem);
+    CHECK_EQ(0, ret);
+  }
+  void post() {
+    int ret = sem_post(&_sem);
+    CHECK_EQ(0, ret);
+  }
+  void wait() {
+    int ret = ignore_signal_call(sem_wait, &_sem);
+    CHECK_EQ(0, ret);
+  }
   bool try_wait() {
-    int err = 0;
+    int err = ignore_signal_call(sem_trywait, &_sem);
     CHECK_EQ(true,
-             (err = ignore_signal_call(sem_trywait, &_sem),
-              err == 0 || errno == EAGAIN));
+             (err == 0 || errno == EAGAIN));
     return err == 0;
   }
 
