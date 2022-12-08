@@ -42,6 +42,7 @@ message GraphConfig {
   optional string samples = 12;
   optional int64 train_table_cap = 13 [ default = 80000 ];
   optional int64 infer_table_cap = 14 [ default = 80000 ];
+  optional bool get_degree = 15 [ default = false ];
 }
 
 message DataFeedDesc {

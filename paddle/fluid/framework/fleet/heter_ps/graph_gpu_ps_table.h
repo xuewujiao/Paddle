@@ -109,6 +109,8 @@ class GpuPsGraphTable
       std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs);
   std::vector<std::shared_ptr<phi::Allocation>> get_edge_type_graph(
       int gpu_id, int edge_type_len);
+  void get_node_degree(int gpu_id, int edge_idx, uint64_t* key, int len,
+                       std::shared_ptr<phi::Allocation> node_degree);
   int get_feature_of_nodes(int gpu_id,
                            uint64_t *d_walk,
                            uint64_t *d_offset,
@@ -154,6 +156,11 @@ class GpuPsGraphTable
                                                int *actual_sample_size,
                                                int edge_type_len,
                                                int len);
+  void move_degree_to_source_gpu(int gpu_id,
+                                 int gpu_num,
+                                 int *h_left,
+                                 int *h_right,
+                                 int *node_degree);
   int init_cpu_table(const paddle::distributed::GraphParameter &graph,
                      int gpu_num = 8);
   gpuStream_t get_local_stream(int gpu_id) {
