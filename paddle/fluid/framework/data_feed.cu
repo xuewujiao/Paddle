@@ -1965,6 +1965,7 @@ void GraphDataGenerator::DoWalkandSage() {
             auto node_degrees = GetNodeDegree(final_sage_nodes_ptr, uniq_instance);
             node_degree_vec_.emplace_back(node_degrees);
           }
+          cudaStreamSynchronize(sample_stream_);
           if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
             InsertTable(final_sage_nodes_ptr, uniq_instance, d_uniq_node_num_);
           }
@@ -2012,6 +2013,12 @@ void GraphDataGenerator::DoWalkandSage() {
               phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
           auto final_sage_nodes = GenerateSampleGraph(
               node_buf_ptr_, total_instance, &uniq_instance, inverse);
+          uint64_t* final_sage_nodes_ptr =
+              reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
+          if (get_degree_) {
+            auto node_degrees = GetNodeDegree(final_sage_nodes_ptr, uniq_instance);
+            node_degree_vec_.emplace_back(node_degrees);
+          }
           cudaStreamSynchronize(sample_stream_);
           if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
             uint64_t *final_sage_nodes_ptr =
