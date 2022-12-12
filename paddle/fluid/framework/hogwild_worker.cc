@@ -25,6 +25,10 @@ limitations under the License. */
 #include "paddle/fluid/distributed/ps/service/communicator/communicator.h"
 #endif
 
+#if defined(PADDLE_WITH_GLOO)
+#include "paddle/fluid/framework/fleet/gloo_wrapper.h"
+#endif
+
 DECLARE_bool(enable_exit_when_partial_worker);
 namespace paddle {
 namespace framework {
@@ -119,8 +123,50 @@ void HogwildWorker::BindingDataFeedMemory() {
 void HogwildWorker::CreateDeviceResource(const ProgramDesc &main_prog) {
   CreateThreadScope(main_prog);
   CreateThreadOperators(main_prog);
-}
 
+#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
+  float *stat_ptr = sync_stat_.mutable_data<float>(place_, sizeof(float) * 3);
+  float flags[] = {0.0, 1.0, 0.0};
+  auto stream = static_cast<phi::GPUContext *>(dev_ctx_)->stream();
+  PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyAsync(stat_ptr,  // output
+                                             &flags,
+                                             sizeof(float) * 3,
+                                             cudaMemcpyHostToDevice,
+                                             stream));
+  PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
+#endif
+}
+// check batch num
+bool HogwildWorker::CheckBatchNum(int flag) {
+  float ret = 0.0;
+#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
+  if (flag > 1) {
+    flag = 1;
+  } else if (flag < 0) {
+    flag = 0;
+  }
+  g_barrier.wait();
+  float *stat_ptr = sync_stat_.data<float>();
+  auto comm =
+      platform::NCCLCommContext::Instance().Get(0, place_.GetDeviceId());
+  auto stream = static_cast<phi::GPUContext *>(dev_ctx_)->stream();
+  PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllReduce(&stat_ptr[flag],
+                                                              &stat_ptr[2],
+                                                              1,
+                                                              ncclFloat32,
+                                                              ncclProd,
+                                                              comm->comm(),
+                                                              stream));
+  PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyAsync(&ret,  // output
+                                             &stat_ptr[2],
+                                             sizeof(float),
+                                             cudaMemcpyDeviceToHost,
+                                             stream));
+  PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
+  g_barrier.wait();
+#endif
+  return (ret > 0.0);
+}
 void HogwildWorker::TrainFilesWithProfiler() {
   platform::SetNumThreads(1);
 #if defined(PADDLE_WITH_HETERPS) && \
@@ -149,20 +195,38 @@ void HogwildWorker::TrainFilesWithProfiler() {
   }
   g_barrier.wait();
   bool train_mode = device_reader_->IsTrainMode();
+
+  bool is_multi_node = false;
+#if defined(PADDLE_WITH_GLOO) && defined(PADDLE_WITH_GPU_GRAPH)
+  auto gloo = paddle::framework::GlooWrapper::GetInstance();
+  if (gloo->Size() > 1) {
+    is_multi_node = true;
+  }
+#endif
+
   timeline.Start();
   uint64_t total_inst = 0;
   device_reader_->InitGraphTrainResource();
   while (1) {
     cur_batch = device_reader_->Next();
-    if (FLAGS_enable_exit_when_partial_worker && train_mode) {
-      if (cur_batch > 0) {
-        worker_num_stat_.fetch_add(1, std::memory_order_relaxed);
-      }
-      g_barrier.wait();
-      if (worker_num_stat_.load(std::memory_order_relaxed) % thread_num_ != 0) {
+#if defined(PADDLE_WITH_GPU_GRAPH)
+    if (is_multi_node) {
+      if (!CheckBatchNum(cur_batch)) {
         break;
       }
+    } else {
+      if (FLAGS_enable_exit_when_partial_worker && train_mode) {
+        if (cur_batch > 0) {
+          worker_num_stat_.fetch_add(1, std::memory_order_relaxed);
+        }
+        g_barrier.wait();
+        if (worker_num_stat_.load(std::memory_order_relaxed) % thread_num_ !=
+            0) {
+          break;
+        }
+      }
     }
+#endif
     if (cur_batch <= 0) {
       break;
     }
@@ -242,7 +306,6 @@ void HogwildWorker::TrainFilesWithProfiler() {
   }
 #endif
 }
-
 void HogwildWorker::TrainFiles() {
   platform::SetNumThreads(1);
   platform::Timer timeline;
@@ -272,6 +335,11 @@ void HogwildWorker::TrainFiles() {
   device_reader_->InitGraphTrainResource();
   while (1) {
     cur_batch = device_reader_->Next();
+#if defined(PADDLE_WITH_GPU_GRAPH)
+    if (!CheckBatchNum(cur_batch)) {
+      break;
+    }
+#endif
     if (FLAGS_enable_exit_when_partial_worker && train_mode) {
       if (cur_batch > 0) {
         worker_num_stat_.fetch_add(1, std::memory_order_relaxed);

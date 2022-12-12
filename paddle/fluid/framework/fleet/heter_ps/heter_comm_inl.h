@@ -3125,6 +3125,8 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
   }
   size_t &remote_size = h_remote_part_offsets[node_size_];
   cache.alloc(remote_size, max_type_size_, HeterCommType::COPY_KEY);
+  // barrier
+  barrier_.wait();
 
   size_t total_fea_num = 0;
   if (rdma_checker_->need_rdma_trans()) {
