@@ -17,6 +17,7 @@ limitations under the License. */
 
 #include <atomic>
 #include <ctime>
+#include <utility>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -202,7 +203,7 @@ class PSGPUWrapper {
   void divide_to_device(std::shared_ptr<HeterContext> gpu_task);
   void add_slot_feature(std::shared_ptr<HeterContext> gpu_task);
   void BuildGPUTask(std::shared_ptr<HeterContext> gpu_task);
-  void PreBuildTask(std::shared_ptr<HeterContext> gpu_task);
+  void PreBuildTask(std::shared_ptr<HeterContext> gpu_task, Dataset* dataset_for_pull);
   void BuildPull(std::shared_ptr<HeterContext> gpu_task);
   void PrepareGPUTask(std::shared_ptr<HeterContext> gpu_task);
   void LoadIntoMemory(bool is_shuffle);
@@ -605,7 +606,10 @@ class PSGPUWrapper {
     slot_vector_ = slot_vector;
     VLOG(0) << "slot_vector size is " << slot_vector_.size();
   }
-
+  void SetPullFeatureSlotNum(int slot_num) {
+	slot_num_for_pull_feature_ = slot_num;
+    VLOG(0) << "slot_num_for_pull_feature_ is " << slot_num_for_pull_feature_;
+  }
   void SetSlotOffsetVector(const std::vector<int>& slot_offset_vector) {
     slot_offset_vector_ = slot_offset_vector;
     std::cout << "yxf set: ";
@@ -732,6 +736,7 @@ class PSGPUWrapper {
   std::vector<int> index_dim_vec_;
   int multi_mf_dim_{0};
   int max_mf_dim_{0};
+  int slot_num_for_pull_feature_{0};
   size_t val_type_size_{0};
   size_t grad_type_size_{0};
   size_t pull_type_size_{0};
@@ -781,9 +786,9 @@ class PSGPUWrapper {
 #endif
 
   std::shared_ptr<
-      paddle::framework::ChannelObject<std::shared_ptr<HeterContext>>>
+      paddle::framework::ChannelObject<std::pair<std::shared_ptr<HeterContext>, Dataset*>>>
       data_ready_channel_ =
-          paddle::framework::MakeChannel<std::shared_ptr<HeterContext>>();
+          paddle::framework::MakeChannel<std::pair<std::shared_ptr<HeterContext>, Dataset*>>();
   std::shared_ptr<
       paddle::framework::ChannelObject<std::shared_ptr<HeterContext>>>
       buildcpu_ready_channel_ =

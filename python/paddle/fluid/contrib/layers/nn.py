@@ -44,7 +44,7 @@ __all__ = [
     'multiclass_nms2', 'search_pyramid_hash', 'shuffle_batch', 'partial_concat',
     'sparse_embedding', 'partial_sum', 'tdm_child', 'rank_attention',
     'tdm_sampler', 'batch_fc', '_pull_box_extended_sparse', 'bilateral_slice',
-    'correlation', 'fused_bn_add_act', 'fused_seqpool_cvm'
+    'correlation', 'fused_bn_add_act', 'fused_seqpool_cvm', 'unzip'
 ]
 
 
@@ -2099,3 +2099,62 @@ def pow2_decay_with_linear_warmup(warmup_steps,
                          "end_lr": end_lr,
                      })
     return lr
+
+
+def unzip(input, lod):
+    r"""
+
+    **unzip layers**
+
+    unzip 'input' accroding to 'lod'
+
+    Args:
+        input (Variable): The zipped input, 2-D LodTensor with shape [N, M].
+        lod (Variable): The original lod of unzipped input, 1-D LodTensor with shape[K].
+
+    Returns:
+        Variable: The original unzipped tensor, 2-D LodTensor with shape[K-1, M].
+
+    Examples:
+
+        .. code-block:: python
+
+          import paddle.fluid as fluid
+          input_np = np.array([
+                        [1.0, 2.0, 3.0, 4.0],
+                        [10.0, 20.0, 30.0, 40.0],
+                        [100.0, 200.0, 300.0, 400.0]
+                    ])
+          lod_np = np.array([0, 4, 4, 8, 8, 8, 8, 12, 12, 12, 12])
+          input = paddle.to_tensor(input_np, "int64")
+          lod = paddle.to_tensor(lod_np, "int64")
+
+          unzipped_input = fluid.layers.nn.unzip(input, lod)
+          '''
+          unzipped_input is [
+                        [1.0, 2.0, 3.0, 4.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                        [10.0, 20.0, 30.0, 40.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                        [100.0, 200.0, 300.0, 400.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0],
+                        [0.0, 0.0, 0.0, 0.0]
+                    ]
+          '''
+    """
+    helper = LayerHelper('unzip', **locals())
+    out = helper.create_variable(dtype=input.dtype)
+    check_variable_and_dtype(input, 'input', ['float16', 'float32', 'float64', 'int', 'bool', 'int64'],
+                             'unzip')
+    check_variable_and_dtype(lod, 'lod', ['int', 'int64'],
+                             'unzip')
+    helper.append_op(type='unzip',
+                     inputs={
+                         'X': [input],
+                         'lod': [lod]
+                     },
+                     outputs={'Y': [out]})
+    return out

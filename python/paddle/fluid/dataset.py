@@ -945,6 +945,9 @@ class InMemoryDataset(DatasetBase):
         """
         return self.dataset.get_pv_data_size()
 
+    def get_epoch_finish(self):
+        return self.dataset.get_epoch_finish()
+
     @deprecated(
         since="2.0.0",
         update_to="paddle.distributed.InMemoryDataset.get_memory_data_size")
@@ -1087,6 +1090,12 @@ class InMemoryDataset(DatasetBase):
             "train_table_cap", 800000)
         self.proto_desc.graph_config.infer_table_cap = config.get(
             "infer_table_cap", 800000)
+        self.proto_desc.graph_config.excluded_train_pair = config.get(
+            "excluded_train_pair", "")
+        self.proto_desc.graph_config.infer_node_type = config.get(
+            "infer_node_type", "")
+        self.proto_desc.graph_config.get_degree = config.get(
+            "get_degree", False)
         self.dataset.set_gpu_graph_mode(True)
 
     def set_pass_id(self, pass_id):
