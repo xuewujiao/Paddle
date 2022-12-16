@@ -1213,7 +1213,7 @@ int32_t GraphTable::Load(const std::string &path, const std::string &param) {
     std::string node_type = param.substr(1);
     int ret = this->load_nodes(path, node_type);
     if (ret != 0) {
-      VLOG(0) << "Fail to load edges, path[" << path << "] node_type[" << node_type << "]";
+      VLOG(0) << "Fail to load nodes, path[" << path << "] node_type[" << node_type << "]";
       return -1;
     }
   }
