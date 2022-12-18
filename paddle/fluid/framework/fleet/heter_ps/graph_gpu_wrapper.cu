@@ -540,7 +540,7 @@ void GraphGpuWrapper::upload_batch(int type,
           g->cpu_graph_table_->make_gpu_ps_graph(idx, ids[i]);
       g->build_graph_on_single_gpu(sub_graph, i, idx);
       sub_graph.release_on_cpu();
-      VLOG(0) << "sub graph on gpu " << i << " is built";
+      VLOG(1) << "sub graph on gpu " << i << " is built";
       return 0;
     }));
   }
@@ -607,7 +607,7 @@ void GraphGpuWrapper::build_gpu_graph_fea(GpuPsCommGraphFea &sub_graph_fea,
   GpuPsGraphTable *g = (GpuPsGraphTable *)graph_table;
   g->build_graph_fea_on_single_gpu(sub_graph_fea, i);
   sub_graph_fea.release_on_cpu();
-  VLOG(0) << "sub graph fea on gpu " << i << " is built";
+  VLOG(1) << "sub graph fea on gpu " << i << " is built";
   return;
 }
 
