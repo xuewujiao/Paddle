@@ -30,7 +30,8 @@ struct SparsePassValues {
   SparseShardValues *values;
 };
 class PsGraphClient : public PsLocalClient {
-  typedef std::map<uint16_t, SparsePassValues> SparseFeasReferedMap;
+  typedef std::unordered_map<uint32_t, std::shared_ptr<SparsePassValues>>
+      SparseFeasReferedMap;
   struct SparseTableInfo {
     uint32_t shard_num;
     std::mutex pass_mutex;
@@ -41,6 +42,7 @@ class PsGraphClient : public PsLocalClient {
   PsGraphClient();
   virtual ~PsGraphClient();
   virtual int32_t Initialize();
+  virtual void FinalizeWorker();
   virtual ::std::future<int32_t> PullSparsePtr(int shard_id,
                                                char **select_values,
                                                size_t table_id,

@@ -41,8 +41,7 @@ class Barrier {
   void wait() {
     int err = pthread_barrier_wait(&_barrier);
     err = pthread_barrier_wait(&_barrier);
-    CHECK_EQ(true,
-            (err == 0 || err == PTHREAD_BARRIER_SERIAL_THREAD));
+    CHECK_EQ(true, (err == 0 || err == PTHREAD_BARRIER_SERIAL_THREAD));
   }
 
  private:
@@ -82,8 +81,7 @@ class Semaphore {
   }
   bool try_wait() {
     int err = ignore_signal_call(sem_trywait, &_sem);
-    CHECK_EQ(true,
-             (err == 0 || errno == EAGAIN));
+    CHECK_EQ(true, (err == 0 || errno == EAGAIN));
     return err == 0;
   }
 
@@ -116,6 +114,10 @@ class WaitGroup {
     while (counter_ != 0) {
       cond_.wait(lock);
     }
+  }
+  int count(void) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    return counter_;
   }
 
  private:
