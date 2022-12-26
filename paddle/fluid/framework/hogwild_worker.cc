@@ -332,23 +332,33 @@ void HogwildWorker::TrainFiles() {
 #endif
   // while ((cur_batch = device_reader_->Next()) > 0) {
   bool train_mode = device_reader_->IsTrainMode();
+  bool is_multi_node = false;
+#if defined(PADDLE_WITH_GLOO) && defined(PADDLE_WITH_GPU_GRAPH)
+  auto gloo = paddle::framework::GlooWrapper::GetInstance();
+  if (gloo->Size() > 1) {
+    is_multi_node = true;
+  }
+#endif
   device_reader_->InitGraphTrainResource();
   while (1) {
     cur_batch = device_reader_->Next();
 #if defined(PADDLE_WITH_GPU_GRAPH)
-    if (!CheckBatchNum(cur_batch)) {
-      break;
-    }
-#endif
-    if (FLAGS_enable_exit_when_partial_worker && train_mode) {
-      if (cur_batch > 0) {
-        worker_num_stat_.fetch_add(1, std::memory_order_relaxed);
-      }
-      g_barrier.wait();
-      if (worker_num_stat_.load(std::memory_order_relaxed) % thread_num_ != 0) {
+    if (is_multi_node) {
+      if (!CheckBatchNum(cur_batch)) {
         break;
       }
+    } else {
+      if (FLAGS_enable_exit_when_partial_worker && train_mode) {
+        if (cur_batch > 0) {
+          worker_num_stat_.fetch_add(1, std::memory_order_relaxed);
+        }
+        g_barrier.wait();
+        if (worker_num_stat_.load(std::memory_order_relaxed) % thread_num_ != 0) {
+          break;
+        }
+      }
     }
+#endif
     if (cur_batch <= 0) {
       break;
     }
