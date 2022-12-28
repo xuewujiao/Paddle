@@ -1485,7 +1485,8 @@ int32_t GraphTable::load_edges(const std::string &path,
   uint64_t count = 0;
   uint64_t valid_count = 0;
 
-  VLOG(0) << "Begin GraphTable::load_edges() edge_type[" << edge_type << "]";
+  VLOG(0) << "Begin GraphTable::load_edges() edge_type[" << edge_type << "]"
+          << " idx = " << idx;
   if (FLAGS_graph_load_in_parallel) {
     std::vector<std::future<std::pair<uint64_t, uint64_t>>> tasks;
     for (int i = 0; i < paths.size(); i++) {
@@ -1871,7 +1872,8 @@ int GraphTable::parse_feature(int idx,
   thread_local std::vector<paddle::string::str_ptr> fea_fields;
   fea_fields.clear();
   c = feature_separator_.at(0);
-  paddle::string::split_string_ptr(fields[1].ptr, fields[1].len, c, &fea_fields);
+  paddle::string::split_string_ptr(
+      fields[1].ptr, fields[1].len, c, &fea_fields);
 
   std::string name = fields[0].to_string();
   auto it = feat_id_map[idx].find(name);
@@ -1886,7 +1888,8 @@ int GraphTable::parse_feature(int idx,
           fea_fields.begin(), fea_fields.end(), fea_ptr);
       return 0;
     } else if (dtype == "string") {
-      string_vector_2_string(fea_fields.begin(), fea_fields.end(), ' ', fea_ptr);
+      string_vector_2_string(
+          fea_fields.begin(), fea_fields.end(), ' ', fea_ptr);
       return 0;
     } else if (dtype == "float32") {
       FeatureNode::parse_value_to_bytes<float>(

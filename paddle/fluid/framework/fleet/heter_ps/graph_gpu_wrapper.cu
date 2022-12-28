@@ -99,11 +99,13 @@ void GraphGpuWrapper::set_up_types(std::vector<std::string> &edge_types,
   for (size_t table_id = 0; table_id < edge_types.size(); table_id++) {
     int res = edge_to_id.size();
     edge_to_id[edge_types[table_id]] = res;
+    VLOG(0) << edge_types[table_id] << " id is " << res;
   }
   id_to_feature = node_types;
   for (size_t table_id = 0; table_id < node_types.size(); table_id++) {
     int res = feature_to_id.size();
     feature_to_id[node_types[table_id]] = res;
+    VLOG(0) << node_types[table_id] << " id is " << res;
   }
   edge_in_type.resize(edge_to_id.size());
   edge_out_type.resize(edge_to_id.size());
@@ -128,6 +130,9 @@ void GraphGpuWrapper::set_up_types(std::vector<std::string> &edge_types,
                       platform::errors::NotFound(
                           "(%s) is not found in node_to_id.", str_types[0]));
     edge_in_type[id] = iter_first->second;
+
+    VLOG(0) << " for the " << id << " edge ,in = " << edge_in_type[id]
+            << " out = " << edge_out_type[id];
   }
   table_feat_mapping.resize(node_types.size());
   this->table_feat_conf_feat_name.resize(node_types.size());
@@ -390,15 +395,20 @@ int GraphGpuWrapper::get_feature_of_nodes(int gpu_id,
                                           uint64_t *d_offset,
                                           uint32_t size,
                                           int slot_num,
-                                          int* d_slot_feature_num_map,
+                                          int *d_slot_feature_num_map,
                                           int fea_num_per_node) {
   platform::CUDADeviceGuard guard(gpu_id);
   PADDLE_ENFORCE_NOT_NULL(graph_table,
                           paddle::platform::errors::InvalidArgument(
                               "graph_table should not be null"));
   return ((GpuPsGraphTable *)graph_table)
-      ->get_feature_of_nodes(gpu_id, d_walk, d_offset, size, slot_num,
-              d_slot_feature_num_map, fea_num_per_node);
+      ->get_feature_of_nodes(gpu_id,
+                             d_walk,
+                             d_offset,
+                             size,
+                             slot_num,
+                             d_slot_feature_num_map,
+                             fea_num_per_node);
 }
 
 NeighborSampleResult GraphGpuWrapper::graph_neighbor_sample(
