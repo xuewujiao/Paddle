@@ -2717,7 +2717,7 @@ void SlotRecordInMemoryDataFeed::DoWalkandSage() {
 #if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
 void SlotRecordInMemoryDataFeed::DumpWalkPath(std::string dump_path,
                                               size_t dump_rate) {
-  VLOG(0) << "INTO SlotRecordInMemoryDataFeed::DumpWalkPath";
+  VLOG(3) << "INTO SlotRecordInMemoryDataFeed::DumpWalkPath";
   std::string path =
       string::format_string("%s/part-%03d", dump_path.c_str(), thread_id_);
   gpu_graph_data_generator_.DumpWalkPath(path, dump_rate);
