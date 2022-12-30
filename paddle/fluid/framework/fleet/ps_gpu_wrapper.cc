@@ -665,6 +665,7 @@ void PSGPUWrapper::BuildPull(std::shared_ptr<HeterContext> gpu_task) {
   time_stage.Pause();
   VLOG(1) << "passid=" << gpu_task->pass_id_
           << ", BuildPull slot feature uniq and sort cost time: "
+          << time_stage.ElapsedSec();
 
   auto& local_dim_keys = gpu_task->feature_dim_keys_;
   auto& local_dim_ptr = gpu_task->value_dim_ptr_;
@@ -1665,12 +1666,12 @@ void PSGPUWrapper::BeginPass() {
         "[BeginPass] after build_task, current task is not null."));
   }
   if (FLAGS_gpugraph_dedup_pull_push_mode) {
-    VLOG(1) << "passid=" << current_task_->pass_id_
+    VLOG(0) << "passid=" << current_task_->pass_id_
             << ", BeginPass end, cost time: " << timer.ElapsedSec()
             << "s, enable pull push dedup mode="
             << FLAGS_gpugraph_dedup_pull_push_mode;
   } else {
-    VLOG(1) << "passid=" << current_task_->pass_id_
+    VLOG(0) << "passid=" << current_task_->pass_id_
             << ", BeginPass end, cost time: " << timer.ElapsedSec() << "s";
   }
 }
@@ -1686,7 +1687,7 @@ void PSGPUWrapper::EndPass() {
   stagetime.Start();
   HbmToSparseTable();
   stagetime.Pause();
-  VLOG(1) << "passid=" << current_task_->pass_id_
+  VLOG(0) << "passid=" << current_task_->pass_id_
           << ", EndPass HbmToSparseTable cost time: " << stagetime.ElapsedSec()
           << "s";
 
@@ -1802,7 +1803,7 @@ void PSGPUWrapper::HbmToSparseTable() {
       total_len += len;
     }
     tm.Pause();
-    VLOG(0) << "dump_pool_to_cpu_func i=" << i << ", total len=" << total_len
+    VLOG(1) << "dump_pool_to_cpu_func i=" << i << ", total len=" << total_len
             << ", span=" << tm.ElapsedSec();
   };
   auto cpu_func = [this, &accessor_wrapper_ptr](int j) {
