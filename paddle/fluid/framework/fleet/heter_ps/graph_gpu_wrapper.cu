@@ -417,21 +417,22 @@ void GraphGpuWrapper::load_edge_file(std::string etype2files,
           etype2files, graph_data_local_path, part_num, reverse);
 }
 
-void GraphGpuWrapper::load_node_file(std::string name, std::string filepath) {
+int GraphGpuWrapper::load_node_file(std::string name, std::string filepath) {
   // 'n' means load nodes and 'node_type' follows
 
   std::string params = "n" + name;
 
   if (node_to_id.find(name) != node_to_id.end()) {
-    ((GpuPsGraphTable *)graph_table)
+    return ((GpuPsGraphTable *)graph_table)
         ->cpu_graph_table_->Load(std::string(filepath), params);
   }
+  return 0;
 }
 
-void GraphGpuWrapper::load_node_file(std::string ntype2files,
+int GraphGpuWrapper::load_node_file(std::string ntype2files,
                                      std::string graph_data_local_path,
                                      int part_num) {
-  ((GpuPsGraphTable *)graph_table)
+  return ((GpuPsGraphTable *)graph_table)
       ->cpu_graph_table_->parse_node_and_load(
           ntype2files, graph_data_local_path, part_num);
 }
@@ -539,7 +540,7 @@ void GraphGpuWrapper::upload_batch(int type,
           g->cpu_graph_table_->make_gpu_ps_graph(idx, ids[i]);
       g->build_graph_on_single_gpu(sub_graph, i, idx);
       sub_graph.release_on_cpu();
-      VLOG(0) << "sub graph on gpu " << i << " is built";
+      VLOG(1) << "sub graph on gpu " << i << " is built";
       return 0;
     }));
   }
@@ -606,7 +607,7 @@ void GraphGpuWrapper::build_gpu_graph_fea(GpuPsCommGraphFea &sub_graph_fea,
   GpuPsGraphTable *g = (GpuPsGraphTable *)graph_table;
   g->build_graph_fea_on_single_gpu(sub_graph_fea, i);
   sub_graph_fea.release_on_cpu();
-  VLOG(0) << "sub graph fea on gpu " << i << " is built";
+  VLOG(1) << "sub graph fea on gpu " << i << " is built";
   return;
 }
 
