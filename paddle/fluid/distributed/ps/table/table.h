@@ -155,6 +155,10 @@ class Table {
   virtual void Revert() {}
   virtual void CheckSavePrePatchDone() {}
 
+  virtual void AcquireTableMutex() { VLOG(0) << "Did not implement"; }
+
+  virtual void ReleaseTableMutex() { VLOG(0) << "Did not implement"; }
+
  protected:
   virtual int32_t Initialize() = 0;
   virtual int32_t InitializeAccessor();

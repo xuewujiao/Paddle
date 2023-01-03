@@ -694,6 +694,10 @@ void PSGPUWrapper::BuildPull(std::shared_ptr<HeterContext> gpu_task) {
   fleet_ptr->pslib_ptr_->_worker_ptr->set_day_id(table_id_, day_id);
 #endif
 
+#ifdef PADDLE_WITH_PSCORE
+  fleet_ptr->worker_ptr_->AcquireTableMutex(0);
+#endif
+
   timeline.Start();
 
   auto ptl_dynamic_mf_func =
@@ -791,9 +795,14 @@ void PSGPUWrapper::BuildPull(std::shared_ptr<HeterContext> gpu_task) {
           pull_thread_pool_[i]->enqueue(ptl_dynamic_mf_func, i, j));
     }
   }
+
   for (auto& f : task_futures) {
     f.wait();
   }
+
+#ifdef PADDLE_WITH_PSCORE
+  fleet_ptr->worker_ptr_->ReleaseTableMutex(0);
+#endif
   // fleet_ptr->pslib_ptr_->_worker_ptr->release_table_mutex(this->table_id_);
   task_futures.clear();
   timeline.Pause();

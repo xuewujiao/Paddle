@@ -172,6 +172,14 @@ class PSClient {
     return fut;
   }
 
+  virtual void AcquireTableMutex(size_t table_id) {
+    VLOG(0) << "Did not implement";
+  }
+
+  virtual void ReleaseTableMutex(size_t table_id) {
+    VLOG(0) << "Did not implement";
+  }
+
   // 确保所有积攒中的请求都发起发送
   virtual std::future<int32_t> Flush() = 0;
   // server优雅退出
