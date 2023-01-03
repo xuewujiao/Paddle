@@ -47,6 +47,8 @@ class GraphGpuWrapper {
   void finalize();
   void set_device(std::vector<int> ids);
   void init_service();
+  std::string get_reverse_etype(std::string etype);
+  std::vector<std::string> get_ntype_from_etype(std::string etype);
   void set_up_types(std::vector<std::string>& edge_type,
                     std::vector<std::string>& node_type);
   void upload_batch(int type,
@@ -69,8 +71,8 @@ class GraphGpuWrapper {
 
   int load_node_file(std::string name, std::string filepath);
   int load_node_file(std::string ntype2files,
-                      std::string graph_data_local_path,
-                      int part_num);
+                     std::string graph_data_local_path,
+                     int part_num);
   void load_node_and_edge(std::string etype2files,
                           std::string ntype2files,
                           std::string graph_data_local_path,
@@ -123,7 +125,10 @@ class GraphGpuWrapper {
       int sample_size,
       int len,
       std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs);
-  void get_node_degree(int gpu_id, int edge_idx, uint64_t* key, int len,
+  void get_node_degree(int gpu_id,
+                       int edge_idx,
+                       uint64_t* key,
+                       int len,
                        std::shared_ptr<phi::Allocation> node_degree);
   gpuStream_t get_local_stream(int gpuid);
   std::vector<uint64_t> graph_neighbor_sample(int gpu_id,
@@ -191,9 +196,10 @@ class GraphGpuWrapper {
   std::vector<size_t> h_graph_train_keys_len_;
   std::vector<std::vector<std::shared_ptr<phi::Allocation>>>
       d_graph_all_type_total_keys_;
-  std::map<uint64_t,    // edge_id
-           uint64_t     // src_node_id << 32 | dst_node_id
-          > edge_to_node_map_;
+  std::map<uint64_t,  // edge_id
+           uint64_t   // src_node_id << 32 | dst_node_id
+           >
+      edge_to_node_map_;
 
   std::vector<std::vector<uint64_t>> h_graph_all_type_keys_len_;
   std::string slot_feature_separator_ = std::string(" ");
