@@ -78,14 +78,21 @@ class GraphBucket {
     unused_key = (uint64_t)-1;
     place_ = paddle::platform::CUDAPlace(dev_id);
     allocator_ = CacheAllocator(place_);
-    stream_ =
-        dynamic_cast<phi::GPUContext *>(
-            paddle::platform::DeviceContextPool::Instance().Get(this->place_))
-            ->stream();
-
+    // stream_ =
+    //     dynamic_cast<phi::GPUContext *>(
+    //         paddle::platform::DeviceContextPool::Instance().Get(this->place_))
+    //         ->stream();
+    platform::CUDADeviceGuard guard(dev_id_);
+    comm_streams_.resize(dev_ids_.size());
+    for (size_t i = 0; i < dev_ids_.size(); ++i) {
+      PADDLE_ENFORCE_GPU_SUCCESS(
+          cudaStreamCreateWithFlags(&comm_streams_[i], cudaStreamNonBlocking));
+    }
+    stream_ = comm_streams_[dev_id];
     init_keys();
   }
   ~GraphBucket() {}
+  std::vector<gpuStream_t> comm_streams_;
   size_t capacity_, size_;
   uint64_t unused_key_;
   uint64_t *keys_;
@@ -111,11 +118,18 @@ class GraphBucket {
 
 }
 
-enum GraphSamplerStatus {
-  waiting = 0,
-  running = 1,
-  terminating = 2
-};
+class BucketGroup {
+ public:
+  BucketGroup(int dev_num, int emb_size, int type_size) {
+    for (int i = 0; i < dev_num; i++) {
+      resources.push_back(std::shared_ptr<GraphBucket>(
+          new GraphBucket(capacity, i, emb_size, type_size)));
+    }
+  }
+  std::vector<std::shared_ptr<GraphBucket>> resources;
+  const size_t capacity = 1000000000ll;
+
+} enum GraphSamplerStatus { waiting = 0, running = 1, terminating = 2 };
 class GraphSampler {
  public:
   GraphSampler() {

@@ -66,6 +66,25 @@ __global__ void relocate_keys(uint64_t *keys,
   }
 }
 
+__global__ void cal_emb_dist(int n,
+                             int *type,
+                             float *emb,
+                             int dim,
+                             float *aggregated_emb,
+                             float *output) {
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < n) {
+    int emb_type = type[idx];
+    int aggregated_pos = emb_type * dim;
+    int pos = dim * idx;
+    float res = 0;
+    for (int i = 0; i < dim; i++) {
+      res += fabs(aggregated_emb[pos + i] - emb[pos + i]);
+    }
+    output[idx] = res;
+  }
+}
+
 __global__ void export_sum(uint64_t *keys,
                            size_t set_size,
                            uint64_t unused_key,
@@ -250,20 +269,6 @@ __global__ void record_sum(int n,
   }
 }
 
-__global__ void record_sum(int n,
-                           int *output,
-                           int *range,
-                           int *neighbor_count) {
-  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx < n) {
-    if (idx == 0) {
-      neighbor_count[idx] = output[range[idx] - 1];
-    } else {
-      neighbor_count[idx] = output[range[idx] - 1] - output[range[idx - 1] - 1];
-    }
-  }
-}
-
 void GraphBucket::init_keys() {
   keys_alloc_ = memory::AllocShared(place_, capacity * sizeof(uint64_t));
   keys_ = reinterpret_cast<int64_t *>(keys_alloc_->ptr());
@@ -288,6 +293,6 @@ void GraphBucket::get_neighbor_count(int unique_count,
   thrust::device_ptr<int> dev_ptr = thrust::device_pointer_cast(output);
   const auto &exec_policy = thrust::cuda::par(allocator).on(stream_);
   thrust::inclusive_scan(exec_policy, dev_ptr, dev_ptr + n, dev_ptr);
-  find_keys<<<GET_BLOCKS(unique_count), CUDA_NUM_THREADS>>>(
+  record_sum<<<GET_BLOCKS(unique_count), CUDA_NUM_THREADS>>>(
       unique_count, output, range, neighbor_count);
 }
