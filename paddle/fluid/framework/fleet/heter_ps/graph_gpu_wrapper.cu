@@ -47,10 +47,10 @@ void GraphGpuWrapper::init_conf(const std::string &first_node_type,
     VLOG(2) << "node_types: " << first_node_type;
     for (auto &type : node_types) {
       auto iter = node_to_id.find(type);
-      PADDLE_ENFORCE_NE(iter,
-                        node_to_id.end(),
-                        platform::errors::NotFound(
-                            "(%s) is not found in node_to_id.", type));
+      PADDLE_ENFORCE_NE(
+          iter,
+          node_to_id.end(),
+          platform::errors::NotFound("(%s) is not found in node_to_id.", type));
       VLOG(2) << "node_to_id[" << type << "] = " << iter->second;
       first_node_type_.push_back(iter->second);
     }
@@ -69,7 +69,7 @@ void GraphGpuWrapper::init_conf(const std::string &first_node_type,
         VLOG(2) << "edge_to_id[" << edge << "] = " << iter->second;
         meta_path_[i].push_back(iter->second);
         if (edge_to_node_map_.find(iter->second) == edge_to_node_map_.end()) {
-          auto nodes = paddle::string::split_string<std::string>(edge, "2");
+          auto nodes = get_ntype_from_etype(edge);
           uint64_t src_node_id = node_to_id.find(nodes[0])->second;
           uint64_t dst_node_id = node_to_id.find(nodes[1])->second;
           edge_to_node_map_[iter->second] = src_node_id << 32 | dst_node_id;
@@ -77,10 +77,11 @@ void GraphGpuWrapper::init_conf(const std::string &first_node_type,
       }
     }
 
-    auto paths = paddle::string::split_string<std::string>(excluded_train_pair, ";");
+    auto paths =
+        paddle::string::split_string<std::string>(excluded_train_pair, ";");
     VLOG(2) << "excluded_train_pair[" << excluded_train_pair << "]";
-    for (auto &path: paths) {
-      auto nodes = paddle::string::split_string<std::string>(path, "2");
+    for (auto &path : paths) {
+      auto nodes = get_ntype_from_etype(path);
       for (auto &node : nodes) {
         auto iter = node_to_id.find(node);
         PADDLE_ENFORCE_NE(iter,
@@ -288,8 +289,7 @@ void GraphGpuWrapper::init_metapath(std::string cur_metapath,
         edge_to_id.end(),
         platform::errors::NotFound("(%s) is not found in edge_to_id.", node));
     cur_parse_metapath_.push_back(iter->second);
-    auto etype_split = paddle::string::split_string<std::string>(node, "2");
-    std::string reverse_type = etype_split[1] + "2" + etype_split[0];
+    std::string reverse_type = get_reverse_etype(node);
     iter = edge_to_id.find(reverse_type);
     PADDLE_ENFORCE_NE(iter,
                       edge_to_id.end(),
@@ -309,8 +309,7 @@ void GraphGpuWrapper::init_metapath(std::string cur_metapath,
   std::vector<std::vector<uint64_t>> tmp_keys;
   tmp_keys.resize(thread_num);
   int first_node_idx;
-  std::string first_node =
-      paddle::string::split_string<std::string>(cur_metapath_, "2")[0];
+  std::string first_node = get_ntype_from_etype(nodes[0])[0];
   auto it = node_to_id.find(first_node);
   first_node_idx = it->second;
   d_graph_train_total_keys_.resize(thread_num);
@@ -427,6 +426,41 @@ int GraphGpuWrapper::get_node_embedding_ids(
     int slice_num, std::vector<std::vector<uint64_t>> *output) {
   return ((GpuPsGraphTable *)graph_table)
       ->cpu_graph_table_->get_node_embedding_ids(slice_num, output);
+}
+
+std::string GraphGpuWrapper::get_reverse_etype(std::string etype) {
+  auto etype_split = paddle::string::split_string<std::string>(etype, "2");
+  if (etype_split.size() == 2) {
+    std::string reverse_type = etype_split[1] + "2" + etype_split[0];
+    return reverse_type;
+  } else if (etype_split.size() == 3) {
+    std::string reverse_type =
+        etype_split[2] + "2" + etype_split[1] + "2" + etype_split[0];
+    return reverse_type;
+  } else {
+    PADDLE_THROW(platform::errors::Fatal(
+        "The format of edge type should be [src2dst] or [src2etype2dst], "
+        "but got [%s].",
+        etype));
+  }
+}
+
+std::vector<std::string> GraphGpuWrapper::get_ntype_from_etype(
+    std::string etype) {
+  std::vector<std::string> etype_split =
+      paddle::string::split_string<std::string>(etype, "2");
+
+  if (etype_split.size() == 2) {
+    return etype_split;
+  } else if (etype_split.size() == 3) {
+    auto iter = etype_split.erase(etype_split.begin() + 1);
+    return etype_split;
+  } else {
+    PADDLE_THROW(platform::errors::Fatal(
+        "The format of edge type should be [src2dst] or [src2etype2dst], "
+        "but got [%s].",
+        etype));
+  }
 }
 
 void GraphGpuWrapper::set_up_types(std::vector<std::string> &edge_types,
@@ -737,7 +771,10 @@ GraphGpuWrapper::get_edge_type_graph(int gpu_id, int edge_type_len) {
 }
 
 void GraphGpuWrapper::get_node_degree(
-    int gpu_id, int edge_idx, uint64_t* key, int len,
+    int gpu_id,
+    int edge_idx,
+    uint64_t *key,
+    int len,
     std::shared_ptr<phi::Allocation> node_degree) {
   return ((GpuPsGraphTable *)graph_table)
       ->get_node_degree(gpu_id, edge_idx, key, len, node_degree);
