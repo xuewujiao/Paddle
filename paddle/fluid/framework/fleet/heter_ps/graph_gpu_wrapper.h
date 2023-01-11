@@ -179,11 +179,9 @@ class GraphGpuWrapper {
   std::vector<std::vector<uint64_t>>& get_graph_train_type_keys();
   std::vector<std::vector<uint64_t>>& get_graph_val_type_keys();
   std::vector<std::vector<uint64_t>>& get_graph_test_type_keys();
-  std::vector<std::vector<uint64_t>>& get_graph_other_type_keys();
   std::vector<std::vector<int>>& get_graph_train_type_labels();
   std::vector<std::vector<int>>& get_graph_val_type_labels();
   std::vector<std::vector<int>>& get_graph_test_type_labels();
-  std::vector<std::vector<int>>& get_graph_other_type_labels();
 
   std::unordered_map<std::string, int> edge_to_id, node_to_id;
   std::vector<std::string> id_to_feature, id_to_edge;
@@ -237,11 +235,6 @@ class GraphGpuWrapper {
   std::vector<std::vector<std::shared_ptr<phi::Allocation>>>
       d_graph_test_type_labels_;
   std::vector<std::vector<uint64_t>> d_graph_test_type_len_;
-  std::vector<std::vector<std::shared_ptr<phi::Allocation>>>
-      d_graph_other_type_keys_;
-  std::vector<std::vector<std::shared_ptr<phi::Allocation>>>
-      d_graph_other_type_labels_;
-  std::vector<std::vector<uint64_t>> d_graph_other_type_len_;
 
   std::string cur_metapath_;
   std::vector<int> cur_parse_metapath_;

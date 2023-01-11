@@ -2691,19 +2691,15 @@ void GraphTable::build_graph_node_cls_info() {
   graph_train_type_keys_.clear();
   graph_val_type_keys_.clear();
   graph_test_type_keys_.clear();
-  graph_other_type_keys_.clear();
   graph_train_type_labels_.clear();
   graph_val_type_labels_.clear();
   graph_test_type_labels_.clear();
-  graph_other_type_labels_.clear();
   graph_train_type_keys_.resize(this->feature_to_id.size());
   graph_val_type_keys_.resize(this->feature_to_id.size());
   graph_test_type_keys_.resize(this->feature_to_id.size());
-  graph_other_type_keys_.resize(this->feature_to_id.size());
   graph_train_type_labels_.resize(this->feature_to_id.size());
   graph_val_type_labels_.resize(this->feature_to_id.size());
   graph_test_type_labels_.resize(this->feature_to_id.size());
-  graph_other_type_labels_.resize(this->feature_to_id.size());
 
   int cnt = 0;
   for (auto &it : this->feature_to_id) {
@@ -2721,9 +2717,6 @@ void GraphTable::build_graph_node_cls_info() {
     this->get_node_cls_id_and_label(1, node_idx, 1, &keys, &labels, 2); // test
     graph_test_type_keys_[cnt] = std::move(keys[0]);
     graph_test_type_labels_[cnt] = std::move(labels[0]);
-    this->get_node_cls_id_and_label(1, node_idx, 1, &keys, &labels, -1); // other
-    graph_other_type_keys_[cnt] = std::move(keys[0]);
-    graph_other_type_labels_[cnt] = std::move(labels[0]);
     cnt++;
   }
 

@@ -260,15 +260,6 @@ void GraphGpuWrapper::init_graph_node_cls_keys() {
                                &d_graph_test_type_keys_,
                                &d_graph_test_type_labels_,
                                &d_graph_test_type_len_);
-
-  auto &graph_other_type_keys = get_graph_other_type_keys();
-  auto &graph_other_type_labels = get_graph_other_type_labels();
-  shard_keys_and_labels_to_gpu(thread_num,
-                               graph_other_type_keys,
-                               graph_other_type_labels,
-                               &d_graph_other_type_keys_,
-                               &d_graph_other_type_labels_,
-                               &d_graph_other_type_len_);
 }
 
 void GraphGpuWrapper::init_metapath(std::string cur_metapath,

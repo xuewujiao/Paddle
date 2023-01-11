@@ -784,11 +784,9 @@ class GraphTable : public Table {
   std::vector<std::vector<uint64_t>> graph_train_type_keys_;
   std::vector<std::vector<uint64_t>> graph_val_type_keys_;
   std::vector<std::vector<uint64_t>> graph_test_type_keys_;
-  std::vector<std::vector<uint64_t>> graph_other_type_keys_;
   std::vector<std::vector<int>> graph_train_type_labels_;
   std::vector<std::vector<int>> graph_val_type_labels_;
   std::vector<std::vector<int>> graph_test_type_labels_;
-  std::vector<std::vector<int>> graph_other_type_labels_;
 
   std::vector<std::vector<GraphShard *>> edge_shards, feature_shards;
   size_t shard_start, shard_end, server_num, shard_num_per_server, shard_num;
