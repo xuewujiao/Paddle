@@ -2107,9 +2107,9 @@ int GraphDataGenerator::FillInferBuf() {
 
     size_t device_key_size = h_device_keys_len_[infer_cursor];
     total_row_ =
-        (global_infer_node_type_start[infer_cursor] + infer_table_cap_ <=
+        (global_infer_node_type_start[infer_cursor] + buf_size_ <=
          device_key_size)
-            ? infer_table_cap_
+            ? buf_size_ 
             : device_key_size - global_infer_node_type_start[infer_cursor];
 
     uint64_t *d_type_keys =
