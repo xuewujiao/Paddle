@@ -1262,7 +1262,8 @@ int32_t GraphTable::parse_type_to_typepath(
 int32_t GraphTable::parse_edge_and_load(std::string etype2files,
                                         std::string graph_data_local_path,
                                         int part_num,
-                                        bool reverse) {
+                                        bool reverse,
+                                        const std::vector<bool>& is_reverse_edge_map) {
   std::vector<std::string> etypes;
   std::unordered_map<std::string, std::string> edge_to_edgedir;
   int res = parse_type_to_typepath(
@@ -1282,6 +1283,15 @@ int32_t GraphTable::parse_edge_and_load(std::string etype2files,
     tasks.push_back(
         _shards_task_pool[i % task_pool_size_]->enqueue([&, i, this]() -> int {
           std::string etype_path = edge_to_edgedir[etypes[i]];
+          bool only_load_reverse_edge = false;
+          if (!reverse) {
+            only_load_reverse_edge = is_reverse_edge_map[i];
+          }
+          if (only_load_reverse_edge) {
+            VLOG(1) << "only_load_reverse_edge is True, etype[" << etypes[i] << "], file_path[" << etype_path << "]";
+          } else {
+            VLOG(1) << "only_load_reverse_edge is False, etype[" << etypes[i] << "], file_path[" << etype_path << "]";
+          }
           auto etype_path_list = paddle::framework::localfs_list(etype_path);
           std::string etype_path_str;
           if (part_num > 0 && part_num < (int)etype_path_list.size()) {
@@ -1293,10 +1303,14 @@ int32_t GraphTable::parse_edge_and_load(std::string etype2files,
             etype_path_str =
                 paddle::string::join_strings(etype_path_list, delim);
           }
-          this->load_edges(etype_path_str, false, etypes[i]);
-          if (reverse) {
-            std::string r_etype = get_inverse_etype(etypes[i]);
-            this->load_edges(etype_path_str, true, r_etype);
+          if (!only_load_reverse_edge) {
+            this->load_edges(etype_path_str, false, etypes[i]);
+            if (reverse) {
+              std::string r_etype = get_inverse_etype(etypes[i]);
+              this->load_edges(etype_path_str, true, r_etype);
+            }
+          } else {
+            this->load_edges(etype_path_str, true, etypes[i]);
           }
           return 0;
         }));
@@ -1354,7 +1368,8 @@ int32_t GraphTable::load_node_and_edge_file(std::string etype2files,
                                             std::string ntype2files,
                                             std::string graph_data_local_path,
                                             int part_num,
-                                            bool reverse) {
+                                            bool reverse,
+                                            const std::vector<bool>& is_reverse_edge_map) {
   std::vector<std::string> etypes;
   std::unordered_map<std::string, std::string> edge_to_edgedir;
   int res = parse_type_to_typepath(
@@ -1384,6 +1399,15 @@ int32_t GraphTable::load_node_and_edge_file(std::string etype2files,
         _shards_task_pool[i % task_pool_size_]->enqueue([&, i, this]() -> int {
           if (i < etypes.size()) {
             std::string etype_path = edge_to_edgedir[etypes[i]];
+            bool only_load_reverse_edge = false;
+            if (!reverse) {
+              only_load_reverse_edge = is_reverse_edge_map[i];
+            }
+            if (only_load_reverse_edge) {
+              VLOG(1) << "only_load_reverse_edge is True, etype[" << etypes[i] << "], file_path[" << etype_path << "]";
+            } else {
+              VLOG(1) << "only_load_reverse_edge is False, etype[" << etypes[i] << "], file_path[" << etype_path << "]";
+            }
             auto etype_path_list = paddle::framework::localfs_list(etype_path);
             std::string etype_path_str;
             if (part_num > 0 && part_num < (int)etype_path_list.size()) {
@@ -1395,10 +1419,14 @@ int32_t GraphTable::load_node_and_edge_file(std::string etype2files,
               etype_path_str =
                   paddle::string::join_strings(etype_path_list, delim);
             }
-            this->load_edges(etype_path_str, false, etypes[i]);
-            if (reverse) {
-              std::string r_etype = get_inverse_etype(etypes[i]);
-              this->load_edges(etype_path_str, true, r_etype);
+            if (!only_load_reverse_edge) {
+              this->load_edges(etype_path_str, false, etypes[i]);
+              if (reverse) {
+                std::string r_etype = get_inverse_etype(etypes[i]);
+                this->load_edges(etype_path_str, true, r_etype);
+              }
+            } else {
+              this->load_edges(etype_path_str, true, etypes[i]);
             }
           } else {
             std::string npath = node_to_nodedir[ntypes[0]];
