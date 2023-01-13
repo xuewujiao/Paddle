@@ -28,15 +28,24 @@ DECLARE_double(gpugraph_hbm_table_load_factor);
 
 namespace paddle {
 namespace framework {
-enum GraphTableType { EDGE_TABLE, FEATURE_TABLE };
+
+typedef paddle::distributed::GraphTableType GraphTableType;
+
 class GpuPsGraphTable
     : public HeterComm<uint64_t, uint64_t, int, CommonFeatureValueAccessor> {
  public:
-  int get_table_offset(int gpu_id, GraphTableType type, int idx) const {
+  inline int get_table_offset(int gpu_id, GraphTableType type, int idx) const {
     int type_id = type;
     return gpu_id * (graph_table_num_ + feature_table_num_) +
            type_id * graph_table_num_ + idx;
   }
+  inline int get_graph_list_offset(int gpu_id, int edge_idx) const {
+    return gpu_id * graph_table_num_ + edge_idx;
+  }
+  inline int get_graph_fea_list_offset(int gpu_id) const {
+    return gpu_id * feature_table_num_;
+  }
+
   GpuPsGraphTable(std::shared_ptr<HeterPsResource> resource,
                   int graph_table_num)
       : HeterComm<uint64_t, uint64_t, int, CommonFeatureValueAccessor>(
