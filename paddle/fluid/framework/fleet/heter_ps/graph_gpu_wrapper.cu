@@ -171,6 +171,35 @@ void GraphGpuWrapper::init_type_keys() {
   }
 }
 
+void GraphGpuWrapper::init_cls_conf() {
+  static std::mutex mutex;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (conf_initialized_) {
+      return;
+    }
+    VLOG(2) << "init node classification config";
+    conf_initialized_ = true;
+
+    int max_dev_id = 0;
+    for (size_t i = 0; i < device_id_mapping.size(); i++) {
+      if (device_id_mapping[i] > max_dev_id) {
+        max_dev_id = device_id_mapping[i];
+      }
+    }
+    global_node_type_start_.resize(max_dev_id + 1);
+    for (size_t i = 0; i < device_id_mapping.size(); i++) {
+      int dev_id = device_id_mapping[i];
+      auto &node_type_start = global_node_type_start_[i];
+      for (size_t idx = 0; idx < node_to_id.size(); idx++) {
+        node_type_start[idx] = 0;
+      }
+      cursor_.push_back(0);
+    }
+    init_graph_node_cls_keys();
+  }
+}
+
 void GraphGpuWrapper::shard_keys_and_labels_to_gpu(
     size_t thread_num,
     std::vector<std::vector<uint64_t>>& graph_type_keys,
@@ -241,7 +270,7 @@ void GraphGpuWrapper::init_graph_node_cls_keys() {
                                graph_train_type_labels,
                                &d_graph_train_type_keys_,
                                &d_graph_train_type_labels_,
-                               &d_graph_train_type_len_);
+                               &h_graph_train_type_len_);
 
   auto &graph_val_type_keys = get_graph_val_type_keys();
   auto &graph_val_type_labels = get_graph_val_type_labels();
@@ -250,7 +279,7 @@ void GraphGpuWrapper::init_graph_node_cls_keys() {
                                graph_val_type_labels,
                                &d_graph_val_type_keys_,
                                &d_graph_val_type_labels_,
-                               &d_graph_val_type_len_);
+                               &h_graph_val_type_len_);
 
   auto &graph_test_type_keys = get_graph_test_type_keys();
   auto &graph_test_type_labels = get_graph_test_type_labels();
@@ -259,7 +288,7 @@ void GraphGpuWrapper::init_graph_node_cls_keys() {
                                graph_test_type_labels,
                                &d_graph_test_type_keys_,
                                &d_graph_test_type_labels_,
-                               &d_graph_test_type_len_);
+                               &h_graph_test_type_len_);
 }
 
 void GraphGpuWrapper::init_metapath(std::string cur_metapath,
@@ -971,10 +1000,6 @@ std::vector<std::vector<uint64_t>> &GraphGpuWrapper::get_graph_test_type_keys() 
   return ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->graph_test_type_keys_;
 }
 
-std::vector<std::vector<uint64_t>> &GraphGpuWrapper::get_graph_other_type_keys() {
-  return ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->graph_other_type_keys_;
-}
-
 std::vector<std::vector<int>> &GraphGpuWrapper::get_graph_train_type_labels() {
   return ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->graph_train_type_labels_;
 }
@@ -985,10 +1010,6 @@ std::vector<std::vector<int>> &GraphGpuWrapper::get_graph_val_type_labels() {
 
 std::vector<std::vector<int>> &GraphGpuWrapper::get_graph_test_type_labels() {
   return ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->graph_test_type_labels_;
-}
-
-std::vector<std::vector<int>> &GraphGpuWrapper::get_graph_other_type_labels() {
-  return ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->graph_other_type_labels_;
 }
 
 #endif

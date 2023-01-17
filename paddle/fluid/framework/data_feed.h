@@ -905,10 +905,14 @@ class GraphDataGenerator {
   void SetFeedVec(std::vector<LoDTensor*> feed_vec);
   int AcquireInstance(BufState* state);
   int GenerateBatch();
+  int GenerateClsBatch();
+  int GenerateReprBatch();
   int FillWalkBuf();
   int FillWalkBufMultiPath();
   int FillInferBuf();
   void DoWalkandSage();
+  void DoSage();
+  void PrepareGraphData();
   int FillSlotFeature(uint64_t* d_walk);
   int FillFeatureBuf(uint64_t* d_walk, uint64_t* d_feature, size_t key_num);
   int FillFeatureBuf(std::shared_ptr<phi::Allocation> d_walk,
@@ -1001,6 +1005,7 @@ class GraphDataGenerator {
   std::vector<size_t> offset_;
   std::shared_ptr<phi::Allocation> d_prefix_sum_;
   std::vector<std::shared_ptr<phi::Allocation>> d_device_keys_;
+  std::vector<std::shared_ptr<phi::Allocation>> d_device_labels_;
   std::shared_ptr<phi::Allocation> d_train_metapath_keys_;
 
   std::shared_ptr<phi::Allocation> d_walk_;
@@ -1045,6 +1050,8 @@ class GraphDataGenerator {
   std::vector<int> total_instance_vec_;
   std::vector<std::vector<std::shared_ptr<phi::Allocation>>> graph_edges_vec_;
   std::vector<std::vector<std::vector<int>>> edges_split_num_vec_;
+  // cls mode label
+  std::vector<std::shared_ptr<phi::Allocation>> label_vec_;
 
   int excluded_train_pair_len_;
   int64_t reindex_table_size_;
@@ -1057,6 +1064,7 @@ class GraphDataGenerator {
   std::vector<int> window_step_;
   BufState buf_state_;
   int batch_size_;
+  int batch_per_pass_;
   int slot_num_;
   std::vector<int> h_slot_feature_num_map_;
   int fea_num_per_node_;
@@ -1078,6 +1086,10 @@ class GraphDataGenerator {
   std::set<int> infer_node_type_index_set_;
   std::string infer_node_type_;
   bool get_degree_;
+
+  bool cls_mode_;
+  bool is_valid_;
+  bool is_test_;
 };
 
 class DataFeed {
@@ -1214,9 +1226,9 @@ class DataFeed {
     PADDLE_THROW(platform::errors::Unimplemented(
         "This function(LoadIntoMemory) is not implemented."));
   }
-  virtual void DoWalkandSage() {
+  virtual void PrepareGraphData() {
     PADDLE_THROW(platform::errors::Unimplemented(
-        "This function(DoWalkandSage) is not implemented."));
+        "This function(PrepareGraphData) is not implemented."));
   }
   virtual void SetPlace(const paddle::platform::Place& place) {
     place_ = place;
@@ -1833,7 +1845,7 @@ class SlotRecordInMemoryDataFeed : public InMemoryDataFeed<SlotRecord> {
                      const int float_slot_size,
                      const UsedSlotGpuType* used_slots);
 #endif
-  virtual void DoWalkandSage();
+  virtual void PrepareGraphData();
   virtual void DumpWalkPath(std::string dump_path, size_t dump_rate);
 
   float sample_rate_ = 1.0f;

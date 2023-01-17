@@ -2708,9 +2708,9 @@ int SlotRecordInMemoryDataFeed::Next() {
 #endif
 }
 
-void SlotRecordInMemoryDataFeed::DoWalkandSage() {
+void SlotRecordInMemoryDataFeed::PrepareGraphData() {
 #if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
-  gpu_graph_data_generator_.DoWalkandSage();
+  gpu_graph_data_generator_.PrepareGraphData();
 #endif
 }
 

@@ -43,6 +43,7 @@ class GraphGpuWrapper {
   void init_conf(const std::string& first_node_type,
                  const std::string& meta_path,
                  const std::string& excluded_train_pair);
+  void init_cls_conf();
   void initialize();
   void finalize();
   void set_device(std::vector<int> ids);
@@ -205,6 +206,7 @@ class GraphGpuWrapper {
   std::vector<std::unordered_map<int, size_t>> node_type_start_;
   std::vector<size_t> cur_metapath_start_;
   std::vector<std::unordered_map<int, size_t>> global_infer_node_type_start_;
+  std::vector<std::unordered_map<int, size_t>> global_node_type_start_; // for node cls
   std::vector<size_t> infer_cursor_;
   std::vector<size_t> cursor_;
   std::vector<std::shared_ptr<phi::Allocation>> d_graph_train_total_keys_;
@@ -224,17 +226,17 @@ class GraphGpuWrapper {
       d_graph_train_type_keys_;
   std::vector<std::vector<std::shared_ptr<phi::Allocation>>>
       d_graph_train_type_labels_;
-  std::vector<std::vector<uint64_t>> d_graph_train_type_len_;
+  std::vector<std::vector<uint64_t>> h_graph_train_type_len_;
   std::vector<std::vector<std::shared_ptr<phi::Allocation>>>
       d_graph_val_type_keys_;
   std::vector<std::vector<std::shared_ptr<phi::Allocation>>>
       d_graph_val_type_labels_;
-  std::vector<std::vector<uint64_t>> d_graph_val_type_len_;
+  std::vector<std::vector<uint64_t>> h_graph_val_type_len_;
   std::vector<std::vector<std::shared_ptr<phi::Allocation>>>
       d_graph_test_type_keys_;
   std::vector<std::vector<std::shared_ptr<phi::Allocation>>>
       d_graph_test_type_labels_;
-  std::vector<std::vector<uint64_t>> d_graph_test_type_len_;
+  std::vector<std::vector<uint64_t>> h_graph_test_type_len_;
 
   std::string cur_metapath_;
   std::vector<int> cur_parse_metapath_;
