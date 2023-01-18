@@ -22,7 +22,10 @@
 #include "paddle/fluid/framework/fleet/heter_ps/gpu_graph_node.h"
 namespace paddle {
 namespace framework {
+
 #ifdef PADDLE_WITH_HETERPS
+
+typedef paddle::distributed::GraphTableType GraphTableType;
 
 enum GpuGraphStorageMode {
   WHOLE_HBM = 1,
@@ -52,11 +55,10 @@ class GraphGpuWrapper {
   std::vector<std::string> get_ntype_from_etype(std::string etype);
   void set_up_types(std::vector<std::string>& edge_type,
                     std::vector<std::string>& node_type);
-  void upload_batch(int type,
-                    int idx,
+  void upload_batch(int table_type,
                     int slice_num,
                     const std::string& edge_type);
-  void upload_batch(int type, int slice_num, int slot_num);
+  void upload_batch(int table_type, int slice_num, int slot_num);
   std::vector<GpuPsCommGraphFea> get_sub_graph_fea(
       std::vector<std::vector<uint64_t>>& node_ids, int slot_num);
   void build_gpu_graph_fea(GpuPsCommGraphFea& sub_graph_fea, int i);
@@ -68,7 +70,8 @@ class GraphGpuWrapper {
   void load_edge_file(std::string etype2files,
                       std::string graph_data_local_path,
                       int part_num,
-                      bool reverse);
+                      bool reverse,
+                      const std::vector<bool>& is_reverse_edge_map);
 
   int load_node_file(std::string name, std::string filepath);
   int load_node_file(std::string ntype2files,
@@ -79,7 +82,8 @@ class GraphGpuWrapper {
                           std::string ntype2files,
                           std::string graph_data_local_path,
                           int part_num,
-                          bool reverse);
+                          bool reverse,
+                          const std::vector<bool>& is_reverse_edge_map);
   int32_t load_next_partition(int idx);
   int32_t get_partition_num(int idx);
   void load_node_weight(int type_id, int idx, std::string path);
@@ -89,21 +93,21 @@ class GraphGpuWrapper {
   void make_complementary_graph(int idx, int64_t byte_size);
   void set_search_level(int level);
   void init_search_level(int level);
-  int get_all_id(int type,
+  int get_all_id(int table_type,
                  int slice_num,
                  std::vector<std::vector<uint64_t>>* output);
-  int get_all_neighbor_id(int type,
+  int get_all_neighbor_id(GraphTableType table_type,
                           int slice_num,
                           std::vector<std::vector<uint64_t>>* output);
-  int get_all_id(int type,
+  int get_all_id(int table_type,
                  int idx,
                  int slice_num,
                  std::vector<std::vector<uint64_t>>* output);
-  int get_all_neighbor_id(int type,
+  int get_all_neighbor_id(GraphTableType table_type,
                           int idx,
                           int slice_num,
                           std::vector<std::vector<uint64_t>>* output);
-  int get_all_feature_ids(int type,
+  int get_all_feature_ids(GraphTableType table_type,
                           int idx,
                           int slice_num,
                           std::vector<std::vector<uint64_t>>* output);

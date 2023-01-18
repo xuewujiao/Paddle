@@ -125,7 +125,7 @@ int32_t GraphBrpcService::clear_nodes(Table *table,
                                       const PsRequestMessage &request,
                                       PsResponseMessage &response,
                                       brpc::Controller *cntl) {
-  int type_id = *(int *)(request.params(0).c_str());
+  GraphTableType type_id = *(GraphTableType*)(request.params(0).c_str());
   int idx_ = *(int *)(request.params(1).c_str());
   ((GraphTable *)table)->clear_nodes(type_id, idx_);
   return 0;
@@ -375,7 +375,7 @@ int32_t GraphBrpcService::pull_graph_list(Table *table,
         response, -1, "pull_graph_list request requires at least 5 arguments");
     return 0;
   }
-  int type_id = *(int *)(request.params(0).c_str());
+  GraphTableType type_id = *(GraphTableType*)(request.params(0).c_str());
   int idx = *(int *)(request.params(1).c_str());
   int start = *(int *)(request.params(2).c_str());
   int size = *(int *)(request.params(3).c_str());
@@ -425,7 +425,7 @@ int32_t GraphBrpcService::graph_random_sample_nodes(
     const PsRequestMessage &request,
     PsResponseMessage &response,
     brpc::Controller *cntl) {
-  int type_id = *(int *)(request.params(0).c_str());
+  GraphTableType type_id = *(GraphTableType*)(request.params(0).c_str());
   int idx_ = *(int *)(request.params(1).c_str());
   size_t size = *(uint64_t *)(request.params(2).c_str());
   // size_t size = *(int64_t *)(request.params(0).c_str());

@@ -520,6 +520,8 @@ class GraphSampler {
 #endif
 */
 
+enum GraphTableType { EDGE_TABLE, FEATURE_TABLE };
+
 class GraphTable : public Table {
  public:
   GraphTable() {
@@ -550,7 +552,7 @@ class GraphTable : public Table {
     return (key % shard_num) / sparse_local_shard_num(shard_num, server_num);
   }
 
-  virtual int32_t pull_graph_list(int type_id,
+  virtual int32_t pull_graph_list(GraphTableType table_type,
                                   int idx,
                                   int start,
                                   int size,
@@ -567,14 +569,14 @@ class GraphTable : public Table {
       std::vector<int> &actual_sizes,
       bool need_weight);
 
-  int32_t random_sample_nodes(int type_id,
+  int32_t random_sample_nodes(GraphTableType table_type,
                               int idx,
                               int sample_size,
                               std::unique_ptr<char[]> &buffers,
                               int &actual_sizes);
 
   virtual int32_t get_nodes_ids_by_ranges(
-      int type_id,
+      GraphTableType table_type,
       int idx,
       std::vector<std::pair<int, int>> ranges,
       std::vector<uint64_t> &res);
@@ -588,11 +590,13 @@ class GraphTable : public Table {
                                   std::string ntype2files,
                                   std::string graph_data_local_path,
                                   int part_num,
-                                  bool reverse);
+                                  bool reverse,
+                                  const std::vector<bool>& is_reverse_edge_map);
   int32_t parse_edge_and_load(std::string etype2files,
                               std::string graph_data_local_path,
                               int part_num,
-                              bool reverse);
+                              bool reverse,
+                              const std::vector<bool>& is_reverse_edge_map);
   int32_t parse_node_and_load(std::string ntype2files,
                               std::string graph_data_local_path,
                               int part_num,
@@ -606,27 +610,27 @@ class GraphTable : public Table {
   int32_t load_edges(const std::string &path,
                      bool reverse,
                      const std::string &edge_type);
-  int get_all_id(int type,
+  int get_all_id(GraphTableType table_type,
                  int slice_num,
                  std::vector<std::vector<uint64_t>> *output);
-  int get_all_neighbor_id(int type,
+  int get_all_neighbor_id(GraphTableType table_type,
                           int slice_num,
                           std::vector<std::vector<uint64_t>> *output);
-  int get_all_id(int type,
+  int get_all_id(GraphTableType table_type,
                  int idx,
                  int slice_num,
                  std::vector<std::vector<uint64_t>> *output);
-  int get_node_cls_id_and_label(int type_id,
+  int get_node_cls_id_and_label(GraphTableType table_type,
                                 int idx,
                                 int slice_num,
                                 std::vector<std::vector<uint64_t>> *keys,
                                 std::vector<std::vector<int>> *labels,
                                 int node_mode);
-  int get_all_neighbor_id(int type_id,
+  int get_all_neighbor_id(GraphTableType table_type,
                           int id,
                           int slice_num,
                           std::vector<std::vector<uint64_t>> *output);
-  int get_all_feature_ids(int type,
+  int get_all_feature_ids(GraphTableType table_type,
                           int idx,
                           int slice_num,
                           std::vector<std::vector<uint64_t>> *output);
@@ -651,13 +655,13 @@ class GraphTable : public Table {
   int32_t remove_graph_node(int idx, std::vector<uint64_t> &id_list);
 
   int32_t get_server_index_by_id(uint64_t id);
-  Node *find_node(int type_id, int idx, uint64_t id);
-  Node *find_node(int type_id, uint64_t id);
+  Node *find_node(GraphTableType table_type, int idx, uint64_t id);
+  Node *find_node(GraphTableType table_type, uint64_t id);
 
   virtual int32_t Pull(TableContext &context) { return 0; }
   virtual int32_t Push(TableContext &context) { return 0; }
 
-  virtual int32_t clear_nodes(int type, int idx);
+  virtual int32_t clear_nodes(GraphTableType table_type, int idx);
   virtual void Clear() {}
   virtual int32_t Flush() { return 0; }
   virtual int32_t Shrink(const std::string &param) { return 0; }
