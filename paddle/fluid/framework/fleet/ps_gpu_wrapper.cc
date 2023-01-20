@@ -825,10 +825,12 @@ void PSGPUWrapper::FilterPull(std::shared_ptr<HeterContext> gpu_task,
       continue;
     }
     if (dedup_size == pos) {
+      CHECK(shard_values[dedup_size] != 0);
       ++dedup_size;
       continue;
     }
     shard_keys[dedup_size] = shard_keys[pos];
+    CHECK(shard_values[dedup_size] != 0);
     ++dedup_size;
   }
   shard_keys.resize(dedup_size);
@@ -896,6 +898,7 @@ void PSGPUWrapper::MergePull(std::shared_ptr<HeterContext> gpu_task) {
                 }
                 last_key = merge_key;
                 shard_keys[dedup_index] = merge_key;
+                CHECK(merge_values.values[k] != 0);
                 shard_values[dedup_index] =
                     CONV2FEATURE_PTR(merge_values.values[k]);
                 ++k;
@@ -910,6 +913,7 @@ void PSGPUWrapper::MergePull(std::shared_ptr<HeterContext> gpu_task) {
                 }
                 last_key = merge_key;
                 shard_keys[dedup_index] = merge_key;
+                CHECK(merge_values.values[k] != 0);
                 shard_values[dedup_index] =
                     CONV2FEATURE_PTR(merge_values.values[k]);
                 ++k;

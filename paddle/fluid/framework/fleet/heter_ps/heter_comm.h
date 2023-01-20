@@ -13,8 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #pragma once
-#include <vector>
 #include <memory>
+#include <vector>
 #include "cub/cub.cuh"
 #include "cub/util_allocator.cuh"
 #if defined(PADDLE_WITH_CUDA)
@@ -59,7 +59,7 @@ class HeterComm {
   HeterComm(size_t capacity, std::shared_ptr<HeterPsResource> resource);
   HeterComm(size_t capacity,
             std::shared_ptr<HeterPsResource> resource,
-            GPUAccessor& gpu_accessor); // NOLINT
+            GPUAccessor& gpu_accessor);  // NOLINT
   virtual ~HeterComm();
   HeterComm(const HeterComm&) = delete;
   HeterComm& operator=(const HeterComm&) = delete;
@@ -82,8 +82,8 @@ class HeterComm {
                           KeyType* d_keys,
                           float* d_grads,
                           size_t len,
-                          int& uniq_len,       // NOLINT
-                          size_t& segment_len, // NOLINT
+                          int& uniq_len,        // NOLINT
+                          size_t& segment_len,  // NOLINT
                           bool enable_segment_merge_grad);
   void segment_merge_grad(int gpu_num,
                           KeyType* d_keys,
@@ -92,7 +92,7 @@ class HeterComm {
                           size_t len,
                           const uint32_t* d_fea_num_info,
                           size_t uniq_len,
-                          size_t& segment_len); // NOLINT
+                          size_t& segment_len);  // NOLINT
   void build_ps(int num,
                 KeyType* h_keys,
                 ValType* h_vals,
@@ -111,8 +111,11 @@ class HeterComm {
                   GradType* d_grads,
                   size_t len,
                   int& uniq_len);  // NOLINT
-  void dynamic_merge_grad(
-      int gpu_num, KeyType* d_keys, float* d_grads, size_t len, int& uniq_len); // NOLINT
+  void dynamic_merge_grad(int gpu_num,
+                          KeyType* d_keys,
+                          float* d_grads,
+                          size_t len,
+                          int& uniq_len);  // NOLINT
   void pull_sparse(int num, KeyType* d_keys, float* d_vals, size_t len);
   void build_ps(int num,
                 KeyType* h_keys,
@@ -149,6 +152,11 @@ class HeterComm {
                    const void* src,
                    size_t count,
                    StreamType stream = 0);
+  template<typename StreamType>
+  void MemcpyPeerAsync(void *dst,
+                       const void *src,
+                       size_t count,
+                       StreamType stream);
 
 #if defined(PADDLE_WITH_CUDA)
   template <typename Sgd>
@@ -307,11 +315,11 @@ class HeterComm {
                    bool need_copy = false) {
       size_t need_mem = len * sizeof(T);
       if (alloc.get() == nullptr) {
-        alloc = memory::Alloc(place_, need_mem, stream_);
+        alloc = memory::Alloc(place_, need_mem);
       } else if (need_mem > alloc->size()) {
         if (need_copy) {
           std::shared_ptr<memory::Allocation> tmp =
-              memory::Alloc(place_, need_mem, stream_);
+              memory::Alloc(place_, need_mem);
 #if defined(PADDLE_WITH_CUDA)
           PADDLE_ENFORCE_GPU_SUCCESS(
               cudaMemcpyAsync(tmp->ptr(),  // output
@@ -319,6 +327,8 @@ class HeterComm {
                               alloc->size(),
                               cudaMemcpyDeviceToDevice,
                               reinterpret_cast<cudaStream_t>(stream_.id())));
+          PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(
+              reinterpret_cast<cudaStream_t>(stream_.id())));
 #else
           memory::Copy(place_,
                        tmp->ptr(),
@@ -331,7 +341,7 @@ class HeterComm {
           alloc = tmp;
         } else {
           alloc.reset();
-          alloc = memory::Alloc(place_, need_mem, stream_);
+          alloc = memory::Alloc(place_, need_mem);
         }
       }
       return reinterpret_cast<T*>(alloc->ptr());
@@ -470,11 +480,11 @@ class HeterComm {
                       int end_index,
                       size_t keylen,
                       size_t vallen);
-  void create_tmp_storage(void*& dest, // NOLINT
+  void create_tmp_storage(void*& dest,  // NOLINT
                           int start_index,
                           int end_index,
                           size_t vallen);
-  void destroy_tmp_storage(void*& p, int start_index, int end_index); // NOLINT
+  void destroy_tmp_storage(void*& p, int start_index, int end_index);  // NOLINT
   void destroy_storage(int start_index, int end_index);
   void walk_to_dest(int start_index,
                     int gpu_num,
@@ -537,7 +547,7 @@ class HeterComm {
                         const cudaStream_t& stream);
   void gather_inner_keys_p2p(const size_t& total_fea_num,
                              const KeyType* d_keys,
-                             InnerResource& res, // NOLINT
+                             InnerResource& res,  // NOLINT
                              const int& gpu_id,
                              const int& gpu_num,
                              const int& trans_id,
@@ -578,7 +588,7 @@ class HeterComm {
                                       const cudaStream_t& stream);
   void scatter_inner_vals_p2p(const size_t& total_fea_num,
                               void* d_out_vals,
-                              InnerResource& res, // NOLINT
+                              InnerResource& res,  // NOLINT
                               const int& gpu_id,
                               const int& gpu_num,
                               const int& trans_id,
@@ -593,7 +603,7 @@ class HeterComm {
   void gather_inner_data_p2p(const size_t& total_fea_num,
                              const KeyType* d_keys,
                              const void* d_vals,
-                             InnerResource& res, // NOLINT
+                             InnerResource& res,  // NOLINT
                              const int& gpu_id,
                              const int& gpu_num,
                              const int& trans_id,
@@ -655,17 +665,32 @@ class HeterComm {
   // debug time
   void print_debug_time(const int& gpu_id, bool force = false);
   // alloc temp memory
-  template <typename T, typename TPlace, typename StreamType>
+  template <typename T, typename TPlace>
   T* AllocCache(std::shared_ptr<memory::Allocation>* alloc,
                 const TPlace& place,
-                const size_t& byte_len,
-                const StreamType& stream) {
+                const size_t& byte_len) {
     if (alloc->get() == nullptr || byte_len > (*alloc)->size()) {
       alloc->reset();
-      auto id = phi::Stream(reinterpret_cast<phi::StreamId>(stream));
-      *alloc = memory::Alloc(place, byte_len, id);
+      if (resource_->multi_mf()) {
+        *alloc = memory::Alloc(place, byte_len);
+      } else {
+        auto stream = resource_->local_stream(place.GetDeviceId(), 0);
+        auto id = phi::Stream(reinterpret_cast<phi::StreamId>(stream));
+        *alloc = memory::Alloc(place, byte_len, id);
+      }
     }
     return reinterpret_cast<T*>((*alloc)->ptr());
+  }
+  template <typename TPlace>
+  std::shared_ptr<memory::Allocation> MemoryAlloc(const TPlace& place,
+                                                  const size_t& byte_len) {
+    if (resource_->multi_mf()) {
+      return memory::Alloc(place, byte_len);
+    } else {
+      auto stream = resource_->local_stream(place.GetDeviceId(), 0);
+      auto id = phi::Stream(reinterpret_cast<phi::StreamId>(stream));
+      return memory::Alloc(place, byte_len, id);
+    }
   }
 
   using Table = HashTable<KeyType, ValType>;
