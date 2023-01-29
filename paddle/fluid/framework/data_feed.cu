@@ -28,6 +28,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_wrapper.h"
 #include "paddle/fluid/framework/fleet/heter_ps/hashtable.h"
 #include "paddle/fluid/framework/fleet/ps_gpu_wrapper.h"
+#include "paddle/fluid/framework/io/fs.h"
 #include "paddle/phi/kernels/gpu/graph_reindex_funcs.h"
 #include "paddle/phi/kernels/graph_reindex_kernel.h"
 
@@ -458,7 +459,7 @@ __global__ void GraphFillIdKernel(uint64_t *id_tensor,
                                   int step,
                                   int len,
                                   int col_num,
-                                  uint8_t* excluded_train_pair,
+                                  uint8_t *excluded_train_pair,
                                   int excluded_train_pair_len) {
   __shared__ uint64_t local_key[CUDA_NUM_THREADS * 2];
   __shared__ int local_num;
@@ -477,8 +478,8 @@ __global__ void GraphFillIdKernel(uint64_t *id_tensor,
     int src = row[idx] * col_num + central_word;
     if (walk[src] != 0 && walk[src + step] != 0) {
       for (int i = 0; i < excluded_train_pair_len; i += 2) {
-        if (walk_ntype[src] == excluded_train_pair[i]
-                && walk_ntype[src + step] == excluded_train_pair[i + 1]) {
+        if (walk_ntype[src] == excluded_train_pair[i] &&
+            walk_ntype[src + step] == excluded_train_pair[i + 1]) {
           // filter this pair
           need_filter = true;
           break;
@@ -733,7 +734,8 @@ int GraphDataGenerator::MakeInsPair(cudaStream_t stream) {
   uint8_t *excluded_train_pair = NULL;
   if (excluded_train_pair_len_ > 0) {
     walk_ntype = reinterpret_cast<uint8_t *>(d_walk_ntype_->ptr());
-    excluded_train_pair = reinterpret_cast<uint8_t *>(d_excluded_train_pair_->ptr());
+    excluded_train_pair =
+        reinterpret_cast<uint8_t *>(d_excluded_train_pair_->ptr());
   }
   uint64_t *ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_->ptr());
   int *random_row = reinterpret_cast<int *>(d_random_row_->ptr());
@@ -768,7 +770,8 @@ int GraphDataGenerator::MakeInsPair(cudaStream_t stream) {
     VLOG(2) << "h_pair_num = " << h_pair_num
             << ", ins_buf_pair_len = " << ins_buf_pair_len_;
     for (int xx = 0; xx < ins_buf_pair_len_; xx++) {
-      VLOG(2) << "h_ins_buf: " << h_ins_buf[xx * 2] << ", " << h_ins_buf[xx * 2 + 1];
+      VLOG(2) << "h_ins_buf: " << h_ins_buf[xx * 2] << ", "
+              << h_ins_buf[xx * 2 + 1];
     }
   }
   return ins_buf_pair_len_;
@@ -1855,16 +1858,17 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
 }
 
 std::shared_ptr<phi::Allocation> GraphDataGenerator::GetNodeDegree(
-    uint64_t* node_ids, int len) {
+    uint64_t *node_ids, int len) {
   auto node_degree = memory::AllocShared(
       place_,
       len * edge_to_id_len_ * sizeof(int),
       phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   auto edge_to_id = gpu_graph_ptr->edge_to_id;
-  for (auto& iter : edge_to_id) {
+  for (auto &iter : edge_to_id) {
     int edge_idx = iter.second;
-    gpu_graph_ptr->get_node_degree(gpuid_, edge_idx, node_ids, len, node_degree);
+    gpu_graph_ptr->get_node_degree(
+        gpuid_, edge_idx, node_ids, len, node_degree);
   }
   return node_degree;
 }
@@ -1959,10 +1963,11 @@ void GraphDataGenerator::DoWalkandSage() {
               phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
           auto final_sage_nodes = GenerateSampleGraph(
               ins_cursor, total_instance, &uniq_instance, inverse);
-          uint64_t* final_sage_nodes_ptr =
+          uint64_t *final_sage_nodes_ptr =
               reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
           if (get_degree_) {
-            auto node_degrees = GetNodeDegree(final_sage_nodes_ptr, uniq_instance);
+            auto node_degrees =
+                GetNodeDegree(final_sage_nodes_ptr, uniq_instance);
             node_degree_vec_.emplace_back(node_degrees);
           }
           cudaStreamSynchronize(sample_stream_);
@@ -2016,10 +2021,11 @@ void GraphDataGenerator::DoWalkandSage() {
               phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
           auto final_sage_nodes = GenerateSampleGraph(
               node_buf_ptr_, total_instance, &uniq_instance, inverse);
-          uint64_t* final_sage_nodes_ptr =
+          uint64_t *final_sage_nodes_ptr =
               reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
           if (get_degree_) {
-            auto node_degrees = GetNodeDegree(final_sage_nodes_ptr, uniq_instance);
+            auto node_degrees =
+                GetNodeDegree(final_sage_nodes_ptr, uniq_instance);
             node_degree_vec_.emplace_back(node_degrees);
           }
           cudaStreamSynchronize(sample_stream_);
@@ -2085,7 +2091,8 @@ int GraphDataGenerator::FillInferBuf() {
     }
     if (!infer_node_type_index_set_.empty()) {
       while (infer_cursor < h_device_keys_len_.size()) {
-        if (infer_node_type_index_set_.find(infer_cursor) == infer_node_type_index_set_.end()) {
+        if (infer_node_type_index_set_.find(infer_cursor) ==
+            infer_node_type_index_set_.end()) {
           VLOG(2) << "Skip cursor[" << infer_cursor << "]";
           infer_cursor++;
           continue;
@@ -2618,12 +2625,12 @@ int GraphDataGenerator::FillWalkBufMultiPath() {
 
   if (!sage_mode_) {
     uint64_t h_uniq_node_num = CopyUniqueNodes();
-    VLOG(0) << "sample_times:" << sample_times << ", d_walk_size:" << buf_size_
+    VLOG(1) << "sample_times:" << sample_times << ", d_walk_size:" << buf_size_
             << ", d_walk_offset:" << i << ", total_rows:" << total_row_
             << ", h_uniq_node_num:" << h_uniq_node_num
             << ", total_samples:" << total_samples;
   } else {
-    VLOG(0) << "sample_times:" << sample_times << ", d_walk_size:" << buf_size_
+    VLOG(1) << "sample_times:" << sample_times << ", d_walk_size:" << buf_size_
             << ", d_walk_offset:" << i << ", total_rows:" << total_row_
             << ", total_samples:" << total_samples;
   }
@@ -2726,21 +2733,21 @@ void GraphDataGenerator::AllocResource(int thread_id,
   excluded_train_pair_len_ = gpu_graph_ptr->excluded_train_pair_.size();
   if (excluded_train_pair_len_ > 0) {
     d_excluded_train_pair_ = memory::AllocShared(
-            place_,
-            excluded_train_pair_len_ * sizeof(uint8_t),
-            phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-    CUDA_CHECK(cudaMemcpyAsync(
-                d_excluded_train_pair_->ptr(), gpu_graph_ptr->excluded_train_pair_.data(),
-                excluded_train_pair_len_ * sizeof(uint8_t),
-                cudaMemcpyHostToDevice,
-                sample_stream_));
+        place_,
+        excluded_train_pair_len_ * sizeof(uint8_t),
+        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+    CUDA_CHECK(cudaMemcpyAsync(d_excluded_train_pair_->ptr(),
+                               gpu_graph_ptr->excluded_train_pair_.data(),
+                               excluded_train_pair_len_ * sizeof(uint8_t),
+                               cudaMemcpyHostToDevice,
+                               sample_stream_));
 
     d_walk_ntype_ = memory::AllocShared(
-            place_,
-            buf_size_ * sizeof(uint8_t),
-            phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+        place_,
+        buf_size_ * sizeof(uint8_t),
+        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
     cudaMemsetAsync(
-            d_walk_ntype_->ptr(), 0, buf_size_ * sizeof(uint8_t), sample_stream_);
+        d_walk_ntype_->ptr(), 0, buf_size_ * sizeof(uint8_t), sample_stream_);
   }
 
   d_sample_keys_ = memory::AllocShared(
@@ -2842,11 +2849,12 @@ void GraphDataGenerator::AllocResource(int thread_id,
         (batch_size_ * 2 * 2) * sizeof(uint32_t),
         phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
   }
- 
+
   // parse infer_node_type
   auto &type_to_index = gpu_graph_ptr->get_graph_type_to_index();
   if (!gpu_graph_training_) {
-    auto node_types = paddle::string::split_string<std::string>(infer_node_type_, ";");
+    auto node_types =
+        paddle::string::split_string<std::string>(infer_node_type_, ";");
     auto node_to_id = gpu_graph_ptr->node_to_id;
     for (auto &type : node_types) {
       auto iter = node_to_id.find(type);
@@ -2856,11 +2864,13 @@ void GraphDataGenerator::AllocResource(int thread_id,
           platform::errors::NotFound("(%s) is not found in node_to_id.", type));
       int node_type = iter->second;
       int type_index = type_to_index[node_type];
-      VLOG(2) << "add node[" << type << "] into infer_node_type, type_index(cursor)["
-          << type_index << "]";
+      VLOG(2) << "add node[" << type
+              << "] into infer_node_type, type_index(cursor)[" << type_index
+              << "]";
       infer_node_type_index_set_.insert(type_index);
     }
-    VLOG(2) << "infer_node_type_index_set_num: " << infer_node_type_index_set_.size();
+    VLOG(2) << "infer_node_type_index_set_num: "
+            << infer_node_type_index_set_.size();
   }
 
   cudaStreamSynchronize(sample_stream_);
@@ -2917,7 +2927,8 @@ void GraphDataGenerator::SetConfig(
   std::string str_samples = graph_config.samples();
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   debug_gpu_memory_info("init_conf start");
-  gpu_graph_ptr->init_conf(first_node_type, meta_path, graph_config.excluded_train_pair());
+  gpu_graph_ptr->init_conf(
+      first_node_type, meta_path, graph_config.excluded_train_pair());
   debug_gpu_memory_info("init_conf end");
 
   auto edge_to_id = gpu_graph_ptr->edge_to_id;
@@ -2934,6 +2945,42 @@ void GraphDataGenerator::SetConfig(
     infer_node_type_ = graph_config.infer_node_type();
   }
 };
+
+void GraphDataGenerator::DumpWalkPath(std::string dump_path, size_t dump_rate) {
+#ifdef _LINUX
+  PADDLE_ENFORCE_LT(
+      dump_rate,
+      10000000,
+      platform::errors::InvalidArgument(
+          "dump_rate can't be large than 10000000. Please check the dump "
+          "rate[1, 10000000]"));
+  PADDLE_ENFORCE_GT(dump_rate,
+                    1,
+                    platform::errors::InvalidArgument(
+                        "dump_rate can't be less than 1. Please check "
+                        "the dump rate[1, 10000000]"));
+  int err_no = 0;
+  std::shared_ptr<FILE> fp = fs_open_append_write(dump_path, &err_no, "");
+  uint64_t *h_walk = new uint64_t[buf_size_];
+  uint64_t *walk = reinterpret_cast<uint64_t *>(d_walk_->ptr());
+  cudaMemcpy(
+      h_walk, walk, buf_size_ * sizeof(uint64_t), cudaMemcpyDeviceToHost);
+  VLOG(1) << "DumpWalkPath all buf_size_:" << buf_size_;
+  std::string ss = "";
+  size_t write_count = 0;
+  for (int xx = 0; xx < buf_size_ / dump_rate; xx += walk_len_) {
+    ss = "";
+    for (int yy = 0; yy < walk_len_; yy++) {
+      ss += std::to_string(h_walk[xx + yy]) + "-";
+    }
+    write_count = fwrite_unlocked(ss.data(), 1, ss.length(), fp.get());
+    if (write_count != ss.length()) {
+      VLOG(1) << "dump walk path" << ss << " failed";
+    }
+    write_count = fwrite_unlocked("\n", 1, 1, fp.get());
+  }
+#endif
+}
 
 }  // namespace framework
 }  // namespace paddle

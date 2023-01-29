@@ -13,8 +13,8 @@ See the License for the specific language governing permissions and
 limitations under the License. */
 
 #pragma once
-#include <memory>
 #include <vector>
+#include <memory>
 #include "cub/cub.cuh"
 #include "cub/util_allocator.cuh"
 #if defined(PADDLE_WITH_CUDA)
@@ -315,7 +315,7 @@ class HeterComm {
                    bool need_copy = false) {
       size_t need_mem = len * sizeof(T);
       if (alloc.get() == nullptr) {
-        alloc = memory::Alloc(place_, need_mem);
+        alloc = memory::Alloc(place_, need_mem, stream_);
       } else if (need_mem > alloc->size()) {
         if (need_copy) {
           std::shared_ptr<memory::Allocation> tmp =
@@ -341,7 +341,7 @@ class HeterComm {
           alloc = tmp;
         } else {
           alloc.reset();
-          alloc = memory::Alloc(place_, need_mem);
+          alloc = memory::Alloc(place_, need_mem, stream_);
         }
       }
       return reinterpret_cast<T*>(alloc->ptr());

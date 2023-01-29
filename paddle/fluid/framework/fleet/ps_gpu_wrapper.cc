@@ -900,7 +900,8 @@ void PSGPUWrapper::MergePull(std::shared_ptr<HeterContext> gpu_task) {
                 }
                 last_key = merge_key;
                 shard_keys[dedup_index] = merge_key;
-                CHECK(merge_values.values[k] != 0) << "num=" << merge_num << ", pos=" << k << ", key=" << merge_key << " is nullptr";
+                CHECK(merge_values.values[k] != 0)
+                  << "num=" << merge_num << ", pos=" << k << ", key=" << merge_key << " is nullptr";
                 shard_values[dedup_index] =
                     CONV2FEATURE_PTR(merge_values.values[k]);
                 ++k;
@@ -915,7 +916,8 @@ void PSGPUWrapper::MergePull(std::shared_ptr<HeterContext> gpu_task) {
                 }
                 last_key = merge_key;
                 shard_keys[dedup_index] = merge_key;
-                CHECK(merge_values.values[k] != 0) << "num=" << merge_num << ", pos=" << k << ", key=" << merge_key << " is nullptr";
+                CHECK(merge_values.values[k] != 0)
+                  << "num=" << merge_num << ", pos=" << k << ", key=" << merge_key << " is nullptr";
                 shard_values[dedup_index] =
                     CONV2FEATURE_PTR(merge_values.values[k]);
                 ++k;
