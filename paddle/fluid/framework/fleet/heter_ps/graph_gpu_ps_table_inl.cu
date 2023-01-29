@@ -862,7 +862,7 @@ void GpuPsGraphTable::build_graph_on_single_gpu(const GpuPsCommGraph& g,
   gpu_graph_list_[offset] = GpuPsCommGraph();
   int table_offset = get_table_offset(gpu_id, GraphTableType::EDGE_TABLE, edge_idx);
   size_t capacity = std::max((uint64_t)1, (uint64_t)g.node_size) / load_factor_;
-  auto stream = get_local_stream(i);
+  auto stream = get_local_stream(gpu_id);
   tables_[table_offset] = new Table(capacity, stream);
   if (g.node_size > 0) {
     if (FLAGS_gpugraph_load_node_list_into_hbm) {
