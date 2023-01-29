@@ -858,12 +858,14 @@ void PSGPUWrapper::MergePull(std::shared_ptr<HeterContext> gpu_task) {
   timeline.Start();
   auto fleet_ptr = paddle::distributed::FleetWrapper::GetInstance();
   std::vector<std::future<void>> task_futures;
+  std::vector<std::shared_ptr<paddle::distributed::SparseShardValues>> dim_pass_values(multi_mf_dim_, nullptr);
   for (int dim_id = 0; dim_id < multi_mf_dim_; ++dim_id) {
     auto pass_values = fleet_ptr->worker_ptr_->TakePassSparseReferedValues(
         table_id_, gpu_task->pass_id_, dim_id);
     if (pass_values == nullptr) {
       continue;
     }
+    dim_pass_values[dim_id] = pass_values;
     for (int shard_id = 0; shard_id < thread_keys_shard_num_; ++shard_id) {
       auto& merge_values = pass_values->at(shard_id);
       task_futures.emplace_back(pull_thread_pool_[shard_id]->enqueue(
@@ -898,7 +900,7 @@ void PSGPUWrapper::MergePull(std::shared_ptr<HeterContext> gpu_task) {
                 }
                 last_key = merge_key;
                 shard_keys[dedup_index] = merge_key;
-                CHECK(merge_values.values[k] != 0);
+                CHECK(merge_values.values[k] != 0) << "num=" << merge_num << ", pos=" << k << ", key=" << merge_key << " is nullptr";
                 shard_values[dedup_index] =
                     CONV2FEATURE_PTR(merge_values.values[k]);
                 ++k;
@@ -913,7 +915,7 @@ void PSGPUWrapper::MergePull(std::shared_ptr<HeterContext> gpu_task) {
                 }
                 last_key = merge_key;
                 shard_keys[dedup_index] = merge_key;
-                CHECK(merge_values.values[k] != 0);
+                CHECK(merge_values.values[k] != 0) << "num=" << merge_num << ", pos=" << k << ", key=" << merge_key << " is nullptr";
                 shard_values[dedup_index] =
                     CONV2FEATURE_PTR(merge_values.values[k]);
                 ++k;

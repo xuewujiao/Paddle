@@ -195,23 +195,26 @@ static void UniqueFlattendCUDATensor(const Context& context,
 
   indices->Resize(phi::make_ddim({num_input}));
   auto* indices_data = context.template Alloc<IndexT>(indices);
+  
+  paddle::memory::ThrustAllocator<cudaStream_t> allocator(context.GetPlace(), context.stream());
+  const auto &exec_policy = thrust::cuda::par(allocator).on(context.stream());
 
-  thrust::sequence(thrust::device, indices_data, indices_data + num_input);
+  thrust::sequence(exec_policy, indices_data, indices_data + num_input);
   thrust::sort_by_key(
-      thrust::device, in_data_hat, in_data_hat + num_input, indices_data);
+      exec_policy, in_data_hat, in_data_hat + num_input, indices_data);
 
   // 1. Calculate op result: 'out'
   DenseTensor range;
   range.Resize(phi::make_ddim({num_input + 1}));
   auto* range_data_ptr = context.template Alloc<IndexT>(&range);
   thrust::sequence(
-      thrust::device, range_data_ptr, range_data_ptr + num_input + 1);
+      exec_policy, range_data_ptr, range_data_ptr + num_input + 1);
   phi::Copy(context, in_hat, context.GetPlace(), false, out);
   int num_out;
   auto out_data = context.template Alloc<InT>(out);
   num_out =
       thrust::unique_by_key(
-          thrust::device, out_data, out_data + num_input, range_data_ptr, equal)
+          exec_policy, out_data, out_data + num_input, range_data_ptr, equal)
           .first -
       out_data;
   out->Resize(phi::make_ddim({num_out}));
@@ -224,7 +227,7 @@ static void UniqueFlattendCUDATensor(const Context& context,
     DenseTensor inv_loc;
     inv_loc.Resize(phi::make_ddim({num_input}));
     auto inv_loc_data_ptr = context.template Alloc<IndexT>(&inv_loc);
-    thrust::adjacent_difference(thrust::device,
+    thrust::adjacent_difference(exec_policy,
                                 in_data_hat,
                                 in_data_hat + num_input,
                                 inv_loc_data_ptr,
@@ -235,14 +238,16 @@ static void UniqueFlattendCUDATensor(const Context& context,
                                   temp_storage_bytes,
                                   inv_loc_data_ptr,
                                   inv_loc_data_ptr,
-                                  num_input);
+                                  num_input, 
+                                  context.stream());
     auto d_temp_storage = paddle::memory::Alloc(place, temp_storage_bytes);
     cub::DeviceScan::InclusiveSum(d_temp_storage->ptr(),
                                   temp_storage_bytes,
                                   inv_loc_data_ptr,
                                   inv_loc_data_ptr,
-                                  num_input);
-    thrust::scatter(thrust::device,
+                                  num_input, 
+                                  context.stream());
+    thrust::scatter(exec_policy,
                     inv_loc_data_ptr,
                     inv_loc_data_ptr + num_input,
                     indices_data,
@@ -254,11 +259,11 @@ static void UniqueFlattendCUDATensor(const Context& context,
     DenseTensor tmp_indices;
     tmp_indices.Resize(phi::make_ddim({num_input}));
     auto* tmp_indices_data_ptr = context.template Alloc<IndexT>(&tmp_indices);
-    thrust::copy(thrust::device,
+    thrust::copy(exec_policy,
                  in_data_hat,
                  in_data_hat + num_input,
                  tmp_indices_data_ptr);
-    thrust::unique_by_key(thrust::device,
+    thrust::unique_by_key(exec_policy,
                           tmp_indices_data_ptr,
                           tmp_indices_data_ptr + num_input,
                           indices_data,
@@ -271,10 +276,10 @@ static void UniqueFlattendCUDATensor(const Context& context,
     counts->Resize(phi::make_ddim({num_out}));
     auto count_data = context.template Alloc<IndexT>(counts);
     // init 'count_data' as 0
-    thrust::fill(thrust::device, count_data, count_data + num_out, 0);
+    thrust::fill(exec_policy, count_data, count_data + num_out, 0);
     thrust::device_ptr<IndexT> range_data_ptr_dev(range_data_ptr);
     range_data_ptr_dev[num_out] = num_input;
-    thrust::adjacent_difference(thrust::device,
+    thrust::adjacent_difference(exec_policy,
                                 range_data_ptr + 1,
                                 range_data_ptr + num_out + 1,
                                 count_data);
@@ -300,24 +305,26 @@ static void ComputeUniqueDims(const Context& context,
                               equal_T equal,
                               not_equal_T not_equal,
                               int64_t row) {
+  paddle::memory::ThrustAllocator<cudaStream_t> allocator(context.GetPlace(), context.stream());
+  const auto &exec_policy = thrust::cuda::par(allocator).on(context.stream());
   // 1. inverse indices: 'inverse'
   inverse->Resize(phi::make_ddim({row}));
   auto* inverse_data = context.template Alloc<IndexT>(inverse);
   DenseTensor inv_loc;
   inv_loc.Resize(phi::make_ddim({row}));
   auto inv_loc_data_ptr = context.template Alloc<IndexT>(&inv_loc);
-  thrust::adjacent_difference(thrust::device,
+  thrust::adjacent_difference(exec_policy,
                               sorted_indices_data,
                               sorted_indices_data + row,
                               inv_loc_data_ptr,
                               not_equal);
   thrust::device_ptr<IndexT> inv_loc_data_dev(inv_loc_data_ptr);
   inv_loc_data_dev[0] = 0;
-  thrust::inclusive_scan(thrust::device,
+  thrust::inclusive_scan(exec_policy,
                          inv_loc_data_ptr,
                          inv_loc_data_ptr + row,
                          inv_loc_data_ptr);
-  thrust::scatter(thrust::device,
+  thrust::scatter(exec_policy,
                   inv_loc_data_ptr,
                   inv_loc_data_ptr + row,
                   sorted_indices_data,
@@ -327,9 +334,9 @@ static void ComputeUniqueDims(const Context& context,
   DenseTensor range;
   range.Resize(phi::make_ddim({row + 1}));
   auto range_data_ptr = context.template Alloc<IndexT>(&range);
-  thrust::sequence(thrust::device, range_data_ptr, range_data_ptr + row + 1);
+  thrust::sequence(exec_policy, range_data_ptr, range_data_ptr + row + 1);
   int num_out;
-  num_out = thrust::unique_by_key(thrust::device,
+  num_out = thrust::unique_by_key(exec_policy,
                                   sorted_indices_data,
                                   sorted_indices_data + row,
                                   range_data_ptr,
@@ -343,9 +350,9 @@ static void ComputeUniqueDims(const Context& context,
   // 3. counts: 'counts'
   counts->Resize(phi::make_ddim({num_out}));
   auto* count_data = context.template Alloc<IndexT>(counts);
-  thrust::fill(thrust::device, count_data, count_data + row, 0);
+  thrust::fill(exec_policy, count_data, count_data + row, 0);
   thrust::adjacent_difference(
-      thrust::device, range_data_ptr + 1, range_data_ptr + row + 1, count_data);
+      exec_policy, range_data_ptr + 1, range_data_ptr + row + 1, count_data);
 }
 
 // Calculate unique when 'axis' is set
@@ -393,10 +400,12 @@ static void UniqueDimsCUDATensor(const Context& context,
   auto* sorted_indices_data = context.template Alloc<IndexT>(indices);
 
   // 2. Calculate 'indices', 'inverse', 'counts'
-  // Init index and sort
+  // Init index and sort  
+  paddle::memory::ThrustAllocator<cudaStream_t> allocator(context.GetPlace(), context.stream());
+  const auto &exec_policy = thrust::cuda::par(allocator).on(context.stream());
   thrust::sequence(
-      thrust::device, sorted_indices_data, sorted_indices_data + row);
-  thrust::sort(thrust::device,
+      exec_policy, sorted_indices_data, sorted_indices_data + row);
+  thrust::sort(exec_policy,
                sorted_indices_data,
                sorted_indices_data + row,
                LessThan<InT>(col, in_trans_data));

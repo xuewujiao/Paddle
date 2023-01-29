@@ -881,6 +881,7 @@ void GpuPsGraphTable::build_graph_on_single_gpu(const GpuPsCommGraph& g,
                                  g.node_size * sizeof(uint64_t),
                                  cudaMemcpyHostToDevice,
                                  stream));
+      CUDA_CHECK(cudaStreamSynchronize(stream));
     }
 
     build_ps(i,
@@ -1020,6 +1021,7 @@ void GpuPsGraphTable::build_graph_from_cpu(
                                  cpu_graph_list[i].node_size * sizeof(uint64_t),
                                  cudaMemcpyHostToDevice,
                                  stream));
+      CUDA_CHECK(cudaStreamSynchronize(stream));
       build_ps(i,
                cpu_graph_list[i].node_list,
                (uint64_t*)(cpu_graph_list[i].node_info_list),

@@ -3021,8 +3021,10 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_data_by_all2all(
       send_size * value_bytes,
       cudaMemcpyDeviceToDevice,
       stream));
+  PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
   CHECK_EQ(send_size, h_recv_part_sizes[nccl_rank_id]);
 
+  auto nccl_stream = resource_->comm_stream(gpu_id, 0);
   size_t total_fea_num = 0;
   PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclGroupStart());
   for (int i = 0; i < nccl_node_size; i++) {
@@ -3038,7 +3040,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_data_by_all2all(
                                       ncclInt8,
                                       i,
                                       comm,
-                                      stream));
+                                      nccl_stream));
       total_fea_num += send_size;
     }
     const size_t &recv_size = h_recv_part_sizes[i];
@@ -3050,11 +3052,12 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_data_by_all2all(
           ncclInt8,
           i,
           comm,
-          stream));
+          nccl_stream));
       total_fea_num += recv_size;
     }
   }
   PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclGroupEnd());
+  PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(nccl_stream));
 
   return total_fea_num;
 }
@@ -3101,22 +3104,27 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
                                              node_size_ * sizeof(int),
                                              cudaMemcpyHostToDevice,
                                              stream));
+  PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
+
   cache.node_barrier_.Resume();
   auto &comm = nccl_inter_comms_[gpu_id];
+  auto nccl_stream = resource_->comm_stream(gpu_id, 0);
   PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllGather(
       &res.d_node_size_ptr[rank_offset],
       reinterpret_cast<void *>(res.d_node_size_ptr),
       node_size_,
       ncclInt,
       comm,
-      stream));
+      nccl_stream));
+  PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(nccl_stream));
+  cache.node_barrier_.Pause();
+
   PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyAsync(&h_push_fea_sizes[0],
                                              res.d_node_size_ptr,
                                              all_shard_part_size * sizeof(int),
                                              cudaMemcpyDeviceToHost,
                                              stream));
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
-  cache.node_barrier_.Pause();
 
   size_t *h_remote_part_sizes = res.h_remote_part_sizes.data();
   size_t *h_remote_part_offsets = res.h_remote_part_offsets.data();
@@ -3835,20 +3843,24 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
   //  barrier_.wait();
   my_cache.node_barrier_.Resume();
   auto &comm = nccl_inter_comms_[gpu_id];
+  auto nccl_stream = resource_->comm_stream(gpu_id, 0);
   PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllGather(
       &res.d_node_size_ptr[rank_id_ * node_size_],
       reinterpret_cast<void *>(res.d_node_size_ptr),
       node_size_,
       ncclInt,
       comm,
-      stream));
+      nccl_stream));
+  PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(nccl_stream));
+  my_cache.node_barrier_.Pause();
+
   PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyAsync(&h_push_fea_sizes[0],
                                              res.d_node_size_ptr,
                                              all_shard_part_size * sizeof(int),
                                              cudaMemcpyDeviceToHost,
                                              stream));
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
-  my_cache.node_barrier_.Pause();
+
 
   size_t *h_remote_part_sizes = res.h_remote_part_sizes.data();
   size_t *h_remote_part_offsets = res.h_remote_part_offsets.data();
