@@ -617,9 +617,15 @@ int GraphDataGenerator::FillGraphIdShowClkTensor(int uniq_instance,
   int index_offset = 3 + slot_num_ * 2 + 5 * samples_.size();
   index_tensor_ptr_ = feed_vec_[index_offset]->mutable_data<int>(
       {total_instance}, this->place_);
+  int label_index_offset = index_offset;
   if (get_degree_) {
     degree_tensor_ptr_ = feed_vec_[index_offset + 1]->mutable_data<int>(
         {uniq_instance * edge_to_id_len_}, this->place_);
+    label_index_offset += 1;
+  }
+  if (cls_mode_) {
+    label_tensor_ptr_ = feed_vec_[label_index_offset]->mutable_data<int>(
+        {total_instance}, this->place_);
   }
 
   int len_samples = samples_.size();
@@ -691,6 +697,13 @@ int GraphDataGenerator::FillGraphIdShowClkTensor(int uniq_instance,
     cudaMemcpyAsync(degree_tensor_ptr_,
                     node_degree_vec_[index]->ptr(),
                     sizeof(int) * uniq_instance * edge_to_id_len_,
+                    cudaMemcpyDeviceToDevice,
+                    train_stream_);
+  }
+  if (cls_mode_) {
+    cudaMemcpyAsync(label_tensor_ptr_,
+                    label_vec_[index]->ptr(),
+                    sizeof(int) * total_instance,
                     cudaMemcpyDeviceToDevice,
                     train_stream_);
   }
@@ -803,7 +816,6 @@ int GraphDataGenerator::GenerateBatch() {
 int GraphDataGenerator::GenerateClsBatch() {
   int total_instance = 0;
   platform::CUDADeviceGuard guard(gpuid_);
-  int res = 0;
   if (sage_batch_count_ == sage_batch_num_) {
     return 0;
   }
@@ -3041,12 +3053,12 @@ void GraphDataGenerator::SetConfig(
     repeat_time_ = graph_config.sample_times_one_chunk();
     buf_size_ =
         once_sample_startid_len_ * walk_len_ * walk_degree_ * repeat_time_;
-    sage_mode_ = graph_config.sage_mode();
   } else {
     is_valid_ = graph_config.is_valid();
     is_test_ = graph_config.is_test();
   }
 
+  sage_mode_ = graph_config.sage_mode();
   debug_mode_ = graph_config.debug_mode();
   gpu_graph_training_ = graph_config.gpu_graph_training();
   // for graph embedding task, batch_size is the same as once_sample_startid_len_.

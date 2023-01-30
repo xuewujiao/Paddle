@@ -2739,14 +2739,17 @@ void GraphTable::build_graph_node_cls_info() {
     std::vector<std::vector<uint64_t>> keys;
     std::vector<std::vector<int>> labels;
     // TODO: opt, fuse 4 types into one api.
-    this->get_node_cls_id_and_label(1, node_idx, 1, &keys, &labels, 0); // train
+    this->get_node_cls_id_and_label(
+        GraphTableType::FEATURE_TABLE, node_idx, 1, &keys, &labels, 0); // train
     type_to_index_[node_idx] = cnt;
     graph_train_type_keys_[cnt] = std::move(keys[0]);
     graph_train_type_labels_[cnt] = std::move(labels[0]);
-    this->get_node_cls_id_and_label(1, node_idx, 1, &keys, &labels, 1); // val
+    this->get_node_cls_id_and_label(
+        GraphTableType::FEATURE_TABLE, node_idx, 1, &keys, &labels, 1); // val
     graph_val_type_keys_[cnt] = std::move(keys[0]);
     graph_val_type_labels_[cnt] = std::move(labels[0]);
-    this->get_node_cls_id_and_label(1, node_idx, 1, &keys, &labels, 2); // test
+    this->get_node_cls_id_and_label(
+        GraphTableType::FEATURE_TABLE, node_idx, 1, &keys, &labels, 2); // test
     graph_test_type_keys_[cnt] = std::move(keys[0]);
     graph_test_type_labels_[cnt] = std::move(labels[0]);
     cnt++;

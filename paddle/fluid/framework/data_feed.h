@@ -997,6 +997,7 @@ class GraphDataGenerator {
   int64_t* show_tensor_ptr_;
   int64_t* clk_tensor_ptr_;
   int* degree_tensor_ptr_;
+  int* label_tensor_ptr_;
 
   cudaStream_t train_stream_;
   cudaStream_t sample_stream_;
