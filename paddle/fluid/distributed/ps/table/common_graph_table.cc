@@ -534,7 +534,7 @@ void GraphTable::release_graph_edge() {
   clear_edge_shard();
 }
 
-void GraphTable::release_graph_node() {
+void GraphTable::release_graph_node(int mode) {
   build_graph_type_keys();
   if (FLAGS_graph_metapath_split_opt) {
     clear_feature_shard();
@@ -1320,7 +1320,10 @@ int32_t GraphTable::parse_edge_and_load(std::string etype2files,
 
 int32_t GraphTable::parse_node_and_load(std::string ntype2files,
                                         std::string graph_data_local_path,
-                                        int part_num) {
+                                        int part_num,
+                                        int mode) {
+  // mode = 0: load graph embedding dataset
+  // mode = 1: load graph node classification dataset
   std::vector<std::string> ntypes;
   std::unordered_map<std::string, std::string> node_to_nodedir;
   int res = parse_type_to_typepath(
@@ -1346,14 +1349,14 @@ int32_t GraphTable::parse_node_and_load(std::string ntype2files,
     return 0;
   }
   if (FLAGS_graph_load_in_parallel) {
-    int ret = this->load_nodes(npath_str, "");
+    int ret = this->load_nodes(npath_str, "", mode);
     if (ret != 0) {
       VLOG(0) << "Fail to load nodes, path[" << npath << "]";
       return -1;
     }
   } else {
     for (size_t j = 0; j < ntypes.size(); j++) {
-      int ret = this->load_nodes(npath_str, ntypes[j]);
+      int ret = this->load_nodes(npath_str, ntypes[j], mode);
       if (ret != 0) {
         VLOG(0) << "Fail to load nodes, path[" << npath << "], ntypes[" << ntypes[j] << "]";
         return -1;
@@ -1521,7 +1524,7 @@ int32_t GraphTable::get_nodes_ids_by_ranges(
 }
 
 std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
-    const std::string &path, const std::string &node_type, int idx) {
+    const std::string &path, const std::string &node_type, int idx, int mode) {
   std::ifstream file(path);
   std::string line;
   uint64_t local_count = 0;
@@ -1552,15 +1555,27 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
     size_t index = shard_id - shard_start;
     auto node = feature_shards[idx][index]->add_feature_node(id, false);
     if (node != NULL) {
-      node->set_feature_size(feat_name[idx].size());
-      for (int i = 1; i < num; ++i) {
-        auto &v = vals[i];
-        int ret = parse_feature(idx, v.ptr, v.len, node);
-        if (ret != 0) {
-          VLOG(0) << "Fail to parse feature, node_id[" << id << "]";
-          is_parse_node_fail_ = true;
-          return {0, 0};
+      if (mode == 0) {
+        node->set_feature_size(feat_name[idx].size());
+        for (int i = 1; i < num; ++i) {
+          auto &v = vals[i];
+          int ret = parse_feature(idx, v.ptr, v.len, node);
+          if (ret != 0) {
+            VLOG(0) << "Fail to parse feature, node_id[" << id << "]";
+            is_parse_node_fail_ = true;
+            return {0, 0};
+          }
         }
+      } else if (mode == 1) {
+        int node_mode = std::stoi(vals[1].to_string());
+        int node_label = std::stoi(vals[2].to_string());
+        node->set_node_mode(node_mode);
+        node->set_node_label(node_label);
+        // handle node feature...
+      } else {
+        VLOG(0) << "Non-support input mode, load node file fail!";
+        is_parse_node_fail_ = true;
+        return {0, 0};
       }
     }
     local_valid_count++;
@@ -1571,7 +1586,7 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
 }
 
 std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
-    const std::string &path) {
+    const std::string &path, int mode) {
   std::ifstream file(path);
   std::string line;
   uint64_t local_count = 0;
@@ -1609,27 +1624,43 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
 
     size_t index = shard_id - shard_start;
     auto node = feature_shards[idx][index]->add_feature_node(id, false);
+
     if (node != NULL) {
-      for (int i = 2; i < num; ++i) {
-        auto &v = vals[i];
-        int ret = parse_feature(idx, v.ptr, v.len, node);
-        if (ret != 0) {
-          VLOG(0) << "Fail to parse feature, node_id[" << id << "]";
-          is_parse_node_fail_ = true;
-          return {0, 0};
+      if (mode == 0) {
+        for (int i = 2; i < num; ++i) {
+          auto &v = vals[i];
+          int ret = parse_feature(idx, v.ptr, v.len, node);
+          if (ret != 0) {
+            VLOG(0) << "Fail to parse feature, node_id[" << id << "]";
+            is_parse_node_fail_ = true;
+            return {0, 0};
+          }
         }
+      } else if (mode == 1) {
+        int node_mode = std::stoi(vals[2].to_string());
+        int node_label = std::stoi(vals[3].to_string());
+        node->set_node_mode(node_mode);
+        node->set_node_label(node_label);
+        // handle node feature...
+      } else {
+        VLOG(0) << "Non-support input mode, load node file fail!";
+        is_parse_node_fail_ = true;
+        return {0, 0};
       }
     }
     local_valid_count++;
   }
+
   VLOG(2) << local_valid_count << "/" << local_count << " nodes from filepath->"
           << path;
   return {local_count, local_valid_count};
 }
 
 // TODO opt load all node_types in once reading
-int32_t GraphTable::load_nodes(const std::string &path, std::string node_type) {
+int32_t GraphTable::load_nodes(const std::string &path, std::string node_type,
+                               int mode) {
   auto paths = paddle::string::split_string<std::string>(path, ";");
+
   uint64_t count = 0;
   uint64_t valid_count = 0;
   int idx = 0;
@@ -1641,7 +1672,7 @@ int32_t GraphTable::load_nodes(const std::string &path, std::string node_type) {
     for (size_t i = 0; i < paths.size(); i++) {
       tasks.push_back(load_node_edge_task_pool->enqueue(
           [&, i, this]() -> std::pair<uint64_t, uint64_t> {
-            return parse_node_file(paths[i]);
+            return parse_node_file(paths[i], mode);
           }));
     }
     for (int i = 0; i < (int)tasks.size(); i++) {
@@ -1664,7 +1695,7 @@ int32_t GraphTable::load_nodes(const std::string &path, std::string node_type) {
     }
     for (auto path : paths) {
       VLOG(2) << "Begin GraphTable::load_nodes(), path[" << path << "]";
-      auto res = parse_node_file(path, node_type, idx);
+      auto res = parse_node_file(path, node_type, idx, mode);
       count += res.first;
       valid_count += res.second;
     }
@@ -2225,9 +2256,10 @@ int GraphTable::parse_feature(int idx,
   return 0;
 }
 // thread safe shard vector merge
+template <typename T>
 class MergeShardVector {
  public:
-  MergeShardVector(std::vector<std::vector<uint64_t>> *output, int slice_num) {
+  MergeShardVector(std::vector<std::vector<T>> *output, int slice_num) {
     _slice_num = slice_num;
     _shard_keys = output;
     _shard_keys->resize(slice_num);
@@ -2240,7 +2272,7 @@ class MergeShardVector {
     }
   }
   // merge shard keys
-  void merge(const std::vector<std::vector<uint64_t>> &shard_keys) {
+  void merge(const std::vector<std::vector<T>> &shard_keys) {
     // add to shard
     for (int shard_id = 0; shard_id < _slice_num; ++shard_id) {
       auto &dest = (*_shard_keys)[shard_id];
@@ -2255,13 +2287,13 @@ class MergeShardVector {
  private:
   int _slice_num = 0;
   std::mutex *_mutexs = nullptr;
-  std::vector<std::vector<uint64_t>> *_shard_keys;
+  std::vector<std::vector<T>> *_shard_keys;
 };
 
 int GraphTable::get_all_id(GraphTableType table_type,
                            int slice_num,
                            std::vector<std::vector<uint64_t>> *output) {
-  MergeShardVector shard_merge(output, slice_num);
+  MergeShardVector<uint64_t> shard_merge(output, slice_num);
   auto &search_shards = table_type == GraphTableType::EDGE_TABLE ? edge_shards : feature_shards;
   std::vector<std::future<size_t>> tasks;
   for (size_t idx = 0; idx < search_shards.size(); idx++) {
@@ -2285,7 +2317,7 @@ int GraphTable::get_all_id(GraphTableType table_type,
 
 int GraphTable::get_all_neighbor_id(
     GraphTableType table_type, int slice_num, std::vector<std::vector<uint64_t>> *output) {
-  MergeShardVector shard_merge(output, slice_num);
+  MergeShardVector<uint64_t> shard_merge(output, slice_num);
   auto &search_shards = table_type == GraphTableType::EDGE_TABLE ? edge_shards : feature_shards;
   std::vector<std::future<size_t>> tasks;
   for (size_t idx = 0; idx < search_shards.size(); idx++) {
@@ -2311,7 +2343,7 @@ int GraphTable::get_all_id(GraphTableType table_type,
                            int idx,
                            int slice_num,
                            std::vector<std::vector<uint64_t>> *output) {
-  MergeShardVector shard_merge(output, slice_num);
+  MergeShardVector<uint64_t> shard_merge(output, slice_num);
   auto &search_shards = table_type == GraphTableType::EDGE_TABLE ? edge_shards[idx] : feature_shards[idx];
   std::vector<std::future<size_t>> tasks;
   VLOG(3) << "begin task, task_pool_size_[" << task_pool_size_ << "]";
@@ -2332,12 +2364,47 @@ int GraphTable::get_all_id(GraphTableType table_type,
   return 0;
 }
 
+int GraphTable::get_node_cls_id_and_label(GraphTableType table_type,
+                                         int idx,
+                                         int slice_num,
+                                         std::vector<std::vector<uint64_t>> *keys,
+                                         std::vector<std::vector<int>> *labels,
+                                         int node_mode) {
+  MergeShardVector<uint64_t> shard_merge_keys(keys, slice_num);
+  MergeShardVector<int> shard_merge_labels(labels, slice_num);
+  auto &search_shards = table_type == GraphTableType::EDGE_TABLE ? edge_shards[idx] : feature_shards[idx];
+  std::vector<std::future<size_t>> tasks;
+  VLOG(3) << "begin task, task_pool_size_[" << task_pool_size_ << "]";
+  for (size_t i = 0; i < search_shards.size(); i++) {
+    tasks.push_back(_shards_task_pool[i % task_pool_size_]->enqueue(
+        [&search_shards, i, slice_num, node_mode, &shard_merge_keys,
+         &shard_merge_labels]() -> size_t {
+          std::vector<std::vector<uint64_t>> shard_keys;
+          std::vector<std::vector<int>> shard_labels;
+          size_t num =
+              search_shards[i]->get_node_cls_id_and_label(&shard_keys,
+                                                          &shard_labels,
+                                                          slice_num,
+                                                          node_mode);
+          // add to shard
+          shard_merge_keys.merge(shard_keys);
+          shard_merge_labels.merge(shard_labels);
+          return num;
+      }));
+  }
+  for (size_t i = 0; i < tasks.size(); ++i) {
+    tasks[i].wait();
+  }
+  VLOG(3) << "end task, task_pool_size_[" << task_pool_size_ << "]";
+  return 0;
+}
+
 int GraphTable::get_all_neighbor_id(
     GraphTableType table_type,
     int idx,
     int slice_num,
     std::vector<std::vector<uint64_t>> *output) {
-  MergeShardVector shard_merge(output, slice_num);
+  MergeShardVector<uint64_t> shard_merge(output, slice_num);
   auto &search_shards = table_type == GraphTableType::EDGE_TABLE ? edge_shards[idx] : feature_shards[idx];
   std::vector<std::future<size_t>> tasks;
   VLOG(3) << "begin task, task_pool_size_[" << task_pool_size_ << "]";
@@ -2364,7 +2431,7 @@ int GraphTable::get_all_feature_ids(
     int idx,
     int slice_num,
     std::vector<std::vector<uint64_t>> *output) {
-  MergeShardVector shard_merge(output, slice_num);
+  MergeShardVector<uint64_t> shard_merge(output, slice_num);
   auto &search_shards = table_type == GraphTableType::EDGE_TABLE ? edge_shards[idx] : feature_shards[idx];
   std::vector<std::future<size_t>> tasks;
   for (size_t i = 0; i < search_shards.size(); i++) {
@@ -2640,7 +2707,7 @@ void GraphTable::build_graph_type_keys() {
   VLOG(0) << "finish build_graph_type_keys";
 
   VLOG(0) << "begin insert feature into graph_total_keys";
-  // build feature embedding id
+  // build feature embedding id -> only slot use this.
   for (auto &it : this->feature_to_id) {
     auto node_idx = it.second;
     std::vector<std::vector<uint64_t>> keys;
@@ -2649,6 +2716,48 @@ void GraphTable::build_graph_type_keys() {
         graph_total_keys_.end(), keys[0].begin(), keys[0].end());
   }
   VLOG(0) << "finish insert feature into graph_total_keys";
+}
+
+void GraphTable::build_graph_node_cls_info() {
+  VLOG(0) << "begin build_graph_node_cls_info";
+  graph_train_type_keys_.clear();
+  graph_val_type_keys_.clear();
+  graph_test_type_keys_.clear();
+  graph_train_type_labels_.clear();
+  graph_val_type_labels_.clear();
+  graph_test_type_labels_.clear();
+  graph_train_type_keys_.resize(this->feature_to_id.size());
+  graph_val_type_keys_.resize(this->feature_to_id.size());
+  graph_test_type_keys_.resize(this->feature_to_id.size());
+  graph_train_type_labels_.resize(this->feature_to_id.size());
+  graph_val_type_labels_.resize(this->feature_to_id.size());
+  graph_test_type_labels_.resize(this->feature_to_id.size());
+
+  int cnt = 0;
+  for (auto &it : this->feature_to_id) {
+    auto node_idx = it.second;
+    std::vector<std::vector<uint64_t>> keys;
+    std::vector<std::vector<int>> labels;
+    // TODO: opt, fuse 4 types into one api.
+    this->get_node_cls_id_and_label(
+        GraphTableType::FEATURE_TABLE, node_idx, 1, &keys, &labels, 0); // train
+    type_to_index_[node_idx] = cnt;
+    graph_train_type_keys_[cnt] = std::move(keys[0]);
+    graph_train_type_labels_[cnt] = std::move(labels[0]);
+    this->get_node_cls_id_and_label(
+        GraphTableType::FEATURE_TABLE, node_idx, 1, &keys, &labels, 1); // val
+    graph_val_type_keys_[cnt] = std::move(keys[0]);
+    graph_val_type_labels_[cnt] = std::move(labels[0]);
+    this->get_node_cls_id_and_label(
+        GraphTableType::FEATURE_TABLE, node_idx, 1, &keys, &labels, 2); // test
+    graph_test_type_keys_[cnt] = std::move(keys[0]);
+    graph_test_type_labels_[cnt] = std::move(labels[0]);
+    cnt++;
+  }
+
+  // insert node feature...
+
+  VLOG(0) << "finish build_graph_node_cls_info";
 }
 
 }  // namespace distributed

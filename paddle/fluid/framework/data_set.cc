@@ -474,7 +474,7 @@ void DatasetImpl<T>::LoadIntoMemory() {
 
     for (int64_t i = 0; i < thread_num_; ++i) {
       load_threads.push_back(std::thread(
-          &paddle::framework::DataFeed::DoWalkandSage, readers_[i].get()));
+          &paddle::framework::DataFeed::PrepareGraphData, readers_[i].get()));
     }
     for (std::thread& t : load_threads) {
       t.join();

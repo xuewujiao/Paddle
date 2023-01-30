@@ -171,6 +171,126 @@ void GraphGpuWrapper::init_type_keys() {
   }
 }
 
+void GraphGpuWrapper::init_cls_conf() {
+  static std::mutex mutex;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (conf_initialized_) {
+      return;
+    }
+    VLOG(2) << "init node classification config";
+    conf_initialized_ = true;
+
+    int max_dev_id = 0;
+    for (size_t i = 0; i < device_id_mapping.size(); i++) {
+      if (device_id_mapping[i] > max_dev_id) {
+        max_dev_id = device_id_mapping[i];
+      }
+    }
+    global_node_type_start_.resize(max_dev_id + 1);
+    for (size_t i = 0; i < device_id_mapping.size(); i++) {
+      int dev_id = device_id_mapping[i];
+      auto &node_type_start = global_node_type_start_[i];
+      for (size_t idx = 0; idx < node_to_id.size(); idx++) {
+        node_type_start[idx] = 0;
+      }
+      cursor_.push_back(0);
+    }
+    init_graph_node_cls_keys();
+  }
+}
+
+void GraphGpuWrapper::shard_keys_and_labels_to_gpu(
+    size_t thread_num,
+    std::vector<std::vector<uint64_t>>& graph_type_keys,
+    std::vector<std::vector<int>>& graph_type_labels,
+    std::vector<std::vector<std::shared_ptr<phi::Allocation>>>* d_graph_type_keys,
+    std::vector<std::vector<std::shared_ptr<phi::Allocation>>>* d_graph_type_labels,
+    std::vector<std::vector<uint64_t>>* h_graph_type_len) {
+  std::vector<std::vector<uint64_t>> tmp_keys;
+  std::vector<std::vector<int>> tmp_labels;
+  tmp_keys.resize(thread_num);
+  tmp_labels.resize(thread_num);
+  (*d_graph_type_keys).resize(graph_type_keys.size());
+  (*d_graph_type_labels).resize(graph_type_labels.size());
+  (*h_graph_type_len).resize(graph_type_keys.size());  // Use for both keys and labels.
+  for (size_t f_idx = 0; f_idx < graph_type_keys.size(); f_idx++) {
+    for (size_t j = 0; j < tmp_keys.size(); j++) {
+      tmp_keys[j].clear();
+      tmp_labels[j].clear();
+    }
+    (*d_graph_type_keys)[f_idx].resize(thread_num);
+    (*d_graph_type_labels)[f_idx].resize(thread_num);
+    auto &type_keys = graph_type_keys[f_idx];
+    auto &type_labels = graph_type_labels[f_idx];
+    for (size_t j = 0; j < type_keys.size(); j++) {
+      uint64_t shard = type_keys[j] % thread_num;
+      tmp_keys[shard].emplace_back(type_keys[j]);
+      tmp_labels[shard].emplace_back(type_labels[j]);
+    }
+    for (size_t j = 0; j < thread_num; j++) {
+      (*h_graph_type_len)[f_idx].emplace_back(tmp_keys[j].size());
+    }
+    for (size_t j = 0; j < thread_num; j++) {
+      auto stream = get_local_stream(j);
+      int gpuid = device_id_mapping[j];
+      auto place = platform::CUDAPlace(gpuid);
+      platform::CUDADeviceGuard guard(gpuid);
+      (*d_graph_type_keys)[f_idx][j] =
+          memory::AllocShared(place, tmp_keys[j].size() * sizeof(uint64_t));
+      (*d_graph_type_labels)[f_idx][j] =
+          memory::AllocShared(place, tmp_labels[j].size() * sizeof(int));
+      cudaMemcpyAsync((*d_graph_type_keys)[f_idx][j]->ptr(),
+                      tmp_keys[j].data(),
+                      sizeof(uint64_t) * tmp_keys[j].size(),
+                      cudaMemcpyHostToDevice,
+                      stream);
+      cudaMemcpyAsync((*d_graph_type_labels)[f_idx][j]->ptr(),
+                      tmp_labels[j].data(),
+                      sizeof(int) * tmp_labels[j].size(),
+                      cudaMemcpyHostToDevice,
+                      stream);
+      // Do we need sync here?
+    }
+  }
+  for (int i = 0; i < thread_num; i++) {
+    auto stream = get_local_stream(i);
+    cudaStreamSynchronize(stream);
+  }
+}
+
+void GraphGpuWrapper::init_graph_node_cls_keys() {
+  // 将训练集、验证集、测试集的点划分到各个卡上。
+  size_t thread_num = device_id_mapping.size();
+
+  auto &graph_train_type_keys = get_graph_train_type_keys();
+  auto &graph_train_type_labels = get_graph_train_type_labels();
+  shard_keys_and_labels_to_gpu(thread_num,
+                               graph_train_type_keys,
+                               graph_train_type_labels,
+                               &d_graph_train_type_keys_,
+                               &d_graph_train_type_labels_,
+                               &h_graph_train_type_len_);
+
+  auto &graph_val_type_keys = get_graph_val_type_keys();
+  auto &graph_val_type_labels = get_graph_val_type_labels();
+  shard_keys_and_labels_to_gpu(thread_num,
+                               graph_val_type_keys,
+                               graph_val_type_labels,
+                               &d_graph_val_type_keys_,
+                               &d_graph_val_type_labels_,
+                               &h_graph_val_type_len_);
+
+  auto &graph_test_type_keys = get_graph_test_type_keys();
+  auto &graph_test_type_labels = get_graph_test_type_labels();
+  shard_keys_and_labels_to_gpu(thread_num,
+                               graph_test_type_keys,
+                               graph_test_type_labels,
+                               &d_graph_test_type_keys_,
+                               &d_graph_test_type_labels_,
+                               &h_graph_test_type_len_);
+}
+
 void GraphGpuWrapper::init_metapath(std::string cur_metapath,
                                     int cur_metapath_index,
                                     int cur_metapath_len) {
@@ -466,10 +586,11 @@ int GraphGpuWrapper::load_node_file(std::string name, std::string filepath) {
 
 int GraphGpuWrapper::load_node_file(std::string ntype2files,
                                     std::string graph_data_local_path,
-                                    int part_num) {
+                                    int part_num,
+                                    int mode) {
   return ((GpuPsGraphTable *)graph_table)
       ->cpu_graph_table_->parse_node_and_load(
-          ntype2files, graph_data_local_path, part_num);
+          ntype2files, graph_data_local_path, part_num, mode);
 }
 
 void GraphGpuWrapper::load_node_and_edge(std::string etype2files,
@@ -819,9 +940,9 @@ void GraphGpuWrapper::release_graph_edge() {
       ->cpu_graph_table_->release_graph_edge();
 }
 
-void GraphGpuWrapper::release_graph_node() {
+void GraphGpuWrapper::release_graph_node(int mode) {
   return ((GpuPsGraphTable *)graph_table)
-      ->cpu_graph_table_->release_graph_node();
+      ->cpu_graph_table_->release_graph_node(mode);
 }
 
 std::vector<uint64_t> &GraphGpuWrapper::get_graph_total_keys() {
@@ -867,6 +988,30 @@ std::string &GraphGpuWrapper::get_edge_type_size() {
   std::string delim = ";";
   edge_type_size_str_ = paddle::string::join_strings(edge_type_size, delim);
   return edge_type_size_str_;
+}
+
+std::vector<std::vector<uint64_t>> &GraphGpuWrapper::get_graph_train_type_keys() {
+  return ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->graph_train_type_keys_;
+}
+
+std::vector<std::vector<uint64_t>> &GraphGpuWrapper::get_graph_val_type_keys() {
+  return ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->graph_val_type_keys_;
+}
+
+std::vector<std::vector<uint64_t>> &GraphGpuWrapper::get_graph_test_type_keys() {
+  return ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->graph_test_type_keys_;
+}
+
+std::vector<std::vector<int>> &GraphGpuWrapper::get_graph_train_type_labels() {
+  return ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->graph_train_type_labels_;
+}
+
+std::vector<std::vector<int>> &GraphGpuWrapper::get_graph_val_type_labels() {
+  return ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->graph_val_type_labels_;
+}
+
+std::vector<std::vector<int>> &GraphGpuWrapper::get_graph_test_type_labels() {
+  return ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->graph_test_type_labels_;
 }
 
 #endif

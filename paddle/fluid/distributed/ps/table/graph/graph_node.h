@@ -62,10 +62,14 @@ class Node {
     return 0;
   }
   virtual void set_feature(int idx, const std::string &str) {}
+  virtual void set_node_mode(int node_mode) {}
+  virtual void set_node_label(int node_label) {}
   virtual void set_feature_size(int size) {}
   virtual void shrink_to_fit() {}
   virtual int get_feature_size() { return 0; }
   virtual size_t get_neighbor_size() { return 0; }
+  virtual int get_node_mode() { return 0; }
+  virtual int get_node_label() { return 0; }
 
  protected:
   uint64_t id;
@@ -198,8 +202,16 @@ class FeatureNode : public Node {
     }
     this->feature[idx] = str;
   }
+  virtual void set_node_mode(int node_mode) {
+    this->node_mode = node_mode;
+  }
+  virtual void set_node_label(int node_label) {
+    this->node_label = node_label;
+  }
   virtual void set_feature_size(int size) { this->feature.resize(size); }
   virtual int get_feature_size() { return this->feature.size(); }
+  virtual int get_node_mode() { return this->node_mode; }
+  virtual int get_node_label() { return this->node_label; }
   virtual void shrink_to_fit() {
     feature.shrink_to_fit();
     for (auto &slot : feature) {
@@ -279,6 +291,8 @@ class FeatureNode : public Node {
 
  protected:
   std::vector<std::string> feature;
+  int node_mode;
+  int node_label;
 };
 
 }  // namespace distributed
