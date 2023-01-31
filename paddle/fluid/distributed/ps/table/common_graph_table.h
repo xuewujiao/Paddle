@@ -124,7 +124,7 @@ class GraphShard {
       std::vector<std::vector<int>> *shard_labels,
       int slice_num, int node_mode) {
     // node_mode
-    // train: 0, val: 1, test: 2, other:-1
+    // train: 0, val: 1, test: 2
     int bucket_num = bucket.size();
     shard_keys->resize(slice_num);
     shard_labels->resize(slice_num);

@@ -617,14 +617,12 @@ int GraphDataGenerator::FillGraphIdShowClkTensor(int uniq_instance,
   int index_offset = 3 + slot_num_ * 2 + 5 * samples_.size();
   index_tensor_ptr_ = feed_vec_[index_offset]->mutable_data<int>(
       {total_instance}, this->place_);
-  int label_index_offset = index_offset;
   if (get_degree_) {
-    degree_tensor_ptr_ = feed_vec_[index_offset + 1]->mutable_data<int>(
+    degree_tensor_ptr_ = feed_vec_[++index_offset]->mutable_data<int>(
         {uniq_instance * edge_to_id_len_}, this->place_);
-    label_index_offset += 1;
   }
   if (cls_mode_) {
-    label_tensor_ptr_ = feed_vec_[label_index_offset]->mutable_data<int>(
+    label_tensor_ptr_ = feed_vec_[++index_offset]->mutable_data<int>(
         {total_instance}, this->place_);
   }
 
@@ -672,37 +670,38 @@ int GraphDataGenerator::FillGraphIdShowClkTensor(int uniq_instance,
                     cudaMemcpyHostToDevice,
                     train_stream_);
     cudaMemcpyAsync(edges_src_tensor_ptr_[i],
-                    graph_edges[i * 2]->ptr(),
+                    reinterpret_cast<int64_t *>(graph_edges[i * 2]->ptr()),
                     sizeof(int64_t) * neighbor_len,
                     cudaMemcpyDeviceToDevice,
                     train_stream_);
     cudaMemcpyAsync(edges_dst_tensor_ptr_[i],
-                    graph_edges[i * 2 + 1]->ptr(),
+                    reinterpret_cast<int64_t *>(graph_edges[i * 2 + 1]->ptr()),
                     sizeof(int64_t) * neighbor_len,
                     cudaMemcpyDeviceToDevice,
                     train_stream_);
   }
 
   cudaMemcpyAsync(id_tensor_ptr_,
-                  final_sage_nodes_vec_[index]->ptr(),
+                  reinterpret_cast<int64_t *>(final_sage_nodes_vec_[index]->ptr()),
                   sizeof(int64_t) * uniq_instance,
                   cudaMemcpyDeviceToDevice,
                   train_stream_);
   cudaMemcpyAsync(index_tensor_ptr_,
-                  inverse_vec_[index]->ptr(),
+                  reinterpret_cast<int *>(inverse_vec_[index]->ptr()),
                   sizeof(int) * total_instance,
                   cudaMemcpyDeviceToDevice,
                   train_stream_);
   if (get_degree_) {
     cudaMemcpyAsync(degree_tensor_ptr_,
-                    node_degree_vec_[index]->ptr(),
+                    reinterpret_cast<int *>(node_degree_vec_[index]->ptr()),
                     sizeof(int) * uniq_instance * edge_to_id_len_,
                     cudaMemcpyDeviceToDevice,
                     train_stream_);
   }
   if (cls_mode_) {
+    // We suppose node label is int type currently.
     cudaMemcpyAsync(label_tensor_ptr_,
-                    label_vec_[index]->ptr(),
+                    reinterpret_cast<int *>(label_vec_[index]->ptr()),
                     sizeof(int) * total_instance,
                     cudaMemcpyDeviceToDevice,
                     train_stream_);
@@ -821,7 +820,7 @@ int GraphDataGenerator::GenerateClsBatch() {
   }
   FillGraphIdShowClkTensor(uniq_instance_vec_[sage_batch_count_],
                            total_instance_vec_[sage_batch_count_],
-                           sage_batch_count_);  // need to modify to cls mode.
+                           sage_batch_count_);
 
   offset_.clear();
   offset_.push_back(0);
@@ -2173,13 +2172,15 @@ void GraphDataGenerator::DoSage() {
 }
 
 void GraphDataGenerator::clear_gpu_mem() {
-  d_len_per_row_.reset();
-  d_sample_keys_.reset();
-  d_prefix_sum_.reset();
-  for (size_t i = 0; i < d_sampleidx2rows_.size(); i++) {
-    d_sampleidx2rows_[i].reset();
+  if (!cls_mode_) {
+    d_len_per_row_.reset();
+    d_sample_keys_.reset();
+    d_prefix_sum_.reset();
+    for (size_t i = 0; i < d_sampleidx2rows_.size(); i++) {
+      d_sampleidx2rows_[i].reset();
+    }
+    delete table_;
   }
-  delete table_;
   if (sage_mode_) {
     d_reindex_table_key_.reset();
     d_reindex_table_value_.reset();
@@ -2253,13 +2254,15 @@ int GraphDataGenerator::FillInferBuf() {
 }
 
 void GraphDataGenerator::ClearSampleState() {
-  auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
-  auto &finish_node_type = gpu_graph_ptr->finish_node_type_[gpuid_];
-  auto &node_type_start = gpu_graph_ptr->node_type_start_[gpuid_];
-  finish_node_type.clear();
-  for (auto iter = node_type_start.begin(); iter != node_type_start.end();
-       iter++) {
-    iter->second = 0;
+  if (!cls_mode_) {
+    auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
+    auto &finish_node_type = gpu_graph_ptr->finish_node_type_[gpuid_];
+    auto &node_type_start = gpu_graph_ptr->node_type_start_[gpuid_];
+    finish_node_type.clear();
+    for (auto iter = node_type_start.begin(); iter != node_type_start.end();
+         iter++) {
+      iter->second = 0;
+    }
   }
 }
 
@@ -2766,7 +2769,7 @@ void GraphDataGenerator::AllocResource(int thread_id,
   debug_gpu_memory_info(gpuid_, "AllocResource start");
 
   platform::CUDADeviceGuard guard(gpuid_);
-  if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
+  if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM && !cls_mode_) {
     if (gpu_graph_training_) {
       table_ = new HashTable<uint64_t, uint64_t>(
           train_table_cap_ / FLAGS_gpugraph_hbm_table_load_factor);
@@ -2782,10 +2785,17 @@ void GraphDataGenerator::AllocResource(int thread_id,
   train_stream_ = dynamic_cast<phi::GPUContext *>(
                       platform::DeviceContextPool::Instance().Get(place_))
                       ->stream();
+
   if (!sage_mode_) {
     slot_num_ = (feed_vec.size() - 3) / 2;
   } else {
-    slot_num_ = (feed_vec.size() - 4 - samples_.size() * 5) / 2;
+    int tmp = 4;
+    if (!cls_mode_) {
+      tmp = get_degree_ == true ? tmp + 1 : tmp;
+    } else {
+      tmp = get_degree_ == true ? tmp + 2 : tmp + 1;
+    }
+    slot_num_ = (feed_vec.size() - tmp - samples_.size() * 5) / 2;
   }
 
   if (gpu_graph_training_ && FLAGS_graph_metapath_split_opt) {

@@ -535,7 +535,15 @@ void GraphTable::release_graph_edge() {
 }
 
 void GraphTable::release_graph_node(int mode) {
-  build_graph_type_keys();
+  if (mode == 0) {
+    build_graph_type_keys();
+  } else if (mode == 1) {
+    build_graph_node_cls_info();
+  } else {
+    VLOG(0) << "Non-supported input mode, release graph node fail!";
+    return;
+  }
+
   if (FLAGS_graph_metapath_split_opt) {
     clear_feature_shard();
   } else {
@@ -1573,7 +1581,7 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
         node->set_node_label(node_label);
         // handle node feature...
       } else {
-        VLOG(0) << "Non-support input mode, load node file fail!";
+        VLOG(0) << "Non-supported input mode, load node file fail!";
         is_parse_node_fail_ = true;
         return {0, 0};
       }
@@ -2707,7 +2715,7 @@ void GraphTable::build_graph_type_keys() {
   VLOG(0) << "finish build_graph_type_keys";
 
   VLOG(0) << "begin insert feature into graph_total_keys";
-  // build feature embedding id -> only slot use this.
+  // build feature embedding id
   for (auto &it : this->feature_to_id) {
     auto node_idx = it.second;
     std::vector<std::vector<uint64_t>> keys;
