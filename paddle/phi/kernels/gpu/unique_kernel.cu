@@ -232,7 +232,7 @@ static void UniqueFlattendCUDATensor(const Context& context,
                                 in_data_hat + num_input,
                                 inv_loc_data_ptr,
                                 not_equal);
-    cudaMemset(inv_loc_data_ptr, 0, sizeof(IndexT));
+    cudaMemsetAsync(inv_loc_data_ptr, 0, sizeof(IndexT), context.stream());
     size_t temp_storage_bytes = 0;
     cub::DeviceScan::InclusiveSum(NULL,
                                   temp_storage_bytes,

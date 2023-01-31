@@ -272,31 +272,40 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::reset_table(
                  device_num_);
 #if defined(PADDLE_WITH_CUDA)
   platform::CUDADeviceGuard guard(resource_->dev_id(dev_id));
+  auto stream = resource_->local_stream(dev_id, 0);
 #endif
   size_t need_capacity = capacity / load_factor_;
   if (!multi_mf_dim_) {
     auto table = tables_[dev_id];
     if (static_cast<size_t>(table->size()) < need_capacity) {
       delete table;
+#if defined(PADDLE_WITH_CUDA)
+      table = new Table(need_capacity, stream);
+#else
       table = new Table(need_capacity);
+#endif
       table->set_sparse_sgd(sgd_config);
       table->set_embedx_sgd(sgd_config);
       tables_[dev_id] = table;
     } else {
-      table->clear();
+      table->clear(stream);
     }
     table->set_mode(infer_mode);
   } else {
     auto table = ptr_tables_[dev_id];
     if (static_cast<size_t>(table->size()) < need_capacity) {
       delete table;
+#if defined(PADDLE_WITH_CUDA)
+      table = new PtrTable(need_capacity, stream);
+#else
       table = new PtrTable(need_capacity);
+#endif
       table->set_feature_value_size(pull_type_size_, grad_type_size_);
       table->set_sparse_sgd(sgd_config);
       table->set_embedx_sgd(sgd_config);
       ptr_tables_[dev_id] = table;
     } else {
-      table->clear();
+      table->clear(stream);
     }
     table->set_mode(infer_mode);
   }

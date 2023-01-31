@@ -33,6 +33,9 @@ limitations under the License. */
 #include "paddle/phi/kernels/funcs/eigen/common.h"
 #include "paddle/phi/kernels/funcs/math_function_impl.h"
 #include "unsupported/Eigen/CXX11/Tensor"
+#ifdef PADDLE_WITH_XPU
+#include "paddle/fluid/platform/device/xpu/xpu_info.h"
+#endif
 
 namespace phi {
 namespace funcs {
@@ -138,23 +141,116 @@ DEFINE_CPU_TRANS_NORMAL(phi::dtype::complex<float>);
 DEFINE_CPU_TRANS_NORMAL(phi::dtype::complex<double>);
 
 struct TensorSetConstantCPU {
-  TensorSetConstantCPU(paddle::framework::Tensor* tensor, float value)
+  TensorSetConstantCPU(paddle::framework::Tensor* tensor, const void* value)
       : tensor_(tensor), value_(value) {}
   template <typename T>
   void apply() const {
     auto cpu = phi::CPUPlace();
     auto* begin = tensor_->mutable_data<T>(cpu);
-    std::fill(begin, begin + tensor_->numel(), static_cast<T>(value_));
+    const T* num = reinterpret_cast<const T*>(value_);
+    std::fill(begin, begin + tensor_->numel(), static_cast<T>(*num));
   }
   paddle::framework::Tensor* tensor_;
-  float value_;
+  const void* value_;
 };
-
+struct TensorSetConstantEx {
+  TensorSetConstantEx(
+      paddle::framework::Tensor* tensor,
+      const void* value,
+      paddle::platform::Place place)
+      : tensor_(tensor), value_(value), place_(place) {}
+  template <typename T>
+  void apply() const {
+    auto* data = tensor_->mutable_data<T>(place_);
+    int numel = tensor_->numel();
+    const T* num = reinterpret_cast<const T*>(value_);
+    if (paddle::platform::is_cpu_place(place_)) {
+      std::fill(data, data + numel, static_cast<T>(*num));
+    } else {
+      std::unique_ptr<T[]> data_cpu(new T[numel]);
+      std::fill(data_cpu.get(), data_cpu.get() + numel, static_cast<T>(*num));
+      paddle::memory::Copy(place_,
+                       data,
+                       phi::CPUPlace(),
+                       static_cast<void*>(data_cpu.get()),
+                       numel * sizeof(T));
+    }
+  }
+  paddle::framework::Tensor* tensor_;
+  const void* value_;
+  paddle::platform::Place place_;
+};
+#ifdef PADDLE_WITH_XPU
+template <typename T>
+class XPUTensorTrait {
+ public:
+  using Type = T;
+};
+template <>
+class XPUTensorTrait<phi::dtype::float16> {
+ public:
+  using Type = ::float16;
+};
+template <>
+class XPUTensorTrait<phi::dtype::bfloat16> {
+ public:
+  using Type = ::float16;
+};
+template<>
+class XPUTensorTrait<phi::dtype::complex<double>> {
+public:
+  using Type = int64_t;
+};
+template<>
+class XPUTensorTrait<phi::dtype::complex<float>> {
+public:
+  using Type = float;
+};
+template <>
+class XPUTensorTrait<unsigned char> {
+ public:
+  using Type = bool;
+};
+template <>
+class XPUTensorTrait<double> {
+ public:
+  using Type = int64_t;
+};
+struct TensorSetConstantXPU {
+  TensorSetConstantXPU(const paddle::platform::DeviceContext& context,
+                       paddle::framework::Tensor* tensor,
+                       const void* value,
+                       paddle::platform::Place place)
+      : context_(context), tensor_(tensor), value_(value), place_(place) {}
+  template <typename T>
+  void apply() const {
+    auto* data = tensor_->mutable_data<T>(place_);
+    int numel = tensor_->numel();
+    using XPUInTDType = typename XPUTensorTrait<T>::Type;
+    float num = static_cast<float>(*reinterpret_cast<const T*>(value_));
+    auto dev_ctx = reinterpret_cast<const phi::XPUContext *>(&context_);
+    int ret = xpu::constant(dev_ctx->x_context(),
+       reinterpret_cast<XPUInTDType *>(data),
+       numel,
+       static_cast<XPUInTDType>(num));
+    PADDLE_ENFORCE_EQ(
+        ret,
+        XPU_SUCCESS,
+        phi::errors::External("XPU CONSTANT API return wrong value[%d %s].",
+                              ret,
+                              XPUAPIErrorMsg[ret]));
+  }
+  const paddle::platform::DeviceContext& context_;
+  paddle::framework::Tensor* tensor_;
+  const void* value_;
+  paddle::platform::Place place_;
+};
+#endif
 template <>
 void set_constant_with_place<paddle::platform::XPUPlace>(
     const paddle::platform::DeviceContext& context,
     paddle::framework::Tensor* tensor,
-    float value) {
+    const void* value) {
   PADDLE_THROW(phi::errors::Unimplemented("XPUPlace is not supported"));
 }
 
@@ -162,7 +258,7 @@ template <>
 void set_constant_with_place<paddle::platform::NPUPlace>(
     const paddle::platform::DeviceContext& context,
     paddle::framework::Tensor* tensor,
-    float value) {
+    const void* value) {
   PADDLE_THROW(phi::errors::Unimplemented("NPUPlace is not supported"));
 }
 
@@ -170,7 +266,7 @@ template <>
 void set_constant_with_place<paddle::platform::NPUPinnedPlace>(
     const paddle::platform::DeviceContext& context,
     paddle::framework::Tensor* tensor,
-    float value) {
+    const void* value) {
   PADDLE_THROW(phi::errors::Unimplemented("NPUPinnedPlace is not supported"));
 }
 
@@ -178,7 +274,7 @@ template <>
 void set_constant_with_place<paddle::platform::IPUPlace>(
     const paddle::platform::DeviceContext& context,
     paddle::framework::Tensor* tensor,
-    float value) {
+    const void* value) {
   PADDLE_THROW(phi::errors::Unimplemented("IPUPlace is not supported"));
 }
 
@@ -186,7 +282,7 @@ template <>
 void set_constant_with_place<paddle::platform::CustomPlace>(
     const paddle::platform::DeviceContext& context,
     paddle::framework::Tensor* tensor,
-    float value) {
+    const void* value) {
   PADDLE_THROW(phi::errors::Unimplemented("CustomPlace is not supported"));
 }
 
@@ -194,7 +290,7 @@ template <>
 void set_constant_with_place<phi::CPUPlace>(
     const paddle::platform::DeviceContext& context,
     paddle::framework::Tensor* tensor,
-    float value) {
+    const void* value) {
   phi::VisitDataType(tensor->dtype(), TensorSetConstantCPU(tensor, value));
 }
 
@@ -202,7 +298,7 @@ template <>
 void set_constant_with_place<paddle::platform::MLUPlace>(
     const paddle::platform::DeviceContext& context,
     paddle::framework::Tensor* tensor,
-    float value) {
+    const void* value) {
   PADDLE_THROW(phi::errors::Unimplemented("MLUPlace is not supported"));
 }
 
@@ -210,7 +306,7 @@ template <>
 void set_constant_with_place<paddle::platform::CUDAPinnedPlace>(
     const paddle::platform::DeviceContext& context,
     paddle::framework::Tensor* tensor,
-    float value) {
+    const void* value) {
   phi::VisitDataType(tensor->dtype(), TensorSetConstantCPU(tensor, value));
 }
 
@@ -218,7 +314,7 @@ struct TensorSetConstantWithPlace
     : public std::unary_function<paddle::platform::Place, void> {
   TensorSetConstantWithPlace(const paddle::platform::DeviceContext& context,
                              paddle::framework::Tensor* tensor,
-                             float value)
+                             const void* value)
       : context_(context), tensor_(tensor), value_(value) {}
 
   template <typename Place>
@@ -228,25 +324,27 @@ struct TensorSetConstantWithPlace
 
   const paddle::platform::DeviceContext& context_;
   paddle::framework::Tensor* tensor_;
-  float value_;
+  const void* value_;
 };
 
 void set_constant(const paddle::platform::DeviceContext& context,
                   paddle::framework::Tensor* tensor,
-                  float value) {
-  TensorSetConstantWithPlace func(context, tensor, value);
-#ifdef PADDLE_WITH_CUSTOM_DEVICE
-  if (paddle::platform::is_custom_place(context.GetPlace())) {
-    func(phi::CPUPlace());
-    return;
-  }
-#endif
+                  const void* value) {
+  auto place = context.GetPlace();
+  if (paddle::platform::is_gpu_place(place)) {
 #if defined(PADDLE_WITH_CUDA) || defined(PADDLE_WITH_HIP)
-  // tensor->place().apply_visitor(func);
-  paddle::platform::VisitPlace(tensor->place(), func);
-#else
-  func(phi::CPUPlace());
+    TensorSetConstantWithPlace func(context, tensor, value);
+    paddle::platform::VisitPlace(tensor->place(), func);
 #endif
+  } else if (paddle::platform::is_xpu_place(place)) {
+#ifdef PADDLE_WITH_XPU
+    phi::VisitDataType(tensor->dtype(),
+        TensorSetConstantXPU(context, tensor, value, place));
+#endif
+  } else {
+    phi::VisitDataType(tensor->dtype(),
+        TensorSetConstantEx(tensor, value, place));
+  }
 }
 
 template struct ColwiseSum<phi::CPUContext, float>;
