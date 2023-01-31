@@ -18,6 +18,10 @@
 #include "paddle/fluid/framework/fleet/heter_ps/gpu_graph_utils.h"
 #include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_ps_table.h"
 #include "paddle/fluid/framework/fleet/heter_ps/heter_resource.h"
+
+#if defined(PADDLE_WITH_GLOO) && defined(PADDLE_WITH_GPU_GRAPH)
+#include "paddle/fluid/framework/fleet/gloo_wrapper.h"
+#endif
 DECLARE_int32(gpugraph_storage_mode);
 DECLARE_bool(graph_metapath_split_opt);
 namespace paddle {
@@ -287,11 +291,14 @@ int GraphGpuWrapper::get_all_id(int table_type,
                                 int slice_num,
                                 std::vector<std::vector<uint64_t>> *output) {
   return ((GpuPsGraphTable *)graph_table)
-      ->cpu_graph_table_->get_all_id((GraphTableType)table_type, slice_num, output);
+      ->cpu_graph_table_->get_all_id(
+          (GraphTableType)table_type, slice_num, output);
 }
 
-int GraphGpuWrapper::get_all_neighbor_id(GraphTableType table_type,
-        int slice_num, std::vector<std::vector<uint64_t>> *output) {
+int GraphGpuWrapper::get_all_neighbor_id(
+    GraphTableType table_type,
+    int slice_num,
+    std::vector<std::vector<uint64_t>> *output) {
   return ((GpuPsGraphTable *)graph_table)
       ->cpu_graph_table_->get_all_neighbor_id(table_type, slice_num, output);
 }
@@ -301,23 +308,28 @@ int GraphGpuWrapper::get_all_id(int table_type,
                                 int slice_num,
                                 std::vector<std::vector<uint64_t>> *output) {
   return ((GpuPsGraphTable *)graph_table)
-      ->cpu_graph_table_->get_all_id((GraphTableType)table_type, idx, slice_num, output);
+      ->cpu_graph_table_->get_all_id(
+          (GraphTableType)table_type, idx, slice_num, output);
 }
 
-int GraphGpuWrapper::get_all_neighbor_id(GraphTableType table_type,
+int GraphGpuWrapper::get_all_neighbor_id(
+    GraphTableType table_type,
     int idx,
     int slice_num,
     std::vector<std::vector<uint64_t>> *output) {
   return ((GpuPsGraphTable *)graph_table)
-      ->cpu_graph_table_->get_all_neighbor_id(table_type, idx, slice_num, output);
+      ->cpu_graph_table_->get_all_neighbor_id(
+          table_type, idx, slice_num, output);
 }
 
-int GraphGpuWrapper::get_all_feature_ids(GraphTableType table_type,
+int GraphGpuWrapper::get_all_feature_ids(
+    GraphTableType table_type,
     int idx,
     int slice_num,
     std::vector<std::vector<uint64_t>> *output) {
   return ((GpuPsGraphTable *)graph_table)
-      ->cpu_graph_table_->get_all_feature_ids(table_type, idx, slice_num, output);
+      ->cpu_graph_table_->get_all_feature_ids(
+          table_type, idx, slice_num, output);
 }
 
 int GraphGpuWrapper::get_node_embedding_ids(
@@ -442,14 +454,18 @@ void GraphGpuWrapper::load_edge_file(std::string name,
   }
 }
 
-void GraphGpuWrapper::load_edge_file(std::string etype2files,
-                                     std::string graph_data_local_path,
-                                     int part_num,
-                                     bool reverse,
-                                     const std::vector<bool>& is_reverse_edge_map) {
+void GraphGpuWrapper::load_edge_file(
+    std::string etype2files,
+    std::string graph_data_local_path,
+    int part_num,
+    bool reverse,
+    const std::vector<bool> &is_reverse_edge_map) {
   ((GpuPsGraphTable *)graph_table)
-      ->cpu_graph_table_->parse_edge_and_load(
-          etype2files, graph_data_local_path, part_num, reverse, is_reverse_edge_map);
+      ->cpu_graph_table_->parse_edge_and_load(etype2files,
+                                              graph_data_local_path,
+                                              part_num,
+                                              reverse,
+                                              is_reverse_edge_map);
 }
 
 int GraphGpuWrapper::load_node_file(std::string name, std::string filepath) {
@@ -472,16 +488,20 @@ int GraphGpuWrapper::load_node_file(std::string ntype2files,
           ntype2files, graph_data_local_path, part_num);
 }
 
-void GraphGpuWrapper::load_node_and_edge(std::string etype2files,
-                                         std::string ntype2files,
-                                         std::string graph_data_local_path,
-                                         int part_num,
-                                         bool reverse,
-                                         const std::vector<bool>& is_reverse_edge_map) {
+void GraphGpuWrapper::load_node_and_edge(
+    std::string etype2files,
+    std::string ntype2files,
+    std::string graph_data_local_path,
+    int part_num,
+    bool reverse,
+    const std::vector<bool> &is_reverse_edge_map) {
   ((GpuPsGraphTable *)graph_table)
-      ->cpu_graph_table_->load_node_and_edge_file(
-          etype2files, ntype2files, graph_data_local_path, part_num, reverse,
-          is_reverse_edge_map);
+      ->cpu_graph_table_->load_node_and_edge_file(etype2files,
+                                                  ntype2files,
+                                                  graph_data_local_path,
+                                                  part_num,
+                                                  reverse,
+                                                  is_reverse_edge_map);
 }
 
 void GraphGpuWrapper::add_table_feat_conf(std::string table_name,
@@ -542,9 +562,26 @@ void GraphGpuWrapper::init_service() {
   resource->enable_p2p();
   GpuPsGraphTable *g = new GpuPsGraphTable(resource, id_to_edge.size());
   size_t gpu_num = device_id_mapping.size();
+#if defined(PADDLE_WITH_GLOO) && defined(PADDLE_WITH_GPU_GRAPH)
+  auto gloo = paddle::framework::GlooWrapper::GetInstance();
+  if (gloo->Size() > 1) {
+    if (!gloo->IsInitialized()) {
+      VLOG(0) << "GLOO is not inited";
+      gloo->Init();
+    }
+    node_num_ = gloo->Size();
+    node_id_ = gloo->Rank();
+    g->set_node_num(node_num_);
+    g->set_node_id(node_id_);
+    VLOG(0) << "GraphGpuWrapper Set node_num:" << node_num_
+            << " rank:" << node_id_;
+  }
+#endif
   g->init_cpu_table(table_proto, gpu_num);
   g->cpu_graph_table_->set_feature_separator(feature_separator_);
   g->cpu_graph_table_->set_slot_feature_separator(slot_feature_separator_);
+  g->cpu_graph_table_->set_node_num(node_num_);
+  g->cpu_graph_table_->set_node_id(node_id_);
   graph_table = (char *)g;
   upload_num = gpu_num;
   upload_task_pool.reset(new ::ThreadPool(upload_num));
@@ -564,7 +601,8 @@ void GraphGpuWrapper::upload_batch(int table_type,
   VLOG(2) << "cur edge: " << edge_type << ", edge_idx: " << edge_idx;
   std::vector<std::vector<uint64_t>> ids;
   ((GpuPsGraphTable *)graph_table)
-      ->cpu_graph_table_->get_all_id((GraphTableType)table_type, edge_idx, slice_num, &ids);
+      ->cpu_graph_table_->get_all_id(
+          (GraphTableType)table_type, edge_idx, slice_num, &ids);
   debug_gpu_memory_info("upload_batch node start");
   GpuPsGraphTable *g = (GpuPsGraphTable *)graph_table;
   std::vector<std::future<int>> tasks;
@@ -586,7 +624,9 @@ void GraphGpuWrapper::upload_batch(int table_type,
 }
 
 // feature table
-void GraphGpuWrapper::upload_batch(int table_type, int slice_num, int slot_num) {
+void GraphGpuWrapper::upload_batch(int table_type,
+                                   int slice_num,
+                                   int slot_num) {
   if (table_type == GraphTableType::FEATURE_TABLE &&
       (FLAGS_gpugraph_storage_mode == paddle::framework::GpuGraphStorageMode::
                                           MEM_EMB_FEATURE_AND_GPU_GRAPH ||
@@ -596,7 +636,8 @@ void GraphGpuWrapper::upload_batch(int table_type, int slice_num, int slot_num) 
   }
   std::vector<std::vector<uint64_t>> node_ids;
   ((GpuPsGraphTable *)graph_table)
-      ->cpu_graph_table_->get_all_id((GraphTableType)table_type, slice_num, &node_ids);
+      ->cpu_graph_table_->get_all_id(
+          (GraphTableType)table_type, slice_num, &node_ids);
   debug_gpu_memory_info("upload_batch feature start");
   GpuPsGraphTable *g = (GpuPsGraphTable *)graph_table;
   std::vector<std::future<int>> tasks;

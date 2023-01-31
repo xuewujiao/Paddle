@@ -364,8 +364,8 @@ void PSGPUWrapper::add_slot_feature(std::shared_ptr<HeterContext> gpu_task) {
   // 8卡数据分片
   size_t device_num = heter_devices_.size();
   std::vector<std::thread> threads;
-  size_t slot_num =
-      static_cast<size_t>(slot_num_for_pull_feature_);  // node slot 9008 in slot_vector
+  size_t slot_num = static_cast<size_t>(
+      slot_num_for_pull_feature_);  // node slot 9008 in slot_vector
   auto& local_dim_keys = gpu_task->feature_dim_keys_;  // [shard_num, 0, keys]]
   double divide_nodeid_cost = 0;
   double get_feature_id_cost = 0;
@@ -539,8 +539,7 @@ void PSGPUWrapper::add_slot_feature(std::shared_ptr<HeterContext> gpu_task) {
   for (size_t i = 0; i < device_num; i++) {
     feature_num += feature_list_size[i];
   }
-  VLOG(1) << "feature_num is " << feature_num << " node_num is "
-          << node_num;
+  VLOG(1) << "feature_num is " << feature_num << " node_num is " << node_num;
 
   size_t set_num = thread_keys_shard_num_;
   std::vector<std::unordered_set<uint64_t>> feature_id_set(set_num);
@@ -833,6 +832,9 @@ void PSGPUWrapper::FilterPull(std::shared_ptr<HeterContext> gpu_task,
   }
   shard_keys.resize(dedup_size);
   shard_values.resize(dedup_size);
+  VLOG(0) << " FilterPull rank_id" << rank_id_
+          << " only need pull size:" << dedup_size
+          << "   ori size:" << shard_keys.size();
 #endif
 }
 void PSGPUWrapper::MergePull(std::shared_ptr<HeterContext> gpu_task) {
@@ -872,6 +874,8 @@ void PSGPUWrapper::MergePull(std::shared_ptr<HeterContext> gpu_task) {
             size_t dedup_size = shard_keys.size();
             size_t merge_num = merge_values.keys.size();
             size_t total = merge_num + dedup_size;
+            VLOG(0) << "MergePull remote_num:" << merge_num
+                    << "  total:" << total;
             shard_keys.resize(total);
             shard_values.resize(total);
 
@@ -915,6 +919,7 @@ void PSGPUWrapper::MergePull(std::shared_ptr<HeterContext> gpu_task) {
                 ++k;
                 ++dedup_index;
               }
+              VLOG(0) << "MergePull dedup_index:" << dedup_index;
             } else {
               merge_values.offsets.push_back(merge_num);
               CHECK(merge_values.offsets.size() ==
@@ -1017,6 +1022,7 @@ void PSGPUWrapper::MergePull(std::shared_ptr<HeterContext> gpu_task) {
             }
             shard_keys.resize(dedup_index);
             shard_values.resize(dedup_index);
+            VLOG(0) << "MergePull 2 dedup_index:" << dedup_index;
           },
           shard_id,
           dim_id));

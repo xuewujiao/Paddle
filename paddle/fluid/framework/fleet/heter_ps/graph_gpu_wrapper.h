@@ -216,6 +216,8 @@ class GraphGpuWrapper {
   std::set<std::string> uniq_first_node_;
   std::string node_type_size_str_;
   std::string edge_type_size_str_;
+  int node_num_ = 1;  // multi_node num
+  int node_id_ = 0;   // multi_node rank num
 };
 #endif
 }  // namespace framework

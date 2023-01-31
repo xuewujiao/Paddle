@@ -116,7 +116,10 @@ class GpuPsGraphTable
       std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs);
   std::vector<std::shared_ptr<phi::Allocation>> get_edge_type_graph(
       int gpu_id, int edge_type_len);
-  void get_node_degree(int gpu_id, int edge_idx, uint64_t* key, int len,
+  void get_node_degree(int gpu_id,
+                       int edge_idx,
+                       uint64_t *key,
+                       int len,
                        std::shared_ptr<phi::Allocation> node_degree);
   int get_feature_of_nodes(int gpu_id,
                            uint64_t *d_walk,
@@ -154,11 +157,8 @@ class GpuPsGraphTable
                                  uint32_t *actual_feature_size,
                                  uint64_t *feature_list,
                                  uint8_t *slot_list);
-  void move_degree_to_source_gpu(int gpu_id,
-                                 int gpu_num,
-                                 int *h_left,
-                                 int *h_right,
-                                 int *node_degree);
+  void move_degree_to_source_gpu(
+      int gpu_id, int gpu_num, int *h_left, int *h_right, int *node_degree);
   void move_result_to_source_gpu_all_edge_type(int gpu_id,
                                                int gpu_num,
                                                int sample_size,
@@ -174,7 +174,14 @@ class GpuPsGraphTable
     return resource_->local_stream(gpu_id, 0);
   }
 
+  // set node_num for multi_node or single_node
+  void set_node_num(int node_num) { node_num_ = node_num; }
+
+  void set_node_id(int node_id) { node_id_ = node_id; }
+
   int gpu_num;
+  int node_num_ = 1;
+  int node_id_ = 0;
   int graph_table_num_, feature_table_num_;
   std::vector<GpuPsCommGraph> gpu_graph_list_;
   std::vector<GpuPsCommGraphFea> gpu_graph_fea_list_;
