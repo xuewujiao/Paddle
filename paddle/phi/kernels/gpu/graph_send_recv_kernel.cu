@@ -24,6 +24,7 @@
 #include "paddle/phi/core/hostdevice.h"
 #include "paddle/phi/core/kernel_registry.h"
 #include "paddle/phi/kernels/gpu/graph_send_recv_funcs.h"
+#include "paddle/phi/kernels/funcs/math_function.h"
 
 namespace phi {
 
@@ -58,25 +59,14 @@ void GraphSendRecvOpCUDAKernelLaunchHelper(const Context& ctx,
   }
   ctx.template Alloc<T>(out);
   T* p_output = out->data<T>();
-  const size_t& memset_bytes = memset_size * sizeof(T);
+  
+  funcs::SetConstant<Context, T> constant_functor;
   if (pool_type == "SUM" || pool_type == "MEAN") {
-#ifdef PADDLE_WITH_HIP
-    hipMemset(p_output, 0, memset_bytes);
-#else
-    cudaMemset(p_output, 0, memset_bytes);
-#endif
+    constant_functor(ctx, out, static_cast<T>(0));
   } else if (pool_type == "MAX") {
-    thrust::device_ptr<T> p_output_ptr(p_output);
-    thrust::fill(thrust::device,
-                 p_output_ptr,
-                 p_output_ptr + memset_size,
-                 std::numeric_limits<T>::lowest());
+    constant_functor(ctx, out, std::numeric_limits<T>::lowest());
   } else if (pool_type == "MIN") {
-    thrust::device_ptr<T> p_output_ptr(p_output);
-    thrust::fill(thrust::device,
-                 p_output_ptr,
-                 p_output_ptr + memset_size,
-                 std::numeric_limits<T>::max());
+    constant_functor(ctx, out, std::numeric_limits<T>::lowest());
   }
 
   if (index_size == 0) return;
@@ -135,11 +125,7 @@ void GraphSendRecvOpCUDAKernelLaunchHelper(const Context& ctx,
     ctx.template Alloc<int32_t>(dst_count);
     int* p_dst_count = dst_count->data<int>();
 
-#ifdef PADDLE_WITH_HIP
-    hipMemset(p_dst_count, 0, input_size * sizeof(int));
-#else
-    cudaMemset(p_dst_count, 0, input_size * sizeof(int));
-#endif
+    cudaMemsetAsync(p_dst_count, 0, input_size * sizeof(int), ctx.stream());
 
     int64_t grid_count = (index_size + block - 1) / block;
     ComputeCountCUDAKernel<T, IndexT><<<grid_count, block, 0, ctx.stream()>>>(

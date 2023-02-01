@@ -57,11 +57,17 @@ struct SetConstant {
 template <typename Place>
 void set_constant_with_place(const paddle::platform::DeviceContext& context,
                              paddle::framework::Tensor* tensor,
-                             float value);
+                             const void* value);
 
 void set_constant(const paddle::platform::DeviceContext& context,
                   paddle::framework::Tensor* tensor,
-                  float value);
+                  const void* value);
+template <typename T>
+void set_constant(const paddle::platform::DeviceContext& context,
+        paddle::framework::Tensor* tensor, const T value) {
+  set_constant(context, tensor, reinterpret_cast<const void*>(&value));
+}
+
 
 template <typename DeviceContext, typename T>
 struct RowwiseAdd {
@@ -99,31 +105,6 @@ struct RowwiseMean {
                   const paddle::framework::Tensor& input,
                   paddle::framework::Tensor* vec);
 };
-
-#ifdef PADDLE_WITH_XPU
-template <typename U>
-struct TensorSetConstantXPU {
-  TensorSetConstantXPU(paddle::framework::Tensor* tensor,
-                       U value,
-                       paddle::platform::Place place)
-      : tensor_(tensor), value_(value), place_(place) {}
-  template <typename T>
-  void apply() const {
-    auto* begin = tensor_->mutable_data<T>(place_);
-    int numel = tensor_->numel();
-    std::unique_ptr<T[]> data_cpu(new T[numel]);
-    std::fill(data_cpu.get(), data_cpu.get() + numel, static_cast<T>(value_));
-    paddle::memory::Copy(place_,
-                         begin,
-                         phi::CPUPlace(),
-                         static_cast<void*>(data_cpu.get()),
-                         numel * sizeof(T));
-  }
-  paddle::framework::Tensor* tensor_;
-  U value_;
-  paddle::platform::Place place_;
-};
-#endif
 
 template <typename Context, typename T>
 inline void TransCompute(const int dim,
