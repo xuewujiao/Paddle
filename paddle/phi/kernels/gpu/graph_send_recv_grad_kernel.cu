@@ -46,12 +46,8 @@ void GraphSendRecvGradOpCUDAKernelLaunchHelper(
     memset_size *= src_dims[i];
   }
   const size_t& memset_bytes = memset_size * sizeof(T);
-
-#ifdef PADDLE_WITH_HIP
-  hipMemset(p_output, 0, memset_bytes);
-#else
-  cudaMemset(p_output, 0, memset_bytes);
-#endif
+  
+  cudaMemsetAsync(p_output, 0, memset_bytes, ctx.stream());
 
   if (index_size == 0) return;
 

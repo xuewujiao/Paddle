@@ -227,14 +227,16 @@ __global__ void get_keys_kernel(Table* table,
 }
 
 template <typename KeyType, typename ValType>
-HashTable<KeyType, ValType>::HashTable(size_t capacity) {
-  container_ = new TableContainer<KeyType, ValType>(capacity);
+HashTable<KeyType, ValType>::HashTable(size_t capacity, cudaStream_t stream) {
+  stream_ = stream;
+  container_ = new TableContainer<KeyType, ValType>(capacity, stream);
   CUDA_RT_CALL(
       cudaMalloc((void**)&device_optimizer_config_, sizeof(OptimizerConfig)));
-  CUDA_RT_CALL(cudaMemcpy((void*)device_optimizer_config_,
+  CUDA_RT_CALL(cudaMemcpyAsync((void*)device_optimizer_config_,
                           &host_optimizer_config_,
                           sizeof(OptimizerConfig),
-                          cudaMemcpyHostToDevice));
+                          cudaMemcpyHostToDevice, stream));
+  cudaStreamSynchronize(stream);
   rwlock_.reset(new phi::RWLock);
 }
 
@@ -248,20 +250,24 @@ template <typename KeyType, typename ValType>
 void HashTable<KeyType, ValType>::set_sparse_sgd(
     const OptimizerConfig& optimizer_config) {
   host_optimizer_config_.set_sparse_sgd(optimizer_config);
-  cudaMemcpy((void*)device_optimizer_config_,
+  cudaMemcpyAsync((void*)device_optimizer_config_,
              &host_optimizer_config_,
              sizeof(OptimizerConfig),
-             cudaMemcpyHostToDevice);
+             cudaMemcpyHostToDevice,
+			 stream_);
+  cudaStreamSynchronize(stream_);
 }
 
 template <typename KeyType, typename ValType>
 void HashTable<KeyType, ValType>::set_embedx_sgd(
     const OptimizerConfig& optimizer_config) {
   host_optimizer_config_.set_embedx_sgd(optimizer_config);
-  cudaMemcpy((void*)device_optimizer_config_,
+  cudaMemcpyAsync((void*)device_optimizer_config_,
              &host_optimizer_config_,
              sizeof(OptimizerConfig),
-             cudaMemcpyHostToDevice);
+             cudaMemcpyHostToDevice,
+			 stream_);
+  cudaStreamSynchronize(stream_);
 }
 
 template <typename KeyType, typename ValType>
