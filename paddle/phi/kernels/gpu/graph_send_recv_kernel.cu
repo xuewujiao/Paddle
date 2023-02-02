@@ -124,9 +124,11 @@ void GraphSendRecvOpCUDAKernelLaunchHelper(const Context& ctx,
     dst_count->Resize({input_size});
     ctx.template Alloc<int32_t>(dst_count);
     int* p_dst_count = dst_count->data<int>();
-
+#ifdef PADDLE_WITH_HIP
+    hipMemset(p_dst_count, 0, input_size * sizeof(int));
+#else
     cudaMemsetAsync(p_dst_count, 0, input_size * sizeof(int), ctx.stream());
-
+#endif
     int64_t grid_count = (index_size + block - 1) / block;
     ComputeCountCUDAKernel<T, IndexT><<<grid_count, block, 0, ctx.stream()>>>(
         p_dst_count, d_index, index_size);
