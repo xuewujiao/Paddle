@@ -26,12 +26,12 @@
 #include "paddle/fluid/distributed/ps/table/graph/graph_node.h"
 #include "paddle/fluid/framework/fleet/fleet_wrapper.h"
 #include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_wrapper.h"
+#include "paddle/fluid/framework/fleet/ps_gpu_wrapper.h"
 #include "paddle/fluid/framework/generator.h"
 #include "paddle/fluid/framework/io/fs.h"
 #include "paddle/fluid/platform/timer.h"
 #include "paddle/fluid/string/printf.h"
 #include "paddle/fluid/string/string_helper.h"
-
 DECLARE_bool(graph_load_in_parallel);
 DECLARE_bool(graph_get_neighbor_id);
 DECLARE_int32(gpugraph_storage_mode);
@@ -1583,6 +1583,7 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
 
 std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
     const std::string &path) {
+  auto ps_wrapper = paddle::framework::PSGPUWrapper::GetInstance();
   std::ifstream file(path);
   std::string line;
   uint64_t local_count = 0;
@@ -1616,13 +1617,13 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
               << ", please check id distribution";
       continue;
     }
+    local_count++;
 
-    if (node_id_ != ((id / 8) % node_num_)) {
+    if (ps_wrapper->PartitionKeyForRank(id) != node_id_) {
       VLOG(2) << "id " << id << " not matched, node_id: " << node_id_
               << " , node_num:" << node_num_;
       continue;
     }
-    local_count++;
 
     size_t index = shard_id - shard_start;
     auto node = feature_shards[idx][index]->add_feature_node(id, false);
@@ -1709,6 +1710,7 @@ int32_t GraphTable::build_sampler(int idx, std::string sample_type) {
 
 std::pair<uint64_t, uint64_t> GraphTable::parse_edge_file(
     const std::string &path, int idx, bool reverse) {
+  auto ps_wrapper = paddle::framework::PSGPUWrapper::GetInstance();
   std::string sample_type = "random";
   bool is_weighted = false;
   std::ifstream file(path);
@@ -1738,7 +1740,7 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_edge_file(
         continue;
       }
     }
-    if (node_id_ == ((src_shard_id / 8) % node_num_)) {
+    if (ps_wrapper->PartitionKeyForRank(src_shard_id) != node_id_) {
       VLOG(2) << " node num :" << src_id
               << " not split into node_id_:" << node_id_
               << " node_num:" << node_num_;
@@ -1762,8 +1764,7 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_edge_file(
     auto node = edge_shards[idx][index]->add_graph_node(src_id);
     if (node != NULL) {
       node->build_edges(is_weighted);
-
-      if (node_id_ == ((dst_id / 8) % node_num_)) {
+      if (ps_wrapper->PartitionKeyForRank(dst_id) == node_id_) {
         node->add_edge(dst_id, weight);
       } else {
         VLOG(2) << " dest node num :" << dst_id
@@ -2509,20 +2510,20 @@ int32_t GraphTable::get_server_index_by_id(uint64_t id) {
 }
 int32_t GraphTable::Initialize(const TableParameter &config,
                                const FsClientParameter &fs_config) {
-  LOG(INFO) << "in graphTable initialize";
+  VLOG(1) << "in graphTable initialize";
   _config = config;
   if (InitializeAccessor() != 0) {
-    LOG(WARNING) << "Table accessor initialize failed";
+    VLOG(1) << "Warning: Table accessor initialize failed";
     return -1;
   }
 
   if (_afs_client.initialize(fs_config) != 0) {
-    LOG(WARNING) << "Table fs_client initialize failed";
+    VLOG(1) << "Warning: Table fs_client initialize failed";
     // return -1;
   }
   auto graph = config.graph_parameter();
   shard_num = _config.shard_num();
-  LOG(INFO) << "in graphTable initialize over";
+  VLOG(1) << "in graphTable initialize over";
   return Initialize(graph);
 }
 

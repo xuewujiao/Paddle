@@ -465,10 +465,10 @@ void PSGPUWrapper::add_slot_feature(std::shared_ptr<HeterContext> gpu_task) {
       CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_slot_feature_num_map),
                             slot_num * sizeof(int)));
       CUDA_CHECK(cudaMemcpyAsync(d_slot_feature_num_map,
-                            h_slot_feature_num_map.data(),
-                            sizeof(int) * slot_num,
-                            cudaMemcpyHostToDevice,
-                            stream));
+                                 h_slot_feature_num_map.data(),
+                                 sizeof(int) * slot_num,
+                                 cudaMemcpyHostToDevice,
+                                 stream));
       PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
       CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_node_list_ptr),
                             batch * sizeof(uint64_t)));
@@ -483,10 +483,10 @@ void PSGPUWrapper::add_slot_feature(std::shared_ptr<HeterContext> gpu_task) {
                          ? batch
                          : node_ids[i].size() - pos;
         CUDA_CHECK(cudaMemcpyAsync(d_node_list_ptr,
-                              node_ids[i].data() + pos,
-                              real_batch * sizeof(uint64_t),
-                              cudaMemcpyHostToDevice,
-                              stream));
+                                   node_ids[i].data() + pos,
+                                   real_batch * sizeof(uint64_t),
+                                   cudaMemcpyHostToDevice,
+                                   stream));
         int ret = gpu_graph_ptr->get_feature_of_nodes(i,
                                                       d_node_list_ptr,
                                                       d_feature_list_ptr,
@@ -499,11 +499,12 @@ void PSGPUWrapper::add_slot_feature(std::shared_ptr<HeterContext> gpu_task) {
             0,
             platform::errors::PreconditionNotMet("get_feature_of_nodes error"));
 
-        CUDA_CHECK(cudaMemcpyAsync(feature_ids[i].data() + pos * fea_num_per_node,
-                              d_feature_list_ptr,
-                              real_batch * fea_num_per_node * sizeof(uint64_t),
-                              cudaMemcpyDeviceToHost,
-                              stream));
+        CUDA_CHECK(
+            cudaMemcpyAsync(feature_ids[i].data() + pos * fea_num_per_node,
+                            d_feature_list_ptr,
+                            real_batch * fea_num_per_node * sizeof(uint64_t),
+                            cudaMemcpyDeviceToHost,
+                            stream));
         pos += real_batch;
       }
       PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
@@ -823,6 +824,7 @@ void PSGPUWrapper::FilterPull(std::shared_ptr<HeterContext> gpu_task,
 #ifdef PADDLE_WITH_GPU_GRAPH
   auto& shard_keys = gpu_task->feature_dim_keys_[shard_id][dim_id];
   auto& shard_values = gpu_task->value_dim_ptr_[shard_id][dim_id];
+  size_t ori_key_size = shard_keys.size();
   size_t dedup_size = 0;
   for (size_t pos = 0; pos < shard_keys.size(); ++pos) {
     auto& key = shard_keys[pos];
@@ -840,9 +842,9 @@ void PSGPUWrapper::FilterPull(std::shared_ptr<HeterContext> gpu_task,
   }
   shard_keys.resize(dedup_size);
   shard_values.resize(dedup_size);
-  VLOG(0) << " FilterPull rank_id" << rank_id_
+  VLOG(0) << " FilterPull rank_id " << rank_id_
           << " only need pull size:" << dedup_size
-          << "   ori size:" << shard_keys.size();
+          << "   ori size:" << ori_key_size;
 #endif
 }
 void PSGPUWrapper::MergePull(std::shared_ptr<HeterContext> gpu_task) {
@@ -866,7 +868,8 @@ void PSGPUWrapper::MergePull(std::shared_ptr<HeterContext> gpu_task) {
   timeline.Start();
   auto fleet_ptr = paddle::distributed::FleetWrapper::GetInstance();
   std::vector<std::future<void>> task_futures;
-  std::vector<std::shared_ptr<paddle::distributed::SparseShardValues>> dim_pass_values(multi_mf_dim_, nullptr);
+  std::vector<std::shared_ptr<paddle::distributed::SparseShardValues>>
+      dim_pass_values(multi_mf_dim_, nullptr);
   for (int dim_id = 0; dim_id < multi_mf_dim_; ++dim_id) {
     auto pass_values = fleet_ptr->worker_ptr_->TakePassSparseReferedValues(
         table_id_, gpu_task->pass_id_, dim_id);
@@ -896,6 +899,8 @@ void PSGPUWrapper::MergePull(std::shared_ptr<HeterContext> gpu_task) {
             size_t k = 0;
 
             int num_ranks = node_size_ - 1;
+            VLOG(0) << "MergePull num_ranks:" << num_ranks
+                    << " node_size_:" << node_size_;
             if (num_ranks == 1) {
               while (i < dedup_size && k < merge_num) {
                 auto& merge_key = merge_values.keys[k];
@@ -911,7 +916,8 @@ void PSGPUWrapper::MergePull(std::shared_ptr<HeterContext> gpu_task) {
                 last_key = merge_key;
                 shard_keys[dedup_index] = merge_key;
                 CHECK(merge_values.values[k] != 0)
-                  << "num=" << merge_num << ", pos=" << k << ", key=" << merge_key << " is nullptr";
+                    << "num=" << merge_num << ", pos=" << k
+                    << ", key=" << merge_key << " is nullptr";
                 shard_values[dedup_index] =
                     CONV2FEATURE_PTR(merge_values.values[k]);
                 ++k;
@@ -927,7 +933,8 @@ void PSGPUWrapper::MergePull(std::shared_ptr<HeterContext> gpu_task) {
                 last_key = merge_key;
                 shard_keys[dedup_index] = merge_key;
                 CHECK(merge_values.values[k] != 0)
-                  << "num=" << merge_num << ", pos=" << k << ", key=" << merge_key << " is nullptr";
+                    << "num=" << merge_num << ", pos=" << k
+                    << ", key=" << merge_key << " is nullptr";
                 shard_values[dedup_index] =
                     CONV2FEATURE_PTR(merge_values.values[k]);
                 ++k;
@@ -1033,10 +1040,10 @@ void PSGPUWrapper::MergePull(std::shared_ptr<HeterContext> gpu_task) {
                 ++k;
                 ++ranks_pos[sel_rank];
               }
+              VLOG(0) << "MergePull 2 dedup_index:" << dedup_index;
             }
             shard_keys.resize(dedup_index);
             shard_values.resize(dedup_index);
-            VLOG(0) << "MergePull 2 dedup_index:" << dedup_index;
           },
           shard_id,
           dim_id));
@@ -1495,12 +1502,12 @@ void PSGPUWrapper::BuildGPUTask(std::shared_ptr<HeterContext> gpu_task) {
       size_t feature_value_size =
           accessor_wrapper_ptr->GetFeatureValueSize(mf_dim);
       auto hbm_start = hbm + task.offset * feature_value_size;
-      CUDA_CHECK(
-          cudaMemcpyAsync(hbm_start,
-                     task.build_values.get() + task.start * feature_value_size,
-                     (task.end - task.start) * feature_value_size,
-                     cudaMemcpyHostToDevice,
-                     stream));
+      CUDA_CHECK(cudaMemcpyAsync(
+          hbm_start,
+          task.build_values.get() + task.start * feature_value_size,
+          (task.end - task.start) * feature_value_size,
+          cudaMemcpyHostToDevice,
+          stream));
       total_len += (task.end - task.start);
     }
     PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
@@ -1807,10 +1814,10 @@ void PSGPUWrapper::HbmToSparseTable() {
         char* test_build_values = build_values.get();
 
         cudaMemcpyAsync(test_build_values,
-                   hbm_pool->mem() + offset,
-                   feature_value_size * real_len,
-                   cudaMemcpyDeviceToHost,
-                   stream);
+                        hbm_pool->mem() + offset,
+                        feature_value_size * real_len,
+                        cudaMemcpyDeviceToHost,
+                        stream);
         for (size_t k = 0; k < real_len; k = k + once_cpu_num) {
           struct task_info task;
           task.build_values = build_values;

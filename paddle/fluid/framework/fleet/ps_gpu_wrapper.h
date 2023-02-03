@@ -745,8 +745,8 @@ class PSGPUWrapper {
   double time_4 = 0.0;
 
   int multi_node_{0};
-  int rank_id_;
-  int node_size_;
+  int rank_id_ = 0;
+  int node_size_ = 1;
   int device_num_ = 8;
   uint64_t table_id_;
   int gpu_graph_mode_ = 0;
