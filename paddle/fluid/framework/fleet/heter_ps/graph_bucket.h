@@ -73,7 +73,10 @@ struct CachedAllocator {
 class GraphBucket {
  public:
   GraphBucket(int dev_id, size_t capacity, int emb_size, int type_size)
-      : capacity_(capacity), emb_size_(emb_size), type_size_(type_size) {
+      : capacity_(capacity),
+        emb_size_(emb_size),
+        type_size_(type_size),
+        dev_id_(dev_id) {
     size_ = 0;
     unused_key = (uint64_t)-1;
     place_ = paddle::platform::CUDAPlace(dev_id);
@@ -96,7 +99,7 @@ class GraphBucket {
   size_t capacity_, size_;
   uint64_t unused_key_;
   uint64_t *keys_;
-  float *aggregated_emb;
+  float *aggregated_emb_;
   CacheAllocator allocator_;
   cudaStream_t stream_;
   std::shared_ptr<phi::Allocation> keys_alloc_;
@@ -105,6 +108,7 @@ class GraphBucket {
   int emb_size_;
   int type_size_;
   const int CUDA_NUM_THREADS = 512;
+  int dev_id_;
   // CUDA: number of blocks for threads.
   int GET_BLOCKS(const int N) {
     return (N + CUDA_NUM_THREADS - 1) / CUDA_NUM_THREADS;
@@ -115,19 +119,41 @@ class GraphBucket {
                                   uint64_t *neighbors,
                                   int *range,
                                   int *neighbor_count);
+  virtual void get_edges_count(int n, uint64_t *neighbors, int *neighbor_count);
+  virtual void cal_emb_dist(
+      int n, int *offset, int *type, float *emb, float *output);
 
 }
 
+class GraphStream {
+ public:
+  uint64_t *nodes_;
+  uint64_t *neigbhors_;
+  int *ranges_;
+  int *node_types_;
+  int node_size_;
+  int neighbor_size_;
+  int *emb_offset_;
+  int emb_offset_size_;
+  int emb_dim_;
+  float *emb_;
+};
+
 class BucketGroup {
  public:
-  BucketGroup(int dev_num, int emb_size, int type_size) {
+  BucketGroup(int dev_num, int emb_size, int type_size) : dev_num_(dev_num) {
     for (int i = 0; i < dev_num; i++) {
       resources.push_back(std::shared_ptr<GraphBucket>(
           new GraphBucket(capacity, i, emb_size, type_size)));
     }
+    for (int i = 0; i < dev_num; i++) {
+      resources[i]->init_keys();
+    }
   }
   std::vector<std::shared_ptr<GraphBucket>> resources;
   const size_t capacity = 1000000000ll;
+  void split_on_stream(const GraphStream &st);
+  int dev_num_;
 
 } enum GraphSamplerStatus { waiting = 0, running = 1, terminating = 2 };
 class GraphSampler {

@@ -33,7 +33,6 @@ __global__ void add_new_keys(uint64_t *keys,
     }
   }
 }
-}
 
 __global__ void initialize_keys(uint64_t *keys,
                                 size_t set_size,
@@ -43,6 +42,19 @@ __global__ void initialize_keys(uint64_t *keys,
     keys[idx] = unused_key;
   }
 }
+
+__global__ void fill_constant(int *data, int n, int c) {
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < n) {
+    data[idx] = c;
+  }
+}
+
+__global__ void merge_edge_count(int n, int *data, int *out) {
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < n) {
+    out[i] = data[idx * 2] + data[idx * 2 + 1];
+  }
 }
 
 __global__ void relocate_keys(uint64_t *keys,
@@ -67,6 +79,7 @@ __global__ void relocate_keys(uint64_t *keys,
 }
 
 __global__ void cal_emb_dist(int n,
+                             int *offset,
                              int *type,
                              float *emb,
                              int dim,
@@ -74,7 +87,7 @@ __global__ void cal_emb_dist(int n,
                              float *output) {
   size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < n) {
-    int emb_type = type[idx];
+    int emb_type = type[offset[idx]];
     int aggregated_pos = emb_type * dim;
     int pos = dim * idx;
     float res = 0;
@@ -83,6 +96,12 @@ __global__ void cal_emb_dist(int n,
     }
     output[idx] = res;
   }
+}
+
+void GraphBucket::cal_emb_dist(
+    int n, int *offset, int *type, float *emb, float *output) {
+  cal_emb_dist<<<GET_BLOCKS(n), CUDA_NUM_THREADS, 0, stream_>>>(
+      n, type, emb, emb_size_, aggregated_emb_, output);
 }
 
 __global__ void export_sum(uint64_t *keys,
@@ -144,7 +163,8 @@ void reduce_one_dim(
     int block_num = (len - 1) / thread_num + 1;
     int p = block_num + type_len;
     int block_num2 = (p - 1) / thread_num + 1;
-    fill_zero<<<block_num2, thread_num, 0, stream>>>(dist_data[1 - cur], p);
+    fill_constant<<<block_num2, thread_num, 0, stream>>>(
+        dist_data[1 - cur], p, 0);
     cudaMemcpyAsync(
         raw_ptr, &block_num, sizeof(int), cudaMemcpyHostToDevice, stream);
     reduce_emb<<<block_num, thread_num, 0, stream>>>(dist_data[cur],
@@ -271,12 +291,12 @@ __global__ void record_sum(int n,
 
 void GraphBucket::init_keys() {
   keys_alloc_ = memory::AllocShared(place_, capacity * sizeof(uint64_t));
-  keys_ = reinterpret_cast<int64_t *>(keys_alloc_->ptr());
+  keys_ = reinterpret_cast<uint64_t *>(keys_alloc_->ptr());
   initialize_keys<<<GET_BLOCKS(capacity), CUDA_NUM_THREADS>>>(
       keys, capacity, unused_key);
   emb_alloc_ =
       memory::AllocShared(place_, type_size_ * emb_size_ * sizeof(float));
-  aggregated_emb = reinterpret_cast<float *>(emb_alloc_->ptr());
+  aggregated_emb_ = reinterpret_cast<float *>(emb_alloc_->ptr());
   thrust::device_ptr<int> dev_ptr = thrust::device_pointer_cast(aggregated_emb);
   const auto &exec_policy = thrust::cuda::par(allocator).on(stream_);
   thrust::fill(exec_policy, dev_ptr, dev_ptr + type_size_ * emb_size_, (int)0);
@@ -288,11 +308,88 @@ void GraphBucket::get_neighbor_count(int unique_count,
                                      int *range,
                                      int *neighbor_count) {
   auto res = memory::AllocShared(place_, n * sizeof(int));
-  int *output = reinterpret_cast<int64_t *>(res->ptr());
-  find_keys<<<GET_BLOCKS(n), CUDA_NUM_THREADS>>>(n, neighbors, keys, output);
+  int *output = reinterpret_cast<int *>(res->ptr());
+  find_keys<<<GET_BLOCKS(n), CUDA_NUM_THREADS, 0, stream_>>>(
+      n, neighbors, keys, output);
   thrust::device_ptr<int> dev_ptr = thrust::device_pointer_cast(output);
   const auto &exec_policy = thrust::cuda::par(allocator).on(stream_);
   thrust::inclusive_scan(exec_policy, dev_ptr, dev_ptr + n, dev_ptr);
   record_sum<<<GET_BLOCKS(unique_count), CUDA_NUM_THREADS>>>(
       unique_count, output, range, neighbor_count);
+}
+
+void BucketGroup::get_edges_count(int n, uint64_t *neighbors, int *output) {
+  int p = n / 2;
+  int block_num = (p - 1) / thread_num + 1;
+  auto res = memory::AllocShared(place_, n * sizeof(int));
+  fill_constant<<<block_num, thread_num, 0, stream_>>>(neighbor_count, p, 0);
+  find_keys<<<GET_BLOCKS(n), CUDA_NUM_THREADS, 0, stream_>>>(
+      n, neighbors, keys, reinterpret_cast<int *>(res->ptr()));
+  merge_edge_count<<<block_num, thread_num, 0, stream_>>>(
+      n, reinterpret_cast<int *>(res->ptr()), output);
+}
+void BucketGroup::split_on_stream(const GraphStream &st) {
+  std::vector<std::shared_ptr<phi::Allocation>> nodes, neighbors, ranges,
+      node_types, emb_offset, emb, neighbor_count, emb_sim;
+  for (int i = 0; i < dev_num_; i++) {
+    nodes.emplace_back(memory::AllocShared(resources[i]->place_,
+                                           st.node_size_ * sizeof(uint64_t)));
+    cudaMemcpyAsync(reinterpret_cast<uint64_t *>(nodes.back()->ptr()),
+                    st.nodes_,
+                    st.node_size_ * sizeof(uint64_t),
+                    resources[i]->stream_);
+    neighbors.emplace_back(memory::AllocShared(
+        resources[i]->place_, st.neighbor_size_ * sizeof(uint64_t)));
+    cudaMemcpyAsync(reinterpret_cast<uint64_t *>(neighbors.back()->ptr()),
+                    st.neighbors_,
+                    st.neighbor_size_ * sizeof(uint64_t),
+                    resources[i]->stream_);
+    ranges.emplace_back(
+        memory::AllocShared(resources[i]->place_, st.node_size_ * sizeof(int)));
+    cudaMemcpyAsync(reinterpret_cast<int *>(ranges.back()->ptr()),
+                    st.ranges_,
+                    st.node_size_ * sizeof(int),
+                    resources[i]->stream_);
+    node_types.emplace_back(
+        memory::AllocShared(resources[i]->place_, st.node_size_ * sizeof(int)));
+    cudaMemcpyAsync(reinterpret_cast<int *>(node_types.back()->ptr()),
+                    st.node_types_,
+                    st.node_size_ * sizeof(int),
+                    resources[i]->stream_);
+    if (st.emb_offset_size_) {
+      emb_offset.emplace_back(memory::AllocShared(
+          resources[i]->place_, st.emb_offset_size_ * sizeof(int)));
+      cudaMemcpyAsync(reinterpret_cast<int *>(emb_offset.back()->ptr()),
+                      st.emb_offset_,
+                      st.emb_offset_size_ * sizeof(int),
+                      resources[i]->stream_);
+      emb.emplace_back(memory::AllocShared(
+          resources[i]->place_,
+          st.emb_offset_size_ * st.emb_dim_ * sizeof(float)));
+      cudaMemcpyAsync(reinterpret_cast<int *>(emb.back()->ptr()),
+                      st.emb_,
+                      st.emb_offset_size_ * st.emb_dim_ * sizeof(float),
+                      resources[i]->stream_);
+      emb_sim.emplace_back(memory::AllocShared(
+          resources[i]->place_, st.emb_offset_size_ * sizeof(float)));
+    }
+    neighbor_count.emplace_back(
+        memory::AllocShared(resources[i]->place_, st.node_size_ * sizeof(int)));
+  }
+  for (int i = 0; i < dev_num_; i++) {
+    resource[i]->get_neighbor_count(
+        st.node_size_,
+        st.neighbor_size_,
+        reinterpret_cast<uint64_t *>(neighbors[i]->ptr()),
+        reinterpret_cast<int *>(ranges[i]->ptr()),
+        reinterpret_cast<int *>(neighbor_count[i]->ptr()));
+
+    if (st.emb_offset_size_) {
+      resource[i]->cal_emb_dist(st.emb_offset_size_,
+                                reinterpret_cast<int *>(emb_offset[i]->ptr()),
+                                reinterpret_cast<int *>(node_types[i]->ptr()),
+                                reinterpret_cast<float *>(emb[i]->ptr()),
+                                reinterpret_cast<float *>(emb_sim[i]->ptr()));
+    }
+  }
 }
