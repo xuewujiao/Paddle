@@ -1096,6 +1096,14 @@ class InMemoryDataset(DatasetBase):
             "infer_node_type", "")
         self.proto_desc.graph_config.get_degree = config.get(
             "get_degree", False)
+        self.proto_desc.graph_config.cls_mode = config.get(
+            "cls_mode", False)
+        self.proto_desc.graph_config.is_valid = config.get(
+            "is_valid", False)
+        self.proto_desc.graph_config.is_valid = config.get(
+            "is_test", False)
+        self.proto_desc.graph_config.batch_per_pass = config.get(
+            "batch_per_pass", 10)
         self.dataset.set_gpu_graph_mode(True)
 
     def set_pass_id(self, pass_id):

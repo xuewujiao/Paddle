@@ -1957,6 +1957,7 @@ uint64_t GraphDataGenerator::CopyUniqueNodes() {
 }
 
 void GraphDataGenerator::PrepareGraphData() {
+  VLOG(0) << "in PrepareGraphData: " << cls_mode_;
   if (!cls_mode_) {
     DoWalkandSage();
   } else {
@@ -2113,7 +2114,11 @@ void GraphDataGenerator::DoSage() {
   auto &cursor = gpu_graph_ptr->cursor_[thread_id_];
   total_row_ = 0;
 
+  VLOG(0) << thread_id_ << " device current cursor: " << cursor;
   if (cursor < h_device_keys_len_.size()) {
+    VLOG(0) << thread_id_ << " device: global_node_type_start " 
+            << global_node_type_start[cursor] 
+            << " h_device_keys_len " << h_device_keys_len_[cursor];
     if (global_node_type_start[cursor] >= h_device_keys_len_[cursor]) {
       cursor++;
       if (cursor >= h_device_keys_len_.size()) {
@@ -2131,42 +2136,47 @@ void GraphDataGenerator::DoSage() {
   int total_instance = 0, uniq_instance = 0;
   total_instance = (infer_node_start_ + batch_size_ <= device_key_size)
                     ? batch_size_ : device_key_size - infer_node_start_;
-  for (int i = 0; i < batch_per_pass_; i++) {
-    uint64_t *d_type_keys =
-        reinterpret_cast<uint64_t *>(d_device_keys_[cursor_]->ptr());
-    int *d_type_labels =
-        reinterpret_cast<int *>(d_device_labels_[cursor_]->ptr());
-    d_type_keys += infer_node_start_;
-    d_type_labels += infer_node_start_;
-    infer_node_start_ += total_instance;
 
-    auto label = memory::AllocShared(
-        place_,
-        total_instance * sizeof(int),
-        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-    int *label_ptr = reinterpret_cast<int *>(label->ptr());
-    cudaMemcpyAsync(label_ptr, d_type_labels, sizeof(int) * total_instance,
-                    cudaMemcpyDeviceToDevice, sample_stream_);
+  if (total_instance > 0) {
+    for (int i = 0; i < batch_per_pass_; i++) {
+      uint64_t *d_type_keys =
+          reinterpret_cast<uint64_t *>(d_device_keys_[cursor_]->ptr());
+      int *d_type_labels =
+          reinterpret_cast<int *>(d_device_labels_[cursor_]->ptr());
+      d_type_keys += infer_node_start_;
+      d_type_labels += infer_node_start_;
+      infer_node_start_ += total_instance;
 
-    auto inverse = memory::AllocShared(
-        place_,
-        total_instance * sizeof(int),
-        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-    auto final_sage_nodes = GenerateSampleGraph(
-        d_type_keys, total_instance, &uniq_instance, inverse);
+      auto label = memory::AllocShared(
+          place_,
+          total_instance * sizeof(int),
+          phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+      int *label_ptr = reinterpret_cast<int *>(label->ptr());
+      cudaMemcpyAsync(label_ptr, d_type_labels, sizeof(int) * total_instance,
+                      cudaMemcpyDeviceToDevice, sample_stream_);
 
-    final_sage_nodes_vec_.emplace_back(final_sage_nodes);
-    inverse_vec_.emplace_back(inverse);
-    uniq_instance_vec_.emplace_back(uniq_instance);
-    total_instance_vec_.emplace_back(total_instance);
-    label_vec_.emplace_back(label);
-    sage_batch_num_ += 1;
-    total_row_ += total_instance;
+      auto inverse = memory::AllocShared(
+          place_,
+          total_instance * sizeof(int),
+          phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+      auto final_sage_nodes = GenerateSampleGraph(
+          d_type_keys, total_instance, &uniq_instance, inverse);
 
-    total_instance = (infer_node_start_ + batch_size_ <= device_key_size)
-                      ? batch_size_ : device_key_size - infer_node_start_;
-    if (total_instance == 0) break;
+      final_sage_nodes_vec_.emplace_back(final_sage_nodes);
+      inverse_vec_.emplace_back(inverse);
+      uniq_instance_vec_.emplace_back(uniq_instance);
+      total_instance_vec_.emplace_back(total_instance);
+      label_vec_.emplace_back(label);
+      sage_batch_num_ += 1;
+      total_row_ += total_instance;
+
+      total_instance = (infer_node_start_ + batch_size_ <= device_key_size)
+                        ? batch_size_ : device_key_size - infer_node_start_;
+      if (total_instance == 0) break;
+    }
   }
+
+  VLOG(0) << "train sage_batch_num: " << sage_batch_num_;
   global_node_type_start[cursor_] += total_row_;
   debug_gpu_memory_info(device_id, "DoSage end");
 }
@@ -2816,7 +2826,7 @@ void GraphDataGenerator::AllocResource(int thread_id,
       VLOG(2) << "h_device_keys size: " << h_device_keys_len_.size();
     } else {
       if (gpu_graph_training_) {
-        // set train start nodes.
+        // Set train start nodes.
         auto &d_graph_train_type_keys = gpu_graph_ptr->d_graph_train_type_keys_;
         auto &d_graph_train_type_labels = gpu_graph_ptr->d_graph_train_type_labels_;
         auto &h_graph_train_type_len = gpu_graph_ptr->h_graph_train_type_len_;
