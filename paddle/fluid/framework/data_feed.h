@@ -1000,7 +1000,9 @@ class GraphDataGenerator {
   std::vector<LoDTensor*> feed_vec_;
   std::vector<size_t> offset_;
   std::shared_ptr<phi::Allocation> d_prefix_sum_;
-  std::vector<std::shared_ptr<phi::Allocation>> d_device_keys_;
+  // std::vector<std::shared_ptr<phi::Allocation>> d_device_keys_;
+  std::vector<std::shared_ptr<phi::Allocation>> d_device_train_keys_;
+  std::vector<std::shared_ptr<phi::Allocation>> d_device_infer_keys_;
   std::shared_ptr<phi::Allocation> d_train_metapath_keys_;
 
   std::shared_ptr<phi::Allocation> d_walk_;
@@ -1067,7 +1069,9 @@ class GraphDataGenerator {
   std::vector<int> samples_;
   bool epoch_finish_;
   std::vector<uint64_t> host_vec_;
-  std::vector<uint64_t> h_device_keys_len_;
+  // std::vector<uint64_t> h_device_keys_len_;
+  std::vector<uint64_t> h_device_train_keys_len_;
+  std::vector<uint64_t> h_device_infer_keys_len_;
   uint64_t h_train_metapath_keys_len_;
   uint64_t train_table_cap_;
   uint64_t infer_table_cap_;
@@ -1078,6 +1082,8 @@ class GraphDataGenerator {
   std::set<int> infer_node_type_index_set_;
   std::string infer_node_type_;
   bool get_degree_;
+
+  bool increment_train_;
 };
 
 class DataFeed {

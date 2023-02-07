@@ -1096,6 +1096,8 @@ class InMemoryDataset(DatasetBase):
             "infer_node_type", "")
         self.proto_desc.graph_config.get_degree = config.get(
             "get_degree", False)
+        self.proto_desc.graph_config.increment_train = config.get(
+            "increment_train", False)
         self.dataset.set_gpu_graph_mode(True)
 
     def set_pass_id(self, pass_id):

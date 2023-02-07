@@ -119,6 +119,24 @@ class GraphShard {
     }
     return num;
   }
+  size_t get_all_train_id(std::vector<std::vector<uint64_t>> *shard_keys,
+                          int slice_num) {
+    int bucket_num = bucket.size();
+    shard_keys->resize(slice_num);
+    for (int i = 0; i < slice_num; ++i) {
+      (*shard_keys)[i].reserve(bucket_num / slice_num);
+    }
+    int ac_num = 0;
+    for (int i = 0; i < bucket_num; i++) {
+      bool train_mode = bucket[i]->get_train_mode();
+      if (train_mode == true) {
+        uint64_t k = bucket[i]->get_id();
+        (*shard_keys)[k % slice_num].emplace_back(k);
+        ac_num += 1;
+      }
+    }
+    return ac_num;
+  }
   GraphNode *add_graph_node(uint64_t id);
   GraphNode *add_graph_node(Node *node);
   FeatureNode *add_feature_node(uint64_t id, bool is_overlap = true);
@@ -573,7 +591,8 @@ class GraphTable : public Table {
                               const std::vector<bool>& is_reverse_edge_map);
   int32_t parse_node_and_load(std::string ntype2files,
                               std::string graph_data_local_path,
-                              int part_num);
+                              int part_num,
+                              bool train_mode);
   std::string get_inverse_etype(std::string &etype);
   int32_t parse_type_to_typepath(
       std::string &type2files,
@@ -601,17 +620,24 @@ class GraphTable : public Table {
                           int idx,
                           int slice_num,
                           std::vector<std::vector<uint64_t>> *output);
+  int get_all_train_id(GraphTableType table_type,
+                       int idx,
+                       int slice_num,
+                       std::vector<std::vector<uint64_t>> *output);
   int get_node_embedding_ids(int slice_num,
                              std::vector<std::vector<uint64_t>> *output);
   int32_t load_nodes(const std::string &path,
-                     std::string node_type = std::string());
+                     std::string node_type = std::string(),
+                     bool train_mode = true);
   std::pair<uint64_t, uint64_t> parse_edge_file(const std::string &path,
                                                 int idx,
                                                 bool reverse);
   std::pair<uint64_t, uint64_t> parse_node_file(const std::string &path,
                                                 const std::string &node_type,
-                                                int idx);
-  std::pair<uint64_t, uint64_t> parse_node_file(const std::string &path);
+                                                int idx,
+                                                bool train_mode);
+  std::pair<uint64_t, uint64_t> parse_node_file(const std::string &path,
+                                                bool train_mode);
   int32_t add_graph_node(int idx,
                          std::vector<uint64_t> &id_list,
                          std::vector<bool> &is_weight_list);
@@ -745,6 +771,7 @@ class GraphTable : public Table {
 
   std::vector<uint64_t> graph_total_keys_;
   std::vector<std::vector<uint64_t>> graph_type_keys_;
+  std::vector<std::vector<uint64_t>> graph_train_type_keys_;
   std::unordered_map<int, int> type_to_index_;
 
   std::vector<std::vector<GraphShard *>> edge_shards, feature_shards;

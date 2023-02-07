@@ -411,7 +411,7 @@ void BindGraphGpuWrapper(py::module* m) {
            py::overload_cast<std::string, std::string>(
                &GraphGpuWrapper::load_node_file))
       .def("load_node_file",
-           py::overload_cast<std::string, std::string, int>(
+           py::overload_cast<std::string, std::string, int, bool>(
                &GraphGpuWrapper::load_node_file))
       .def("release_graph", &GraphGpuWrapper::release_graph)
       .def("release_graph_edge", &GraphGpuWrapper::release_graph_edge)

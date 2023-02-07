@@ -75,7 +75,8 @@ class GraphGpuWrapper {
   int load_node_file(std::string name, std::string filepath);
   int load_node_file(std::string ntype2files,
                      std::string graph_data_local_path,
-                     int part_num);
+                     int part_num,
+                     bool train_mode);
   void load_node_and_edge(std::string etype2files,
                           std::string ntype2files,
                           std::string graph_data_local_path,
@@ -168,6 +169,7 @@ class GraphGpuWrapper {
   void init_type_keys();
   std::vector<uint64_t>& get_graph_total_keys();
   std::vector<std::vector<uint64_t>>& get_graph_type_keys();
+  std::vector<std::vector<uint64_t>>& get_graph_train_type_keys();
   std::unordered_map<int, int>& get_graph_type_to_index();
   std::string& get_node_type_size(std::string first_node_type);
   std::string& get_edge_type_size();
@@ -200,6 +202,9 @@ class GraphGpuWrapper {
   std::vector<size_t> h_graph_train_keys_len_;
   std::vector<std::vector<std::shared_ptr<phi::Allocation>>>
       d_graph_all_type_total_keys_;
+  std::vector<std::vector<std::shared_ptr<phi::Allocation>>> 
+      d_graph_train_type_total_keys_;
+  std::vector<std::vector<uint64_t>> h_graph_train_type_keys_len_;
   std::map<uint64_t,  // edge_id
            uint64_t   // src_node_id << 32 | dst_node_id
            >
