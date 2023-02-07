@@ -169,6 +169,7 @@ class GraphGpuWrapper {
   void release_graph_edge();
   void release_graph_node();
   void init_type_keys();
+  void init_train_type_keys();
   std::vector<uint64_t>& get_graph_total_keys();
   std::vector<std::vector<uint64_t>>& get_graph_type_keys();
   std::vector<std::vector<uint64_t>>& get_graph_train_type_keys();
