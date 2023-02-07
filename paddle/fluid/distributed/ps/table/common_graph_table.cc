@@ -1740,7 +1740,7 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_edge_file(
         continue;
       }
     }
-    if (ps_wrapper->PartitionKeyForRank(src_shard_id) != node_id_) {
+    if (ps_wrapper->PartitionKeyForRank(src_id) != node_id_) {
       VLOG(2) << " node num :" << src_id
               << " not split into node_id_:" << node_id_
               << " node_num:" << node_num_;

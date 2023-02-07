@@ -3848,6 +3848,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
                                              all_shard_part_size * sizeof(int),
                                              cudaMemcpyHostToDevice,
                                              stream));
+  PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
   // barrier
   //  barrier_.wait();
   my_cache.node_barrier_.Resume();

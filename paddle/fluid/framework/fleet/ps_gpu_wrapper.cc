@@ -899,8 +899,6 @@ void PSGPUWrapper::MergePull(std::shared_ptr<HeterContext> gpu_task) {
             size_t k = 0;
 
             int num_ranks = node_size_ - 1;
-            VLOG(0) << "MergePull num_ranks:" << num_ranks
-                    << " node_size_:" << node_size_;
             if (num_ranks == 1) {
               while (i < dedup_size && k < merge_num) {
                 auto& merge_key = merge_values.keys[k];
@@ -940,7 +938,6 @@ void PSGPUWrapper::MergePull(std::shared_ptr<HeterContext> gpu_task) {
                 ++k;
                 ++dedup_index;
               }
-              VLOG(0) << "MergePull dedup_index:" << dedup_index;
             } else {
               merge_values.offsets.push_back(merge_num);
               CHECK(merge_values.offsets.size() ==
@@ -1040,7 +1037,6 @@ void PSGPUWrapper::MergePull(std::shared_ptr<HeterContext> gpu_task) {
                 ++k;
                 ++ranks_pos[sel_rank];
               }
-              VLOG(0) << "MergePull 2 dedup_index:" << dedup_index;
             }
             shard_keys.resize(dedup_index);
             shard_values.resize(dedup_index);

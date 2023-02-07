@@ -162,7 +162,7 @@ bool HogwildWorker::CheckBatchNum(int flag) {
                                                               ncclProd,
                                                               comm->comm(),
                                                               stream));
-  PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
+  // PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
   PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyAsync(&ret,  // output
                                              &stat_ptr[2],
                                              sizeof(float),
