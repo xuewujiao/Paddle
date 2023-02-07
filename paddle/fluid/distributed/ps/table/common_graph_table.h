@@ -565,12 +565,12 @@ class GraphTable : public Table {
                                   std::string graph_data_local_path,
                                   int part_num,
                                   bool reverse,
-                                  const std::vector<bool>& is_reverse_edge_map);
+                                  const std::vector<bool> &is_reverse_edge_map);
   int32_t parse_edge_and_load(std::string etype2files,
                               std::string graph_data_local_path,
                               int part_num,
                               bool reverse,
-                              const std::vector<bool>& is_reverse_edge_map);
+                              const std::vector<bool> &is_reverse_edge_map);
   int32_t parse_node_and_load(std::string ntype2files,
                               std::string graph_data_local_path,
                               int part_num);
@@ -629,7 +629,7 @@ class GraphTable : public Table {
   virtual void Clear() {}
   virtual int32_t Flush() { return 0; }
   virtual int32_t Shrink(const std::string &param) { return 0; }
-  //指定保存路径
+  // 指定保存路径
   virtual int32_t Save(const std::string &path, const std::string &converter) {
     return 0;
   }
@@ -743,6 +743,10 @@ class GraphTable : public Table {
   void build_graph_total_keys();
   void build_graph_type_keys();
 
+  void set_node_num(int node_num) { node_num_ = node_num; }
+
+  void set_node_id(int node_id) { node_id_ = node_id; }
+
   std::vector<uint64_t> graph_total_keys_;
   std::vector<std::vector<uint64_t>> graph_type_keys_;
   std::unordered_map<int, int> type_to_index_;
@@ -790,6 +794,8 @@ class GraphTable : public Table {
   std::string feature_separator_ = std::string(" ");
   std::vector<int> slot_feature_num_map_;
   bool is_parse_node_fail_ = false;
+  int node_num_ = 1;
+  int node_id_ = 0;
 };
 
 /*
