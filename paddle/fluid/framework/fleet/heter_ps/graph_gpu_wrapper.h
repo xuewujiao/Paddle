@@ -45,7 +45,8 @@ class GraphGpuWrapper {
   static std::shared_ptr<GraphGpuWrapper> s_instance_;
   void init_conf(const std::string& first_node_type,
                  const std::string& meta_path,
-                 const std::string& excluded_train_pair);
+                 const std::string& excluded_train_pair,
+                 bool increment_train);
   void initialize();
   void finalize();
   void set_device(std::vector<int> ids);
@@ -161,7 +162,8 @@ class GraphGpuWrapper {
                                 std::shared_ptr<phi::Allocation>& slot_list);
   void init_metapath(std::string cur_metapath,
                      int cur_metapath_index,
-                     int cur_metapath_len);
+                     int cur_metapath_len,
+                     bool increment_train);
   void clear_metapath_state();
   void release_graph();
   void release_graph_edge();

@@ -2696,30 +2696,30 @@ void GraphDataGenerator::AllocResource(int thread_id,
         gpu_graph_ptr->h_graph_train_keys_len_[thread_id];
     VLOG(2) << "h train metapaths key len: " << h_train_metapath_keys_len_;
   } else {
+    // 指定infer keys: 按照目前需求，infer全量数据。
+    auto &d_graph_all_type_keys = gpu_graph_ptr->d_graph_all_type_total_keys_;
+    auto &h_graph_all_type_keys_len = gpu_graph_ptr->h_graph_all_type_keys_len_;
+    for (size_t i = 0; i < d_graph_all_type_keys.size(); i++) {
+      d_device_infer_keys_.push_back(d_graph_all_type_keys[i][thread_id]);
+      h_device_infer_keys_len_.push_back(h_graph_all_type_keys_len[i][thread_id]); 
+    }
+  }
+
+  if (!FLAGS_graph_metapath_split_opt) {
     if (!increment_train_) {
       auto &d_graph_all_type_keys = gpu_graph_ptr->d_graph_all_type_total_keys_;
       auto &h_graph_all_type_keys_len = gpu_graph_ptr->h_graph_all_type_keys_len_;
-
       for (size_t i = 0; i < d_graph_all_type_keys.size(); i++) {
         d_device_train_keys_.push_back(d_graph_all_type_keys[i][thread_id]);
-        h_device_train_keys_len_.push_back(h_graph_all_type_keys_len[i][thread_id]);
-        d_device_infer_keys_.push_back(d_graph_all_type_keys[i][thread_id]);
         h_device_infer_keys_len_.push_back(h_graph_all_type_keys_len[i][thread_id]);
       }
-      VLOG(2) << "h_device_keys size: " << h_device_train_keys_len_.size();
     } else {
-      auto &d_graph_all_type_keys = gpu_graph_ptr->d_graph_all_type_total_keys_;
-      auto &h_graph_all_type_keys_len = gpu_graph_ptr->h_graph_all_type_keys_len_;
-      auto &d_graph_train_type_keys = gpu_graph_ptr->d_graph_train_type_total_keys_; 
+      auto &d_graph_train_type_keys = gpu_graph_ptr->d_graph_train_type_total_keys_;
       auto &h_graph_train_type_keys_len = gpu_graph_ptr->h_graph_train_type_keys_len_;
-      
-      for (size_t i = 0; i < d_graph_all_type_keys.size(); i++) {
+      for (size_t i = 0; i < d_graph_train_type_keys.size(); i++) {
         d_device_train_keys_.push_back(d_graph_train_type_keys[i][thread_id]);
-        h_device_train_keys_len_.push_back(h_graph_train_type_keys_len[i][thread_id]);
-        d_device_infer_keys_.push_back(d_graph_all_type_keys[i][thread_id]);
-        h_device_infer_keys_len_.push_back(h_graph_all_type_keys_len[i][thread_id]);
+        h_device_train_keys_len_.push_back(h_graph_train_type_keys_len[i][thread_id]); 
       }
-      VLOG(2) << "h_device_train_keys size: " << h_device_train_keys_len_.size();
     }
   }
 
@@ -2931,6 +2931,7 @@ void GraphDataGenerator::SetConfig(
   train_table_cap_ = graph_config.train_table_cap();
   infer_table_cap_ = graph_config.infer_table_cap();
   get_degree_ = graph_config.get_degree();
+  increment_train_ = graph_config.increment_train();
   epoch_finish_ = false;
   VLOG(1) << "Confirm GraphConfig, walk_degree : " << walk_degree_
           << ", walk_len : " << walk_len_ << ", window : " << window_
@@ -2946,7 +2947,7 @@ void GraphDataGenerator::SetConfig(
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   debug_gpu_memory_info("init_conf start");
   gpu_graph_ptr->init_conf(
-      first_node_type, meta_path, graph_config.excluded_train_pair());
+      first_node_type, meta_path, graph_config.excluded_train_pair(), increment_train_);
   debug_gpu_memory_info("init_conf end");
 
   auto edge_to_id = gpu_graph_ptr->edge_to_id;
@@ -2963,7 +2964,6 @@ void GraphDataGenerator::SetConfig(
     infer_node_type_ = graph_config.infer_node_type();
   }
 
-  increment_train_ = graph_config.increment_train();
 };
 
 void GraphDataGenerator::DumpWalkPath(std::string dump_path, size_t dump_rate) {
