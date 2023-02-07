@@ -2674,7 +2674,7 @@ void GraphTable::build_graph_type_keys() {
     graph_train_type_keys_[cnt] = std::move(keys[0]);
     cnt++;
   }
-  VLOG(0) << "finish build_graph_type_keys and graph_train_type_keys";
+  VLOG(0) << "finish build_graph_type_keys";
 
   VLOG(0) << "begin insert feature into graph_total_keys";
   // build feature embedding id
