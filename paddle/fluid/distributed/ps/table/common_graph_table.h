@@ -128,8 +128,8 @@ class GraphShard {
     }
     int ac_num = 0;
     for (int i = 0; i < bucket_num; i++) {
-      bool train_mode = bucket[i]->get_train_mode();
-      if (train_mode == true) {
+      bool need_train = bucket[i]->get_need_train();
+      if (need_train == true) {
         uint64_t k = bucket[i]->get_id();
         (*shard_keys)[k % slice_num].emplace_back(k);
         ac_num += 1;
@@ -592,7 +592,7 @@ class GraphTable : public Table {
   int32_t parse_node_and_load(std::string ntype2files,
                               std::string graph_data_local_path,
                               int part_num,
-                              bool train_mode);
+                              bool need_train);
   std::string get_inverse_etype(std::string &etype);
   int32_t parse_type_to_typepath(
       std::string &type2files,
@@ -628,16 +628,16 @@ class GraphTable : public Table {
                              std::vector<std::vector<uint64_t>> *output);
   int32_t load_nodes(const std::string &path,
                      std::string node_type = std::string(),
-                     bool train_mode = true);
+                     bool need_train = true);
   std::pair<uint64_t, uint64_t> parse_edge_file(const std::string &path,
                                                 int idx,
                                                 bool reverse);
   std::pair<uint64_t, uint64_t> parse_node_file(const std::string &path,
                                                 const std::string &node_type,
                                                 int idx,
-                                                bool train_mode);
+                                                bool need_train);
   std::pair<uint64_t, uint64_t> parse_node_file(const std::string &path,
-                                                bool train_mode);
+                                                bool need_train);
   int32_t add_graph_node(int idx,
                          std::vector<uint64_t> &id_list,
                          std::vector<bool> &is_weight_list);

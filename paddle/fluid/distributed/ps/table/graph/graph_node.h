@@ -67,8 +67,8 @@ class Node {
   virtual int get_feature_size() { return 0; }
   virtual size_t get_neighbor_size() { return 0; }
 
-  virtual void set_train_mode(bool train_mode) {}
-  virtual bool get_train_mode() { return true; }
+  virtual void set_need_train(bool need_train) {}
+  virtual bool get_need_train() { return true; }
 
  protected:
   uint64_t id;
@@ -280,17 +280,17 @@ class FeatureNode : public Node {
     return 0;
   }
 
-  virtual void set_train_mode(bool train_mode) {
-    this->train_mode = train_mode;
+  virtual void set_need_train(bool need_train) {
+    this->need_train = need_train;
   }
 
-  virtual bool get_train_mode(bool train_mode) {
-    return this->train_mode;
+  virtual bool get_need_train(bool need_train) {
+    return this->need_train;
   }
 
  protected:
   std::vector<std::string> feature;
-  bool train_mode;
+  bool need_train;
 };
 
 }  // namespace distributed
