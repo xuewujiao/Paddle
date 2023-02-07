@@ -174,11 +174,6 @@ class GpuPsGraphTable
     return resource_->local_stream(gpu_id, 0);
   }
 
-  // set node_num for multi_node or single_node
-  void set_node_num(int node_num) { node_num_ = node_num; }
-
-  void set_node_id(int node_id) { node_id_ = node_id; }
-
   int gpu_num;
   int node_num_ = 1;
   int node_id_ = 0;

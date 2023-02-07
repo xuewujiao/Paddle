@@ -711,6 +711,18 @@ class PSGPUWrapper {
     return ((key / device_num_) % node_size_);
   }
 
+  // is key for self rank
+  bool IsKeyForSelfRank(const uint64_t& key) {
+    if (node_size_ == 1) {
+      return true;
+    }
+    return (static_cast<int>((key / device_num_) % node_size_) == rank_id_);
+  }
+  // rank id
+  int GetRankId(void) { return rank_id_; }
+  // rank size
+  int GetRankNum(void) { return node_size_; }
+
  private:
   static std::shared_ptr<PSGPUWrapper> s_instance_;
   static std::mutex ins_mutex;

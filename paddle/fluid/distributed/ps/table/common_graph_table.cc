@@ -37,7 +37,9 @@ DECLARE_bool(graph_get_neighbor_id);
 DECLARE_int32(gpugraph_storage_mode);
 DECLARE_uint64(gpugraph_slot_feasign_max_num);
 DECLARE_bool(graph_metapath_split_opt);
-
+PADDLE_DEFINE_EXPORTED_bool(graph_edges_split_only_by_src_id,
+                            false,
+                            "multi-node split edges only by src id");
 namespace paddle {
 namespace distributed {
 
@@ -1533,6 +1535,9 @@ int32_t GraphTable::get_nodes_ids_by_ranges(
 
 std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
     const std::string &path, const std::string &node_type, int idx) {
+#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
+  auto ps_wrapper = paddle::framework::PSGPUWrapper::GetInstance();
+#endif
   std::ifstream file(path);
   std::string line;
   uint64_t local_count = 0;
@@ -1552,6 +1557,13 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
       continue;
     }
     uint64_t id = std::strtoul(vals[0].ptr, NULL, 10);
+#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
+    if (!ps_wrapper->IsKeyForSelfRank(id)) {
+      VLOG(2) << "id " << id << " not matched, node_id: " << node_id_
+              << " , node_num:" << node_num_;
+      continue;
+    }
+#endif
     size_t shard_id = id % shard_num;
     if (shard_id >= shard_end || shard_id < shard_start) {
       VLOG(4) << "will not load " << id << " from " << path
@@ -1583,8 +1595,9 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
 
 std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
     const std::string &path) {
+#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
   auto ps_wrapper = paddle::framework::PSGPUWrapper::GetInstance();
-  std::ifstream file(path);
+#endif std::ifstream file(path);
   std::string line;
   uint64_t local_count = 0;
   uint64_t local_valid_count = 0;
@@ -1619,11 +1632,13 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
     }
     local_count++;
 
-    if (ps_wrapper->PartitionKeyForRank(id) != node_id_) {
+#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
+    if (!ps_wrapper->IsKeyForSelfRank(id)) {
       VLOG(2) << "id " << id << " not matched, node_id: " << node_id_
               << " , node_num:" << node_num_;
       continue;
     }
+#endif
 
     size_t index = shard_id - shard_start;
     auto node = feature_shards[idx][index]->add_feature_node(id, false);
@@ -1710,8 +1725,9 @@ int32_t GraphTable::build_sampler(int idx, std::string sample_type) {
 
 std::pair<uint64_t, uint64_t> GraphTable::parse_edge_file(
     const std::string &path, int idx, bool reverse) {
+#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
   auto ps_wrapper = paddle::framework::PSGPUWrapper::GetInstance();
-  std::string sample_type = "random";
+#endif std::string sample_type = "random";
   bool is_weighted = false;
   std::ifstream file(path);
   std::string line;
@@ -1740,12 +1756,14 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_edge_file(
         continue;
       }
     }
-    if (ps_wrapper->PartitionKeyForRank(src_id) != node_id_) {
+#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
+    if (!ps_wrapper->IsKeyForSelfRank(src_id)) {
       VLOG(2) << " node num :" << src_id
               << " not split into node_id_:" << node_id_
               << " node_num:" << node_num_;
       continue;
     }
+#endif
 
     float weight = 1;
     size_t last = line.find_last_of('\t');
@@ -1764,13 +1782,19 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_edge_file(
     auto node = edge_shards[idx][index]->add_graph_node(src_id);
     if (node != NULL) {
       node->build_edges(is_weighted);
-      if (ps_wrapper->PartitionKeyForRank(dst_id) == node_id_) {
+#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
+      if (FLAGS_graph_edges_split_only_by_src_id ||
+          ps_wrapper->IsKeyForSelfRank(dst_id)) {
+#endif
         node->add_edge(dst_id, weight);
+        local_valid_count++;
+#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
       } else {
         VLOG(2) << " dest node num :" << dst_id
                 << " will not add egde, node_id_:" << node_id_
                 << " node_num:" << node_num_;
       }
+#endif
     }
 
     local_valid_count++;
@@ -2586,7 +2610,18 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
   auto graph_feature = graph.graph_feature();
   auto node_types = graph.node_types();
   auto edge_types = graph.edge_types();
-  VLOG(0) << "got " << edge_types.size() << " edge types in total";
+
+#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
+  auto ps_wrapper = paddle::framework::PSGPUWrapper::GetInstance();
+  node_num_ = ps_wrapper->GetRankNum();
+  node_id_ = ps_wrapper->GetRankId();
+#endif
+
+  VLOG(0) << "got " << edge_types.size()
+          << " edge types in total, rank id=" << node_id_
+          << ", rank size=" << node_num_
+          << ", graph_edges_split_only_by_src_id="
+          << FLAGS_graph_edges_split_only_by_src_id;
   feat_id_map.resize(node_types.size());
   for (int k = 0; k < edge_types.size(); k++) {
     VLOG(0) << "in initialize: get a edge_type " << edge_types[k];

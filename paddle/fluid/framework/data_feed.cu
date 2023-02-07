@@ -2184,11 +2184,23 @@ int GraphDataGenerator::FillWalkBuf() {
   auto &meta_path = gpu_graph_ptr->meta_path_;
   auto &node_type_start = gpu_graph_ptr->node_type_start_[gpuid_];
   auto &finish_node_type = gpu_graph_ptr->finish_node_type_[gpuid_];
+  // for (auto node: node_type_start) {
+  //   VLOG(0) << "node_type_start node " << node.first << "  = " << node.second;
+  // }
+  // for (auto node: finish_node_type) {
+  //   VLOG(0) << "finish_node_type node " << node;
+  // }
   auto &type_to_index = gpu_graph_ptr->get_graph_type_to_index();
+  // for (auto node: type_to_index) {
+  //   VLOG(0) << "type_to_index node " << node.first << "  = " << node.second;
+  // }
   auto &cursor = gpu_graph_ptr->cursor_[thread_id_];
   size_t node_type_len = first_node_type.size();
+  // VLOG(0) << "node_type_len:" << node_type_len;
   int remain_size =
       buf_size_ - walk_degree_ * once_sample_startid_len_ * walk_len_;
+  // VLOG(0) << " buf_size_:" << buf_size_ <<  " walk_degree_:" << walk_degree_ << " once_sample_startid_len_:" << once_sample_startid_len_ 
+  //         << " walk_len_:" << walk_len_ << "remain_size :" << remain_size; 
   int total_samples = 0;
 
   while (i <= remain_size) {
@@ -2218,6 +2230,7 @@ int GraphDataGenerator::FillWalkBuf() {
       if (finish_node_type.size() == node_type_start.size()) {
         cursor = 0;
         epoch_finish_ = true;
+        VLOG(0) << " finish_node_type INSERT node_type " << node_type << " size:" << finish_node_type.size();
         break;
       }
       cursor += 1;
@@ -2391,7 +2404,7 @@ int GraphDataGenerator::FillWalkBuf() {
     uint64_t h_uniq_node_num = CopyUniqueNodes();
     VLOG(1) << "sample_times:" << sample_times << ", d_walk_size:" << buf_size_
             << ", d_walk_offset:" << i << ", total_rows:" << total_row_
-            << ", total_samples:" << total_samples;
+            << ", total_samples:" << total_samples << " h_uniq_node_num:" << h_uniq_node_num;
   } else {
     VLOG(1) << "sample_times:" << sample_times << ", d_walk_size:" << buf_size_
             << ", d_walk_offset:" << i << ", total_rows:" << total_row_

@@ -19,9 +19,6 @@
 #include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_ps_table.h"
 #include "paddle/fluid/framework/fleet/heter_ps/heter_resource.h"
 
-#if defined(PADDLE_WITH_GLOO) && defined(PADDLE_WITH_GPU_GRAPH)
-#include "paddle/fluid/framework/fleet/gloo_wrapper.h"
-#endif
 DECLARE_int32(gpugraph_storage_mode);
 DECLARE_bool(graph_metapath_split_opt);
 namespace paddle {
@@ -160,9 +157,10 @@ void GraphGpuWrapper::init_type_keys() {
       int gpuid = device_id_mapping[j];
       auto place = platform::CUDAPlace(gpuid);
       platform::CUDADeviceGuard guard(gpuid);
-      d_graph_all_type_total_keys_[f_idx][j] =
-          memory::AllocShared(place, tmp_keys[j].size() * sizeof(uint64_t), 
-              phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+      d_graph_all_type_total_keys_[f_idx][j] = memory::AllocShared(
+          place,
+          tmp_keys[j].size() * sizeof(uint64_t),
+          phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
       cudaMemcpyAsync(d_graph_all_type_total_keys_[f_idx][j]->ptr(),
                       tmp_keys[j].data(),
                       sizeof(uint64_t) * tmp_keys[j].size(),
@@ -247,10 +245,10 @@ void GraphGpuWrapper::init_metapath(std::string cur_metapath,
     int gpuid = device_id_mapping[j];
     auto place = platform::CUDAPlace(gpuid);
     platform::CUDADeviceGuard guard(gpuid);
-    d_graph_train_total_keys_[j] =
-        memory::AllocShared(place, 
-            tmp_keys[j].size() * sizeof(uint64_t),
-            phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+    d_graph_train_total_keys_[j] = memory::AllocShared(
+        place,
+        tmp_keys[j].size() * sizeof(uint64_t),
+        phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
     cudaMemcpyAsync(d_graph_train_total_keys_[j]->ptr(),
                     tmp_keys[j].data(),
                     sizeof(uint64_t) * tmp_keys[j].size(),
@@ -565,26 +563,9 @@ void GraphGpuWrapper::init_service() {
   resource->enable_p2p();
   GpuPsGraphTable *g = new GpuPsGraphTable(resource, id_to_edge.size());
   size_t gpu_num = device_id_mapping.size();
-#if defined(PADDLE_WITH_GLOO) && defined(PADDLE_WITH_GPU_GRAPH)
-  auto gloo = paddle::framework::GlooWrapper::GetInstance();
-  if (gloo->Size() > 1) {
-    if (!gloo->IsInitialized()) {
-      VLOG(0) << "GLOO is not inited";
-      gloo->Init();
-    }
-    node_num_ = gloo->Size();
-    node_id_ = gloo->Rank();
-    g->set_node_num(node_num_);
-    g->set_node_id(node_id_);
-    VLOG(0) << "GraphGpuWrapper Set node_num:" << node_num_
-            << " rank:" << node_id_;
-  }
-#endif
   g->init_cpu_table(table_proto, gpu_num);
   g->cpu_graph_table_->set_feature_separator(feature_separator_);
   g->cpu_graph_table_->set_slot_feature_separator(slot_feature_separator_);
-  g->cpu_graph_table_->set_node_num(node_num_);
-  g->cpu_graph_table_->set_node_id(node_id_);
   graph_table = (char *)g;
   upload_num = gpu_num;
   upload_task_pool.reset(new ::ThreadPool(upload_num));
