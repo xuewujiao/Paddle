@@ -2688,7 +2688,6 @@ void GraphDataGenerator::AllocResource(int thread_id,
   //                              cudaMemcpyHostToDevice,
   //                              stream_));
   // }
-  // 需要根据 metapath_split_opt再进行修改
   if (gpu_graph_training_ && FLAGS_graph_metapath_split_opt) {
     d_train_metapath_keys_ =
         gpu_graph_ptr->d_graph_train_total_keys_[thread_id];
@@ -2696,7 +2695,7 @@ void GraphDataGenerator::AllocResource(int thread_id,
         gpu_graph_ptr->h_graph_train_keys_len_[thread_id];
     VLOG(2) << "h train metapaths key len: " << h_train_metapath_keys_len_;
   } else {
-    // 指定infer keys: 按照目前需求，infer全量数据。
+    // For infer keys.
     auto &d_graph_all_type_keys = gpu_graph_ptr->d_graph_all_type_total_keys_;
     auto &h_graph_all_type_keys_len = gpu_graph_ptr->h_graph_all_type_keys_len_;
     for (size_t i = 0; i < d_graph_all_type_keys.size(); i++) {
@@ -2963,7 +2962,6 @@ void GraphDataGenerator::SetConfig(
   if (!gpu_graph_training_) {
     infer_node_type_ = graph_config.infer_node_type();
   }
-
 };
 
 void GraphDataGenerator::DumpWalkPath(std::string dump_path, size_t dump_rate) {
