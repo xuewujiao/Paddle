@@ -526,10 +526,10 @@ int GraphGpuWrapper::load_node_file(std::string name, std::string filepath) {
 int GraphGpuWrapper::load_node_file(std::string ntype2files,
                                     std::string graph_data_local_path,
                                     int part_num,
-                                    bool train_mode) {
+                                    bool need_train) {
   return ((GpuPsGraphTable *)graph_table)
       ->cpu_graph_table_->parse_node_and_load(
-          ntype2files, graph_data_local_path, part_num, train_mode);
+          ntype2files, graph_data_local_path, part_num, need_train);
 }
 
 void GraphGpuWrapper::load_node_and_edge(std::string etype2files,
