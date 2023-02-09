@@ -2690,14 +2690,13 @@ void GraphDataGenerator::AllocResource(int thread_id,
   // }
   if (gpu_graph_training_ && FLAGS_graph_metapath_split_opt) {
     d_train_metapath_keys_ =
-        gpu_graph_ptr->d_graph_train_total_keys_[thread_id];
+        gpu_graph_ptr->d_node_iter_graph_metapath_keys_[thread_id];
     h_train_metapath_keys_len_ =
-        gpu_graph_ptr->h_graph_train_keys_len_[thread_id];
+        gpu_graph_ptr->h_node_iter_graph_metapath_keys_len_[thread_id];
     VLOG(2) << "h train metapaths key len: " << h_train_metapath_keys_len_;
   } else {
-    auto &d_graph_all_type_keys = gpu_graph_ptr->d_graph_all_type_total_keys_;
-    auto &h_graph_all_type_keys_len = gpu_graph_ptr->h_graph_all_type_keys_len_;
-
+    auto &d_graph_all_type_keys = gpu_graph_ptr->d_node_iter_graph_all_type_keys_;
+    auto &h_graph_all_type_keys_len = gpu_graph_ptr->h_node_iter_graph_all_type_keys_len_;
     for (size_t i = 0; i < d_graph_all_type_keys.size(); i++) {
       d_device_keys_.push_back(d_graph_all_type_keys[i][thread_id]);
       h_device_keys_len_.push_back(h_graph_all_type_keys_len[i][thread_id]);

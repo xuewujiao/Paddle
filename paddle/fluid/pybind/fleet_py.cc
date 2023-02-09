@@ -416,7 +416,14 @@ void BindGraphGpuWrapper(py::module* m) {
       .def("release_graph", &GraphGpuWrapper::release_graph)
       .def("release_graph_edge", &GraphGpuWrapper::release_graph_edge)
       .def("release_graph_node", &GraphGpuWrapper::release_graph_node)
-      .def("finalize", &GraphGpuWrapper::finalize);
+      .def("finalize", &GraphGpuWrapper::finalize)
+      .def("set_node_iter_from_file",
+          py::overload_cast<std::string, const std::vector<std::string>&, int>(
+              &GraphGpuWrapper::set_node_iter_from_file))
+      .def("set_node_iter_from_file_for_metapath_split",
+          py::overload_cast<std::string, const std::vector<std::string>&, int>(
+              &GraphGpuWrapper::set_node_iter_from_file_for_metapath_split))
+      .def("set_node_iter_from_graph", &GraphGpuWrapper::set_node_iter_from_graph);
 }
 #endif
 
