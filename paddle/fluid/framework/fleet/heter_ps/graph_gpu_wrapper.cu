@@ -136,7 +136,15 @@ void GraphGpuWrapper::init_type_keys(
   std::vector<std::vector<uint64_t>> tmp_keys;
   tmp_keys.resize(thread_num);
   int first_node_idx;
-  keys.clear();  // 这里需要reset吗?
+
+  if (keys.size() > 0) {  // not empty
+    for (size_t f_idx = 0; f_idx < keys.size(); f_idx++) {
+      for (size_t j = 0; j < keys[f_idx].size(); j++) {
+        keys[f_idx][j].reset();
+      }
+    }
+  }
+  keys.clear();
   lens.clear();
   keys.resize(graph_all_type_total_keys.size());
   lens.resize(graph_all_type_total_keys.size());
