@@ -83,13 +83,10 @@ class GraphGpuWrapper {
                           bool reverse,
                           const std::vector<bool>& is_reverse_edge_map);
   int set_node_iter_from_file(std::string ntype2files,
-                              const std::vector<std::string>& node_types_file_path,
-                              int part_num);
-  int set_node_iter_from_file_for_metapath_split(
-      std::string ntype2files,
-      const std::vector<std::string>& node_types_file_path,
-      int part_num);
-  int set_node_iter_from_graph();
+                              std::string nodes_file_path,
+                              int part_num,
+                              bool training);
+  int set_node_iter_from_graph(bool training);
   int32_t load_next_partition(int idx);
   int32_t get_partition_num(int idx);
   void load_node_weight(int type_id, int idx, std::string path);

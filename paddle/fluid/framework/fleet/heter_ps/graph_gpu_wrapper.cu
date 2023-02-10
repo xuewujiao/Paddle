@@ -501,55 +501,46 @@ int GraphGpuWrapper::load_node_file(std::string ntype2files,
 
 int GraphGpuWrapper::set_node_iter_from_file(
     std::string ntype2files,
-    const std::vector<std::string>& node_types_file_path,
-    int part_num) {
+    std::string node_types_file_path,
+    int part_num,
+    bool training) {
   // 0. clear possible cpu node.
   ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->release_graph_node();
 
   // 1. load cpu node
-  for (size_t i = 0; i < node_types_file_path.size(); i++) {
-    std::string node_path = node_types_file_path[i];
-    ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->parse_node_and_load(
-        ntype2files, node_path, part_num, false);
-  }
+  ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->parse_node_and_load(
+      ntype2files, node_types_file_path, part_num, false);
 
   // 2. init node iter keys on cpu and release cpu node shards.
   ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->build_node_iter_type_keys();
   ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->release_graph_node();
 
-// 3. cpu -> gpu.
-  init_type_keys(d_node_iter_graph_all_type_keys_,
-                 h_node_iter_graph_all_type_keys_len_);
-  return 0;
-}
-
-int GraphGpuWrapper::set_node_iter_from_file_for_metapath_split(
-    std::string ntype2files,
-    const std::vector<std::string>& node_types_file_path,
-    int part_num) {
-  // 0. clear possible cpu node.
-  ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->release_graph_node();
-
-  // 1. load cpu node.
-  for (size_t i = 0; i < node_types_file_path.size(); i++) {
-    std::string node_path = node_types_file_path[i];
-    ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->parse_node_and_load(
-        ntype2files, node_path, part_num, false);
+  if (!training) {
+    init_type_keys(d_node_iter_graph_all_type_keys_,
+                   h_node_iter_graph_all_type_keys_len_);
+  } else {
+    if (FLAGS_graph_metapath_split_opt) {
+      init_metapath_total_keys();
+    } else {
+      init_type_keys(d_node_iter_graph_all_type_keys_,
+                     h_node_iter_graph_all_type_keys_len_); 
+    }
   }
-
-  // 2. init node iter keys and release cpu node shards.
-  ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->build_node_iter_type_keys();
-  ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->release_graph_node();
-
-  // 3. cpu -> gpu.
-  init_metapath_total_keys();
-
   return 0;
 }
 
-int GraphGpuWrapper::set_node_iter_from_graph() {
-  d_node_iter_graph_all_type_keys_ = d_graph_all_type_total_keys_;
-  h_node_iter_graph_all_type_keys_len_ = h_graph_all_type_keys_len_;
+int GraphGpuWrapper::set_node_iter_from_graph(bool training) {
+  if (!training) {
+    d_node_iter_graph_all_type_keys_ = d_graph_all_type_total_keys_;
+    h_node_iter_graph_all_type_keys_len_ = h_graph_all_type_keys_len_;
+  } else {
+    if (FLAGS_graph_metapath_split_opt) {
+      init_metapath_total_keys();
+    } else {
+      d_node_iter_graph_all_type_keys_ = d_graph_all_type_total_keys_;
+      h_node_iter_graph_all_type_keys_len_ = h_graph_all_type_keys_len_;
+    }
+  }
   return 0;
 }
 
