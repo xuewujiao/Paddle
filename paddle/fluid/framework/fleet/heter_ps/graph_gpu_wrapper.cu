@@ -505,30 +505,27 @@ int GraphGpuWrapper::set_node_iter_from_file(
     std::string node_types_file_path,
     int part_num,
     bool training) {
-  // init_type_keys
+  // 1. init type keys
   if (!type_keys_initialized_) {
     init_type_keys(d_graph_all_type_total_keys_,
                    h_graph_all_type_keys_len_);
-    type_keys_initialized_ = true; 
+    type_keys_initialized_ = true;
   }
 
-  VLOG(0) << "Begin release_graph_node";
-  // 0. clear possible cpu node, only for release_graph_node.
+  // 2. clear possible cpu node, only for release_graph_node.
   if (!clear_cpu_nodes_) {
     ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->release_graph_node();
   }
 
-  // 1. load cpu node
-  VLOG(0) << "Begin parse_node_and_load";
+  // 3. load cpu node
   ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->parse_node_and_load(
       ntype2files, node_types_file_path, part_num, false);
 
-  // 2. init node iter keys on cpu and release cpu node shards.
-  VLOG(0) << "Begin build_node_iter_type_keys";
+  // 4. init node iter keys on cpu and release cpu node shards.
   ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->build_node_iter_type_keys();
   ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->clear_feature_shard();
 
-  VLOG(0) << "Begin init_type_keys";
+  // 5. init train or infer type keys.
   if (!training) {
     init_type_keys(d_node_iter_graph_all_type_keys_,
                    h_node_iter_graph_all_type_keys_len_);
@@ -537,20 +534,21 @@ int GraphGpuWrapper::set_node_iter_from_file(
       init_metapath_total_keys();
     } else {
       init_type_keys(d_node_iter_graph_all_type_keys_,
-                     h_node_iter_graph_all_type_keys_len_); 
+                     h_node_iter_graph_all_type_keys_len_);
     }
   }
   return 0;
 }
 
 int GraphGpuWrapper::set_node_iter_from_graph(bool training) {
+  // 1. init type keys
   if (!type_keys_initialized_) {
     init_type_keys(d_graph_all_type_total_keys_,
                    h_graph_all_type_keys_len_);
     type_keys_initialized_ = true;
   }
 
-  VLOG(0) << "Begin set_node_iter_from_graph";
+  // 2. init train or infer type keys.
   if (!training) {
     d_node_iter_graph_all_type_keys_ = d_graph_all_type_total_keys_;
     h_node_iter_graph_all_type_keys_len_ = h_graph_all_type_keys_len_;
@@ -562,7 +560,6 @@ int GraphGpuWrapper::set_node_iter_from_graph(bool training) {
       h_node_iter_graph_all_type_keys_len_ = h_graph_all_type_keys_len_;
     }
   }
-  VLOG(0) << "End set_node_iter_from_graph";
   return 0;
 }
 

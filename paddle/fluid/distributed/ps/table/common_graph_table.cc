@@ -2748,15 +2748,15 @@ void GraphTable::build_graph_type_keys() {
 
 void GraphTable::build_node_iter_type_keys() {
   VLOG(0) << "begin build_node_iter_type_keys on cpu";
-  graph_node_iter_type_keys_.clear();
-  graph_node_iter_type_keys_.resize(this->feature_to_id.size());
+  graph_type_keys_.clear();
+  graph_type_keys_.resize(this->feature_to_id.size());
 
   int cnt = 0;
   for (auto &it : this->feature_to_id) {
     auto node_idx = it.second;
     std::vector<std::vector<uint64_t>> keys;
     this->get_all_id(GraphTableType::FEATURE_TABLE, node_idx, 1, &keys);
-    graph_node_iter_type_keys_[cnt++] = std::move(keys[0]);
+    graph_type_keys_[cnt++] = std::move(keys[0]);
   }
   VLOG(0) << "finish build_node_iter_type_keys on cpu";
 }
