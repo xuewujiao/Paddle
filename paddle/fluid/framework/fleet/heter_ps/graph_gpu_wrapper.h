@@ -194,6 +194,8 @@ class GraphGpuWrapper {
   std::shared_ptr<::ThreadPool> upload_task_pool;
   std::string feature_separator_ = std::string(" ");
   bool conf_initialized_ = false;
+  bool clear_cpu_nodes_ = false;
+  bool type_keys_initialized_ = false;
   std::vector<int> first_node_type_;
   std::vector<uint8_t> excluded_train_pair_;
   std::vector<std::vector<int>> meta_path_;

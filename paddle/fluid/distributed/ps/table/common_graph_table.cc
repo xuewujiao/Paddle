@@ -539,6 +539,7 @@ void GraphTable::release_graph_edge() {
 }
 
 void GraphTable::release_graph_node() {
+  build_graph_type_keys();
   if (FLAGS_graph_metapath_split_opt) {
     clear_feature_shard();
   } else {
@@ -550,6 +551,12 @@ void GraphTable::release_graph_node() {
     } else {
       merge_feature_shard();
       feature_shrink_to_fit();
+      feature_shards.resize(id_to_feature.size());
+      for (int k = 0; k < (int)feature_shards.size(); k++) {
+        for (size_t i = 0; i < shard_num_per_server; i++) {
+          feature_shards[k].push_back(new GraphShard());
+        }
+      }
     }
   }
 }
@@ -2741,15 +2748,15 @@ void GraphTable::build_graph_type_keys() {
 
 void GraphTable::build_node_iter_type_keys() {
   VLOG(0) << "begin build_node_iter_type_keys on cpu";
-  graph_type_keys_.clear();
-  graph_type_keys_.resize(this->feature_to_id.size());
+  graph_node_iter_type_keys_.clear();
+  graph_node_iter_type_keys_.resize(this->feature_to_id.size());
 
   int cnt = 0;
   for (auto &it : this->feature_to_id) {
     auto node_idx = it.second;
     std::vector<std::vector<uint64_t>> keys;
     this->get_all_id(GraphTableType::FEATURE_TABLE, node_idx, 1, &keys);
-    graph_type_keys_[cnt++] = std::move(keys[0]);
+    graph_node_iter_type_keys_[cnt++] = std::move(keys[0]);
   }
   VLOG(0) << "finish build_node_iter_type_keys on cpu";
 }

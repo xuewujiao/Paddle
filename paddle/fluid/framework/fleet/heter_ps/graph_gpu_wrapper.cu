@@ -120,8 +120,11 @@ void GraphGpuWrapper::init_conf(const std::string &first_node_type,
       infer_cursor_.push_back(0);
       cursor_.push_back(0);
     }
-    init_type_keys(d_graph_all_type_total_keys_,
-                   h_graph_all_type_keys_len_);
+    if (!type_keys_initialized_) {
+      init_type_keys(d_graph_all_type_total_keys_,
+                     h_graph_all_type_keys_len_);
+      type_keys_initialized_ = true;
+    }
   }
 }
 
@@ -492,8 +495,6 @@ int GraphGpuWrapper::load_node_file(std::string name, std::string filepath) {
 int GraphGpuWrapper::load_node_file(std::string ntype2files,
                                     std::string graph_data_local_path,
                                     int part_num) {
-  ((GpuPsGraphTable *)graph_table)
-      ->cpu_graph_table_->build_graph_type_keys();
   return ((GpuPsGraphTable *)graph_table)
       ->cpu_graph_table_->parse_node_and_load(
           ntype2files, graph_data_local_path, part_num, true);
@@ -504,17 +505,30 @@ int GraphGpuWrapper::set_node_iter_from_file(
     std::string node_types_file_path,
     int part_num,
     bool training) {
-  // 0. clear possible cpu node.
-  ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->release_graph_node();
+  // init_type_keys
+  if (!type_keys_initialized_) {
+    init_type_keys(d_graph_all_type_total_keys_,
+                   h_graph_all_type_keys_len_);
+    type_keys_initialized_ = true; 
+  }
+
+  VLOG(0) << "Begin release_graph_node";
+  // 0. clear possible cpu node, only for release_graph_node.
+  if (!clear_cpu_nodes_) {
+    ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->release_graph_node();
+  }
 
   // 1. load cpu node
+  VLOG(0) << "Begin parse_node_and_load";
   ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->parse_node_and_load(
       ntype2files, node_types_file_path, part_num, false);
 
   // 2. init node iter keys on cpu and release cpu node shards.
+  VLOG(0) << "Begin build_node_iter_type_keys";
   ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->build_node_iter_type_keys();
-  ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->release_graph_node();
+  ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->clear_feature_shard();
 
+  VLOG(0) << "Begin init_type_keys";
   if (!training) {
     init_type_keys(d_node_iter_graph_all_type_keys_,
                    h_node_iter_graph_all_type_keys_len_);
@@ -530,6 +544,13 @@ int GraphGpuWrapper::set_node_iter_from_file(
 }
 
 int GraphGpuWrapper::set_node_iter_from_graph(bool training) {
+  if (!type_keys_initialized_) {
+    init_type_keys(d_graph_all_type_total_keys_,
+                   h_graph_all_type_keys_len_);
+    type_keys_initialized_ = true;
+  }
+
+  VLOG(0) << "Begin set_node_iter_from_graph";
   if (!training) {
     d_node_iter_graph_all_type_keys_ = d_graph_all_type_total_keys_;
     h_node_iter_graph_all_type_keys_len_ = h_graph_all_type_keys_len_;
@@ -541,6 +562,7 @@ int GraphGpuWrapper::set_node_iter_from_graph(bool training) {
       h_node_iter_graph_all_type_keys_len_ = h_graph_all_type_keys_len_;
     }
   }
+  VLOG(0) << "End set_node_iter_from_graph";
   return 0;
 }
 
@@ -892,8 +914,9 @@ void GraphGpuWrapper::release_graph_edge() {
 }
 
 void GraphGpuWrapper::release_graph_node() {
-  return ((GpuPsGraphTable *)graph_table)
+  ((GpuPsGraphTable *)graph_table)
       ->cpu_graph_table_->release_graph_node();
+  clear_cpu_nodes_ = true;
 }
 
 std::vector<uint64_t> &GraphGpuWrapper::get_graph_total_keys() {
