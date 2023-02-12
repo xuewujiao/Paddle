@@ -2747,7 +2747,6 @@ void GraphTable::build_graph_type_keys() {
 }
 
 void GraphTable::build_node_iter_type_keys() {
-  VLOG(0) << "begin build_node_iter_type_keys on cpu";
   graph_type_keys_.clear();
   graph_type_keys_.resize(this->feature_to_id.size());
 
@@ -2758,7 +2757,6 @@ void GraphTable::build_node_iter_type_keys() {
     this->get_all_id(GraphTableType::FEATURE_TABLE, node_idx, 1, &keys);
     graph_type_keys_[cnt++] = std::move(keys[0]);
   }
-  VLOG(0) << "finish build_node_iter_type_keys on cpu";
 }
 
 }  // namespace distributed

@@ -750,7 +750,6 @@ class GraphTable : public Table {
 
   std::vector<uint64_t> graph_total_keys_;
   std::vector<std::vector<uint64_t>> graph_type_keys_;
-  std::vector<std::vector<uint64_t>> graph_node_iter_type_keys_;
   std::unordered_map<int, int> type_to_index_;
 
   std::vector<std::vector<GraphShard *>> edge_shards, feature_shards;
