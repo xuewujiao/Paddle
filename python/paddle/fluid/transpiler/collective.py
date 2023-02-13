@@ -459,7 +459,8 @@ class SingleProcessMultiThread(GradAllReduce):
         if self.loss_scale is 0 and param_cnt is 0:
             return
         # scale loss
-        self._insert_scale_loss_grad_ops()
+        if self.loss_scale:
+            self._insert_scale_loss_grad_ops(param_cnt)
         # no param
         if param_cnt is 0:
             return
@@ -495,12 +496,15 @@ class SingleProcessMultiThread(GradAllReduce):
 
         return param_count
 
-    def _insert_scale_loss_grad_ops(self):
+    def _insert_scale_loss_grad_ops(self, param_cnt):
         '''
         In order to keep the learning rate consistent in different numbers of
         training workers, we scale the loss grad by the number of workers
         '''
-        scale = 1.0 / self.nranks / self.gpu_nums
+        if param_cnt > 0:
+            scale = 1.0 / self.nranks / self.gpu_nums
+        else:
+            scale = 1.0 / self.gpu_nums
         print("begin _insert_scale_loss_grad_ops scale = %s" % (scale))
         block = self.main_program.global_block()
         for idx, op in reversed(list(enumerate(block.ops))):

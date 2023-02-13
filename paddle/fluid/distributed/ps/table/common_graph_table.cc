@@ -41,6 +41,9 @@ DECLARE_bool(graph_metapath_split_opt);
 PADDLE_DEFINE_EXPORTED_bool(graph_edges_split_only_by_src_id,
                             false,
                             "multi-node split edges only by src id");
+PADDLE_DEFINE_EXPORTED_bool(graph_edges_hard_split_debug,
+                            false,
+                            "graph split hard split by debug");
 
 namespace paddle {
 namespace distributed {
@@ -1534,12 +1537,22 @@ int32_t GraphTable::get_nodes_ids_by_ranges(
   }
   return 0;
 }
-
+bool GraphTable::is_key_for_self_rank(const uint64_t &id) {
+#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
+  if (node_num_ == 1) {
+    if (FLAGS_graph_edges_hard_split_debug) {
+      return (((id / 8) % 2) == 0);
+    }
+    return true;
+  }
+  thread_local auto ps_wrapper = paddle::framework::PSGPUWrapper::GetInstance();
+  return ps_wrapper->IsKeyForSelfRank(id);
+#else
+  return true;
+#endif
+}
 std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
     const std::string &path, const std::string &node_type, int idx) {
-#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
-  auto ps_wrapper = paddle::framework::PSGPUWrapper::GetInstance();
-#endif
   std::ifstream file(path);
   std::string line;
   uint64_t local_count = 0;
@@ -1559,13 +1572,11 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
       continue;
     }
     uint64_t id = std::strtoul(vals[0].ptr, NULL, 10);
-#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
-    if (!ps_wrapper->IsKeyForSelfRank(id)) {
+    if (!is_key_for_self_rank(id)) {
       VLOG(2) << "id " << id << " not matched, node_id: " << node_id_
               << " , node_num:" << node_num_;
       continue;
     }
-#endif
     size_t shard_id = id % shard_num;
     if (shard_id >= shard_end || shard_id < shard_start) {
       VLOG(4) << "will not load " << id << " from " << path
@@ -1597,9 +1608,6 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
 
 std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
     const std::string &path) {
-#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
-  auto ps_wrapper = paddle::framework::PSGPUWrapper::GetInstance();
-#endif
   std::ifstream file(path);
   std::string line;
   uint64_t local_count = 0;
@@ -1634,13 +1642,11 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
       continue;
     }
     local_count++;
-#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
-    if (!ps_wrapper->IsKeyForSelfRank(id)) {
+    if (!is_key_for_self_rank(id)) {
       VLOG(2) << "id " << id << " not matched, node_id: " << node_id_
               << " , node_num:" << node_num_;
       continue;
     }
-#endif
     size_t index = shard_id - shard_start;
     auto node = feature_shards[idx][index]->add_feature_node(id, false);
     if (node != NULL) {
@@ -1726,10 +1732,6 @@ int32_t GraphTable::build_sampler(int idx, std::string sample_type) {
 
 std::pair<uint64_t, uint64_t> GraphTable::parse_edge_file(
     const std::string &path, int idx, bool reverse) {
-#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
-  auto ps_wrapper = paddle::framework::PSGPUWrapper::GetInstance();
-#endif
-  std::string sample_type = "random";
   bool is_weighted = false;
   std::ifstream file(path);
   std::string line;
@@ -1758,45 +1760,39 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_edge_file(
       }
     }
     local_count++;
-#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
-    if (!ps_wrapper->IsKeyForSelfRank(src_id)) {
-      VLOG(2) << " node num :" << src_id
-              << " not split into node_id_:" << node_id_
-              << " node_num:" << node_num_;
-      continue;
-    }
-#endif
-
-    float weight = 1;
-    size_t last = line.find_last_of('\t');
-    if (start != last) {
-      weight = std::stof(&line[last + 1]);
-      sample_type = "weighted";
-      is_weighted = true;
-    }
-
     if (src_shard_id >= shard_end || src_shard_id < shard_start) {
       VLOG(0) << "will not load " << src_id << " from " << path
               << ", please check id distribution";
       continue;
     }
+    // src id
+    if (!is_key_for_self_rank(src_id)) {
+      VLOG(2) << " node num :" << src_id
+              << " not split into node_id_:" << node_id_
+              << " node_num:" << node_num_;
+      continue;
+    }
+    // dst id
+    if (!FLAGS_graph_edges_split_only_by_src_id
+              && !is_key_for_self_rank(dst_id)) {
+      VLOG(2) << " dest node num :" << dst_id
+              << " will not add egde, node_id_:" << node_id_
+              << " node_num:" << node_num_;
+      continue;
+    }
+
+    float weight = 1;
+    size_t last = line.find_last_of('\t');
+    if (start != last) {
+      weight = std::stof(&line[last + 1]);
+      is_weighted = true;
+    }
     size_t index = src_shard_id - shard_start;
     auto node = edge_shards[idx][index]->add_graph_node(src_id);
     if (node != NULL) {
       node->build_edges(is_weighted);
-#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
-      if (FLAGS_graph_edges_split_only_by_src_id
-          || ps_wrapper->IsKeyForSelfRank(dst_id)) {
-#endif
-        node->add_edge(dst_id, weight);
-        local_valid_count++;
-#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
-      } else {
-        VLOG(2) << " dest node num :" << dst_id
-                << " will not add egde, node_id_:" << node_id_
-                << " node_num:" << node_num_;
-      }
-#endif
+      node->add_edge(dst_id, weight);
+      local_valid_count++;
     }
   }
   VLOG(2) << local_valid_count << "/" << local_count
@@ -2706,25 +2702,30 @@ void GraphTable::build_graph_total_keys() {
   graph_total_keys_.insert(
       graph_total_keys_.end(), keys[0].begin(), keys[0].end());
 
-  VLOG(0) << "finish insert edge to graph_total_keys";
+  VLOG(0) << "finish insert edge to graph_total_keys, total keys="
+          << graph_total_keys_.size();
 }
 
 void GraphTable::build_graph_type_keys() {
-  VLOG(0) << "begin build_graph_type_keys";
+  VLOG(0) << "begin build_graph_type_keys, feature size="
+          << this->feature_to_id.size();
   graph_type_keys_.clear();
   graph_type_keys_.resize(this->feature_to_id.size());
 
   int cnt = 0;
+  uint64_t total_key = 0;
   for (auto &it : this->feature_to_id) {
     auto node_idx = it.second;
     std::vector<std::vector<uint64_t>> keys;
     this->get_all_id(GraphTableType::FEATURE_TABLE, node_idx, 1, &keys);
     type_to_index_[node_idx] = cnt;
+    total_key += keys[0].size();
     graph_type_keys_[cnt++] = std::move(keys[0]);
   }
-  VLOG(0) << "finish build_graph_type_keys";
+  VLOG(0) << "finish build_graph_type_keys, total type keys=" << total_key;
 
-  VLOG(0) << "begin insert feature into graph_total_keys";
+  VLOG(0) << "begin insert feature into graph_total_keys, feature size="
+          << this->feature_to_id.size();
   // build feature embedding id
   for (auto &it : this->feature_to_id) {
     auto node_idx = it.second;
@@ -2734,7 +2735,8 @@ void GraphTable::build_graph_type_keys() {
     graph_total_keys_.insert(
         graph_total_keys_.end(), keys[0].begin(), keys[0].end());
   }
-  VLOG(0) << "finish insert feature into graph_total_keys";
+  VLOG(0) << "finish insert feature into graph_total_keys, feature embedding keys="
+          << graph_total_keys_.size();
 }
 
 }  // namespace distributed

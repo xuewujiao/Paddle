@@ -712,9 +712,6 @@ class PSGPUWrapper {
   }
   // is key for self rank
   bool IsKeyForSelfRank(const uint64_t& key) {
-    if (node_size_ == 1) {
-      return true;
-    }
     return (static_cast<int>((key / device_num_) % node_size_) == rank_id_);
   }
   // rank id
