@@ -157,14 +157,15 @@ void GraphGpuWrapper::init_type_keys(
     }
     keys[f_idx].resize(thread_num);
     auto &type_total_key = graph_all_type_total_keys[f_idx];
-    VLOG(0) << "graph_all_type_total_keys[ " << f_idx << "] =" << graph_all_type_total_keys[f_idx].size();
+    VLOG(1) << "graph_all_type_total_keys[ " << f_idx << "] ="
+            << graph_all_type_total_keys[f_idx].size();
     for (size_t j = 0; j < type_total_key.size(); j++) {
       uint64_t shard = type_total_key[j] % thread_num;
       tmp_keys[shard].push_back(type_total_key[j]);
     }
     for (size_t j = 0; j < thread_num; j++) {
       lens[f_idx].push_back(tmp_keys[j].size());
-      VLOG(0) << "node type: " << type_to_index[f_idx]
+      VLOG(1) << "node type: " << type_to_index[f_idx]
               << ", gpu_graph_device_keys[" << j
               << "] = " << tmp_keys[j].size();
     }
@@ -516,14 +517,12 @@ int GraphGpuWrapper::set_node_iter_from_file(
     int part_num,
     bool training) {
   // 1. init type keys
-  VLOG(0) << "Begin type keys iniatialize";
   if (!type_keys_initialized_) {
     init_type_keys(d_graph_all_type_total_keys_,
                    h_graph_all_type_keys_len_);
     type_keys_initialized_ = true;
   }
 
-  VLOG(0) << "load cpu nodes";
   // 2. load cpu node
   ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->parse_node_and_load(
       ntype2files, node_types_file_path, part_num, false);

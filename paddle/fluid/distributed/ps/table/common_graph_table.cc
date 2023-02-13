@@ -2740,14 +2740,11 @@ void GraphTable::build_node_iter_type_keys() {
   graph_type_keys_.clear();
   graph_type_keys_.resize(this->feature_to_id.size());
 
-  VLOG(0) << "size of graph_type_keys_: " << graph_type_keys_.size();
-
   int cnt = 0;
   for (auto &it : this->feature_to_id) {
     auto node_idx = it.second;
     std::vector<std::vector<uint64_t>> keys;
     this->get_all_id(GraphTableType::NODE_TABLE, node_idx, 1, &keys);
-    VLOG(0) << "node type: " << node_idx << " keys len: " << keys[0].size();
     graph_type_keys_[cnt++] = std::move(keys[0]);
   }
   VLOG(0) << "finish build_node_iter_type_keys";
