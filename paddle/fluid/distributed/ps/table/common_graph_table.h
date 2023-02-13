@@ -496,7 +496,7 @@ class GraphSampler {
 #endif
 */
 
-enum GraphTableType { EDGE_TABLE, FEATURE_TABLE };
+enum GraphTableType { EDGE_TABLE, FEATURE_TABLE, NODE_TABLE };
 
 class GraphTable : public Table {
  public:
