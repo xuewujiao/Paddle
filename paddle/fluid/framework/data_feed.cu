@@ -799,6 +799,8 @@ int GraphDataGenerator::GenerateBatch() {
   if (!gpu_graph_training_) {
     // infer
     if (!sage_mode_) {
+      ReComputeBatchsize();  //recompute batchsize in multi node
+      VLOG(3) << "batch num:" << batch_num_ << ", new batch size: " << batch_size_ << ", total ins num:" << GetPathNum();
       total_instance = (infer_node_start_ + batch_size_ <= infer_node_end_)
                            ? batch_size_
                            : infer_node_end_ - infer_node_start_;
@@ -2143,6 +2145,24 @@ void GraphDataGenerator::ClearSampleState() {
   for (auto iter = node_type_start.begin(); iter != node_type_start.end();
        iter++) {
     iter->second = 0;
+  }
+}
+
+void GraphDataGenerator::ReComputeBatchsize() {
+  int reader_ins = GetPathNum();
+  if (batch_num_ != 0) {
+    int left_ins  = reader_ins % batch_num_;
+    if (left_ins == 0) {
+      batch_size_ = reader_ins / batch_num_;
+    } else {
+      if (batch_num_ > 1) {
+        if (reader_ins % (batch_num_ - 1) != 0) {
+           batch_size_ = reader_ins / (batch_num_ -1);
+        } else {
+           batch_size_ = (reader_ins - 1) / (batch_num_ - 1);
+        }
+      }
+    }
   }
 }
 

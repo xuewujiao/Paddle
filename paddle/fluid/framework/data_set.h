@@ -175,6 +175,7 @@ class Dataset {
   virtual uint32_t GetPassID() = 0;
 
   virtual void DumpWalkPath(std::string dump_path, size_t dump_rate) = 0;
+  virtual void DynamicAdjustBatchNum() = 0;
 
  protected:
   virtual int ReceiveFromClient(int msg_type,
@@ -271,6 +272,7 @@ class DatasetImpl : public Dataset {
   virtual std::vector<std::string> GetSlots();
   virtual bool GetEpochFinish();
   virtual void DumpWalkPath(std::string dump_path, size_t dump_rate);
+  virtual void DynamicAdjustBatchNum();
 
   std::vector<paddle::framework::Channel<T>>& GetMultiOutputChannel() {
     return multi_output_channel_;

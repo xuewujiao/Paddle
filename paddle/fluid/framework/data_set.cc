@@ -329,7 +329,7 @@ static int compute_thread_batch_nccl(
     std::vector<std::pair<int, int>>* nccl_offsets) {
   int thread_avg_batch_num = 0;
   if (total_instance_num < static_cast<int64_t>(thr_num)) {
-    LOG(WARNING) << "compute_thread_batch_nccl total ins num:["
+    VLOG(3) << "compute_thread_batch_nccl total ins num:["
                  << total_instance_num << "], less thread num:[" << thr_num
                  << "]";
     return thread_avg_batch_num;
@@ -360,10 +360,10 @@ static int compute_thread_batch_nccl(
             << " thread max batch num: " << thread_max_batch_num
             << " thread avg batch num: " << thread_avg_batch_num;
     if (diff_batch_num == 0) {
-      LOG(WARNING) << "total sum ins " << sum_total_ins_num << ", thread_num "
-                   << thr_num << ", ins num " << total_instance_num
-                   << ", batch num " << offset.size()
-                   << ", thread avg batch num " << thread_avg_batch_num;
+      VLOG(3) << "total sum ins " << sum_total_ins_num << ", thread_num "
+              << thr_num << ", ins num " << total_instance_num
+              << ", batch num " << offset.size()
+              << ", thread avg batch num " << thread_avg_batch_num;
       return thread_avg_batch_num;
     }
 
@@ -389,17 +389,17 @@ static int compute_thread_batch_nccl(
     offset.resize(offset_split_index);
     compute_left_batch_num(
         split_left_num, need_batch_num, &offset, split_start);
-    LOG(WARNING) << "total sum ins " << sum_total_ins_num << ", thread_num "
-                 << thr_num << ", ins num " << total_instance_num
-                 << ", batch num " << offset.size() << ", thread avg batch num "
-                 << thread_avg_batch_num << ", thread max batch num "
-                 << thread_max_batch_num
-                 << ", need batch num: " << (need_batch_num / thr_num)
-                 << "split begin (" << split_start << ")" << split_start
-                 << ", num " << split_left_num;
+    VLOG(3) << "total sum ins " << sum_total_ins_num << ", thread_num "
+            << thr_num << ", ins num " << total_instance_num
+            << ", batch num " << offset.size() << ", thread avg batch num "
+            << thread_avg_batch_num << ", thread max batch num "
+            << thread_max_batch_num
+            << ", need batch num: " << (need_batch_num / thr_num)
+            << "split begin (" << split_start << ")" << split_start
+            << ", num " << split_left_num;
     thread_avg_batch_num = thread_max_batch_num;
   } else {
-    LOG(WARNING) << "thread_num " << thr_num << ", ins num "
+    VLOG(3) << "thread_num " << thr_num << ", ins num "
                  << total_instance_num << ", batch num " << offset.size()
                  << ", thread avg batch num " << thread_avg_batch_num;
   }
@@ -706,6 +706,28 @@ void DatasetImpl<T>::DumpWalkPath(std::string dump_path, size_t dump_rate) {
     }
   }
 #endif
+}
+
+template <typename T>
+void DatasetImpl<T>::DynamicAdjustBatchNum() {
+  if (gpu_graph_mode_) {
+#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
+    VLOG(3) << "will dynamic adjust batch num";
+    // split data into thread
+    int default_batch_size = (readers_[0].get())->GetCurBatchSize();
+    std::vector<std::pair<int, int>> offset;
+    int64_t total_ins_num = GetMemoryDataSize();
+    int thread_avg_batch_num = compute_thread_batch_nccl(thread_num_, total_ins_num,
+                                      default_batch_size, &offset);
+    for (size_t i = 0; i < readers_.size(); i++) {
+      readers_[i]->SetNewBatchNum(thread_avg_batch_num);
+    }
+    VLOG(3) << "thread_num: " << thread_num_
+            << " memory size: " << total_ins_num
+            << " default batch size: " << default_batch_size
+            << " thread avg batch num:" << thread_avg_batch_num;
+#endif
+  }
 }
 
 // do tdm sample

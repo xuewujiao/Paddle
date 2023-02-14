@@ -1569,6 +1569,8 @@ void PSGPUWrapper::LoadIntoMemory(bool is_shuffle) {
   if (is_shuffle) {
     dataset_->LocalShuffle();
   }
+  //adjust batch num
+  dataset_->DynamicAdjustBatchNum();
 
   InitSlotInfo();
   if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
