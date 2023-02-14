@@ -733,6 +733,7 @@ class HeterComm {
   std::vector<std::shared_ptr<cub::CachingDeviceAllocator>> allocators_;
 #endif
   int64_t start_time_ = 0;
+  bool is_infer_mode_ = false;
 };
 
 }  // end namespace framework

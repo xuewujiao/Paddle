@@ -251,7 +251,7 @@ void HashTable<KeyType, ValType>::set_sparse_sgd(
     const OptimizerConfig& optimizer_config) {
   host_optimizer_config_.set_sparse_sgd(optimizer_config);
   cudaMemcpyAsync((void*)device_optimizer_config_,
-             &host_optimizer_config_,
+             &optimizer_config,
              sizeof(OptimizerConfig),
              cudaMemcpyHostToDevice,
 			 stream_);
@@ -263,7 +263,7 @@ void HashTable<KeyType, ValType>::set_embedx_sgd(
     const OptimizerConfig& optimizer_config) {
   host_optimizer_config_.set_embedx_sgd(optimizer_config);
   cudaMemcpyAsync((void*)device_optimizer_config_,
-             &host_optimizer_config_,
+             &optimizer_config,
              sizeof(OptimizerConfig),
              cudaMemcpyHostToDevice,
 			 stream_);

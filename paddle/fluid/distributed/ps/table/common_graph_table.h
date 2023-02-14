@@ -742,6 +742,7 @@ class GraphTable : public Table {
 
   void build_graph_total_keys();
   void build_graph_type_keys();
+  bool is_key_for_self_rank(const uint64_t &id);
 
   std::vector<uint64_t> graph_total_keys_;
   std::vector<std::vector<uint64_t>> graph_type_keys_;

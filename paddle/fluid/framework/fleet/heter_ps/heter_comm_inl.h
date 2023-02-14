@@ -34,6 +34,7 @@ DECLARE_int32(gpugraph_dedup_pull_push_mode);
 DECLARE_bool(enable_tracker_all2all);
 DECLARE_bool(enable_all2all_use_fp16);
 DECLARE_bool(enable_sparse_inner_gather);
+DECLARE_bool(graph_embedding_split_infer_mode);
 
 namespace paddle {
 namespace framework {
@@ -147,7 +148,8 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::HeterComm(
           << ", multi_mf_dim = " << multi_mf_dim_
           << ", topo_aware = " << topo_aware_
           << ", enable_gpu_direct_access = " << enable_gpu_direct_access_
-          << ", load_factor = " << load_factor_;
+          << ", load_factor = " << load_factor_
+          << ", graph_embedding_split_infer_mode=" << FLAGS_graph_embedding_split_infer_mode;
   if (multi_mf_dim_) {
     max_mf_dim_ = resource_->max_mf_dim();
     auto accessor_wrapper_ptr =
@@ -309,6 +311,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::reset_table(
     }
     table->set_mode(infer_mode);
   }
+  is_infer_mode_ = infer_mode;
 }
 template <typename KeyType,
           typename ValType,
@@ -325,6 +328,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::set_mode(
       table->set_mode(infer_mode);
     }
   }
+  is_infer_mode_ = infer_mode;
 }
 // debug time
 template <typename KeyType,
@@ -1789,7 +1793,12 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse(
     return;
   }
   if (multi_node_) {
-    pull_sparse_all2all(num, d_keys, d_vals, len);
+    // infer graph split embedding by id hash mode
+    if (FLAGS_graph_embedding_split_infer_mode && is_infer_mode_) {
+      pull_normal_sparse(num, d_keys, d_vals, len);
+    } else {
+      pull_sparse_all2all(num, d_keys, d_vals, len);
+    }
   } else {
     if (!FLAGS_gpugraph_dedup_pull_push_mode) {
       pull_merge_sparse(num, d_keys, d_vals, len);
