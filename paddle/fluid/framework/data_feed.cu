@@ -2083,7 +2083,7 @@ int GraphDataGenerator::FillInferBuf() {
   auto &infer_cursor = gpu_graph_ptr->infer_cursor_[thread_id_];
   total_row_ = 0;
   if (infer_cursor < h_device_keys_len_.size()) {
-    if (global_infer_node_type_start[infer_cursor] >=
+    while (global_infer_node_type_start[infer_cursor] >=
         h_device_keys_len_[infer_cursor]) {
       infer_cursor++;
       if (infer_cursor >= h_device_keys_len_.size()) {

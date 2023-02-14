@@ -157,7 +157,7 @@ void GraphGpuWrapper::init_type_keys(
     }
     keys[f_idx].resize(thread_num);
     auto &type_total_key = graph_all_type_total_keys[f_idx];
-    VLOG(1) << "graph_all_type_total_keys[ " << f_idx << "] ="
+    VLOG(0) << "graph_all_type_total_keys[ " << f_idx << "] ="
             << graph_all_type_total_keys[f_idx].size();
     for (size_t j = 0; j < type_total_key.size(); j++) {
       uint64_t shard = type_total_key[j] % thread_num;
@@ -165,7 +165,7 @@ void GraphGpuWrapper::init_type_keys(
     }
     for (size_t j = 0; j < thread_num; j++) {
       lens[f_idx].push_back(tmp_keys[j].size());
-      VLOG(1) << "node type: " << type_to_index[f_idx]
+      VLOG(0) << "node type: " << type_to_index[f_idx]
               << ", gpu_graph_device_keys[" << j
               << "] = " << tmp_keys[j].size();
     }
