@@ -215,7 +215,7 @@ void HogwildWorker::TrainFilesWithProfiler() {
   while (1) {
     cur_batch = device_reader_->Next();
 #if defined(PADDLE_WITH_GPU_GRAPH)
-    if (FLAGS_gpugraph_force_device_batch_num_equal || is_multi_node) {
+    if (train_mode && (FLAGS_gpugraph_force_device_batch_num_equal || is_multi_node)) {
       if (!CheckBatchNum(cur_batch)) {
         break;
       }
@@ -347,7 +347,7 @@ void HogwildWorker::TrainFiles() {
   while (1) {
     cur_batch = device_reader_->Next();
 #if defined(PADDLE_WITH_GPU_GRAPH)
-    if (FLAGS_gpugraph_force_device_batch_num_equal || is_multi_node) {
+    if (train_mode && (FLAGS_gpugraph_force_device_batch_num_equal || is_multi_node)) {
       if (!CheckBatchNum(cur_batch)) {
         break;
       }
