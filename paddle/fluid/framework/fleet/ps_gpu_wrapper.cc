@@ -467,15 +467,18 @@ void PSGPUWrapper::add_slot_feature(std::shared_ptr<HeterContext> gpu_task) {
                            &node_ids,
                            &feature_ids](int i) {
       platform::CUDADeviceGuard guard(resource_->dev_id(i));
+      auto stream = resource_->local_stream(i, 0);
       int* d_slot_feature_num_map;
       uint64_t* d_node_list_ptr;
       uint64_t* d_feature_list_ptr;
       CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_slot_feature_num_map),
                             slot_num * sizeof(int)));
-      CUDA_CHECK(cudaMemcpy(d_slot_feature_num_map,
+      CUDA_CHECK(cudaMemcpyAsync(d_slot_feature_num_map,
                             h_slot_feature_num_map.data(),
                             sizeof(int) * slot_num,
-                            cudaMemcpyHostToDevice));
+                            cudaMemcpyHostToDevice,
+                            stream));
+      PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
       CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_node_list_ptr),
                             batch * sizeof(uint64_t)));
       CUDA_CHECK(cudaMalloc(reinterpret_cast<void**>(&d_feature_list_ptr),
@@ -488,10 +491,11 @@ void PSGPUWrapper::add_slot_feature(std::shared_ptr<HeterContext> gpu_task) {
         real_batch = (pos + batch) <= node_ids[i].size()
                          ? batch
                          : node_ids[i].size() - pos;
-        CUDA_CHECK(cudaMemcpy(d_node_list_ptr,
+        CUDA_CHECK(cudaMemcpyAsync(d_node_list_ptr,
                               node_ids[i].data() + pos,
                               real_batch * sizeof(uint64_t),
-                              cudaMemcpyHostToDevice));
+                              cudaMemcpyHostToDevice,
+                              stream));
         int ret = gpu_graph_ptr->get_feature_of_nodes(i,
                                                       d_node_list_ptr,
                                                       d_feature_list_ptr,
@@ -504,12 +508,14 @@ void PSGPUWrapper::add_slot_feature(std::shared_ptr<HeterContext> gpu_task) {
                           platform::errors::PreconditionNotMet(
                               "Get_feature_of_nodes error."));
 
-        CUDA_CHECK(cudaMemcpy(feature_ids[i].data() + pos * fea_num_per_node,
+        CUDA_CHECK(cudaMemcpyAsync(feature_ids[i].data() + pos * fea_num_per_node,
                               d_feature_list_ptr,
                               real_batch * fea_num_per_node * sizeof(uint64_t),
-                              cudaMemcpyDeviceToHost));
+                              cudaMemcpyDeviceToHost,
+                              stream));
         pos += real_batch;
       }
+      PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
       cudaFree(d_slot_feature_num_map);
       cudaFree(d_node_list_ptr);
       cudaFree(d_feature_list_ptr);
@@ -832,10 +838,12 @@ void PSGPUWrapper::FilterPull(std::shared_ptr<HeterContext> gpu_task,
       continue;
     }
     if (dedup_size == pos) {
+      CHECK(shard_values[dedup_size] != 0);
       ++dedup_size;
       continue;
     }
     shard_keys[dedup_size] = shard_keys[pos];
+    CHECK(shard_values[dedup_size] != 0);
     ++dedup_size;
   }
   shard_keys.resize(dedup_size);
@@ -862,12 +870,14 @@ void PSGPUWrapper::MergePull(std::shared_ptr<HeterContext> gpu_task) {
 
   timeline.Start();
   std::vector<std::future<void>> task_futures;
+  std::vector<std::shared_ptr<paddle::distributed::SparseShardValues>> dim_pass_values(multi_mf_dim_, nullptr);
   for (int dim_id = 0; dim_id < multi_mf_dim_; ++dim_id) {
     auto pass_values = fleet_ptr_->worker_ptr_->TakePassSparseReferedValues(
         table_id_, gpu_task->pass_id_, dim_id);
     if (pass_values == nullptr) {
       continue;
     }
+    dim_pass_values[dim_id] = pass_values;
     for (int shard_id = 0; shard_id < thread_keys_shard_num_; ++shard_id) {
       auto& merge_values = pass_values->at(shard_id);
       task_futures.emplace_back(pull_thread_pool_[shard_id]->enqueue(
@@ -1362,7 +1372,7 @@ void PSGPUWrapper::BuildGPUTask(std::shared_ptr<HeterContext> gpu_task) {
           this->hbm_pools_[i * this->multi_mf_dim_ + j]->mem(),
           len,
           feature_value_size,
-          500000,
+          4 * 1024 * 1024,
           2);
       if (device_dim_keys.size() > 0) {
         VLOG(3) << "show table: " << i
@@ -1396,6 +1406,7 @@ void PSGPUWrapper::BuildGPUTask(std::shared_ptr<HeterContext> gpu_task) {
     size_t total_len = 0;
     stagetime.Start();
     struct task_info task;
+    auto stream = resource_->local_stream(i, 0);
     while (cpu_reday_channels_[i]->Get(task)) {
       auto hbm = this->hbm_pools_[task.device_id * this->multi_mf_dim_ +
                                   task.multi_mf_dim]
@@ -1405,12 +1416,14 @@ void PSGPUWrapper::BuildGPUTask(std::shared_ptr<HeterContext> gpu_task) {
           accessor_wrapper_ptr->GetFeatureValueSize(mf_dim);
       auto hbm_start = hbm + task.offset * feature_value_size;
       CUDA_CHECK(
-          cudaMemcpy(hbm_start,
+          cudaMemcpyAsync(hbm_start,
                      task.build_values.get() + task.start * feature_value_size,
                      (task.end - task.start) * feature_value_size,
-                     cudaMemcpyHostToDevice));
+                     cudaMemcpyHostToDevice,
+                     stream));
       total_len += (task.end - task.start);
     }
+    PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
     stagetime.Pause();
     timer.Pause();
 
@@ -1703,7 +1716,7 @@ void PSGPUWrapper::HbmToSparseTable() {
     platform::Timer tm;
     tm.Start();
     PADDLE_ENFORCE_GPU_SUCCESS(cudaSetDevice(this->resource_->dev_id(i)));
-
+    auto stream = resource_->local_stream(i, 0);
     size_t total_len = 0;
     // multi mf dim
     for (int j = 0; j < this->multi_mf_dim_; ++j) {
@@ -1726,10 +1739,11 @@ void PSGPUWrapper::HbmToSparseTable() {
         uint64_t offset = start * feature_value_size;
         char* test_build_values = build_values.get();
 
-        cudaMemcpy(test_build_values,
+        cudaMemcpyAsync(test_build_values,
                    hbm_pool->mem() + offset,
                    feature_value_size * real_len,
-                   cudaMemcpyDeviceToHost);
+                   cudaMemcpyDeviceToHost,
+                   stream);
         for (size_t k = 0; k < real_len; k = k + once_cpu_num) {
           struct task_info task;
           task.build_values = build_values;
@@ -1745,6 +1759,7 @@ void PSGPUWrapper::HbmToSparseTable() {
       }
       total_len += len;
     }
+    PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
     tm.Pause();
     VLOG(1) << "dump_pool_to_cpu_func i=" << i << ", total len=" << total_len
             << ", span=" << tm.ElapsedSec();

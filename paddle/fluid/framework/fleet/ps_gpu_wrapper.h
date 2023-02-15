@@ -891,8 +891,16 @@ class PSGPUWrapper {
 
   // for node rank
   int PartitionKeyForRank(const uint64_t& key) {
-    return ((key / device_num_) % node_size_);
+    return static_cast<int>((key / device_num_) % node_size_);
   }
+  // is key for self rank
+  bool IsKeyForSelfRank(const uint64_t& key) {
+    return (static_cast<int>((key / device_num_) % node_size_) == rank_id_);
+  }
+  // rank id
+  int GetRankId(void) { return rank_id_; }
+  // rank size
+  int GetRankNum(void) { return node_size_; }
 
  private:
   static std::shared_ptr<PSGPUWrapper> s_instance_;
@@ -929,8 +937,8 @@ class PSGPUWrapper {
   double time_4 = 0.0;
 
   int multi_node_{0};
-  int rank_id_;
-  int node_size_;
+  int rank_id_ = 0;
+  int node_size_ = 1;
   int device_num_ = 8;
   uint64_t table_id_;
   int gpu_graph_mode_ = 0;
