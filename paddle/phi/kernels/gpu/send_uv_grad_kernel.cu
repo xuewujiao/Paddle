@@ -117,7 +117,7 @@ void CalculateGrad(const Context& ctx,
                 x_grad_out.numel() * sizeof(T),
                 hipMemcpyDeviceToDevice);
 #else
-      cudaMemsetAsync(x_grad,
+      cudaMemcpyAsync(x_grad,
                  x_grad_out.data<T>(),
                  x_grad_out.numel() * sizeof(T),
                  cudaMemcpyDeviceToDevice,
@@ -200,7 +200,7 @@ void CalculateGrad(const Context& ctx,
                 x_grad_out.numel() * sizeof(T),
                 hipMemcpyDeviceToDevice);
 #else
-      cudaMemsetAsync(x_grad,
+      cudaMemcpyAsync(x_grad,
                  x_grad_out.data<T>(),
                  x_grad_out.numel() * sizeof(T),
                  cudaMemcpyDeviceToDevice,

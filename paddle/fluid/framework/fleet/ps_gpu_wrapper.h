@@ -217,7 +217,7 @@ class PSGPUWrapper {
   void SparseTableToHbm();
   void HbmToSparseTable();
   void start_build_thread();
-  void pre_build_thread();
+  void AddSparseKeys();
   void build_pull_thread();
   void build_task();
   void DumpToMem();
@@ -247,12 +247,9 @@ class PSGPUWrapper {
     for (size_t i = 0; i < hbm_pools_.size(); i++) {
       delete hbm_pools_[i];
     }
-    data_ready_channel_->Close();
     buildcpu_ready_channel_->Close();
     buildpull_ready_channel_->Close();
     running_ = false;
-    VLOG(3) << "begin stop pre_build_threads_";
-    pre_build_threads_.join();
     VLOG(3) << "begin stop buildpull_threads_";
     buildpull_threads_.join();
     s_instance_ = nullptr;
@@ -335,8 +332,6 @@ class PSGPUWrapper {
       }
 #endif
       heter_devices_ = dev_ids;
-      data_ready_channel_->Open();
-      data_ready_channel_->SetCapacity(3);
       buildcpu_ready_channel_->Open();
       buildcpu_ready_channel_->SetCapacity(3);
       buildpull_ready_channel_->Open();
@@ -982,10 +977,6 @@ class PSGPUWrapper {
                                               // hbm pools of totol dims number
 #endif
 
-  std::shared_ptr<paddle::framework::ChannelObject<
-      std::pair<std::shared_ptr<HeterContext>, Dataset*>>>
-      data_ready_channel_ = paddle::framework::MakeChannel<
-          std::pair<std::shared_ptr<HeterContext>, Dataset*>>();
   std::shared_ptr<
       paddle::framework::ChannelObject<std::shared_ptr<HeterContext>>>
       buildcpu_ready_channel_ =
@@ -997,7 +988,6 @@ class PSGPUWrapper {
   std::vector<std::shared_ptr<paddle::framework::ChannelObject<task_info>>>
       cpu_reday_channels_;
   std::shared_ptr<HeterContext> current_task_ = nullptr;
-  std::thread pre_build_threads_;
   std::thread buildpull_threads_;
   bool running_ = false;
   std::vector<std::shared_ptr<::ThreadPool>> pull_thread_pool_;

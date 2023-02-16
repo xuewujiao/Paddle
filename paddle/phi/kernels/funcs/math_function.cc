@@ -260,7 +260,7 @@ template <>
 void set_constant_with_place<paddle::platform::XPUPlace>(
     const paddle::platform::DeviceContext& context,
     phi::DenseTensor* tensor,
-    float value) {
+    const void* value) {
 #ifdef PADDLE_WITH_XPU
   phi::VisitDataType(
       tensor->dtype(),

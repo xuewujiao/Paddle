@@ -24,7 +24,7 @@
 #include "paddle/fluid/framework/io/fs.h"
 #include "paddle/fluid/platform/monitor.h"
 #include "paddle/fluid/platform/timer.h"
-
+#include "paddle/fluid/framework/threadpool.h"
 #ifdef PADDLE_WITH_PSCORE
 #include "paddle/fluid/distributed/ps/wrapper/fleet.h"
 #include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_wrapper.h"
@@ -499,16 +499,16 @@ void DatasetImpl<T>::LoadIntoMemory() {
     offsets.resize(thread_num_);
 
     for (int i = 0; i < thread_num_; i++) {
-      auto host_vec = readers_[i]->GetHostVec();
+      auto &host_vec = (*readers_[i]->GetHostVec());
       offsets[i] = node_num;
-      node_num += host_vec->size();
+      node_num += host_vec.size();
     }
-    gpu_graph_total_keys_.reserve(node_num);
+    gpu_graph_total_keys_.resize(node_num);
     for (int i = 0; i < thread_num_; i++) {
       uint64_t off = offsets[i];
       wait_futures.emplace_back(
                       pool[i]->Run([this, i, off]() {
-        auto& host_vec = *readers_[i]->GetHostVec();
+        auto& host_vec = (*readers_[i]->GetHostVec());
         for (size_t j = 0; j < host_vec.size(); j++) {
           gpu_graph_total_keys_[off + j] = host_vec[j];
         }
@@ -530,8 +530,8 @@ void DatasetImpl<T>::LoadIntoMemory() {
       }
     }
 
-    VLOG(2) << "end add edge into gpu_graph_total_keys_ size["
-            << gpu_graph_total_keys_.size() << "]";
+    VLOG(1) << "end add edge into gpu_graph_total_keys_ size["
+            << node_num << "]";
 #endif
   } else {
     std::vector<std::thread> load_threads;

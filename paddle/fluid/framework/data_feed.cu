@@ -804,7 +804,7 @@ int GraphDataGenerator::GenerateBatch() {
       total_instance = (infer_node_start_ + batch_size_ <= infer_node_end_)
                            ? batch_size_
                            : infer_node_end_ - infer_node_start_;
-      VLOG(1) << "in graph_data generator:batch_size = " << batch_size_
+      VLOG(2) << "in graph_data generator:batch_size = " << batch_size_
               << " instance = " << total_instance;
       total_instance *= 2;
       if (total_instance == 0) {
@@ -2393,7 +2393,7 @@ int GraphDataGenerator::FillWalkBuf() {
     uint64_t h_uniq_node_num = CopyUniqueNodes();
     VLOG(1) << "sample_times:" << sample_times << ", d_walk_size:" << buf_size_
             << ", d_walk_offset:" << i << ", total_rows:" << total_row_
-            << ", total_samples:" << total_samples;
+            << ", total_samples:" << total_samples << ", h_uniq_node_num: " << h_uniq_node_num;
   } else {
     VLOG(1) << "sample_times:" << sample_times << ", d_walk_size:" << buf_size_
             << ", d_walk_offset:" << i << ", total_rows:" << total_row_

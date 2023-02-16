@@ -1303,7 +1303,8 @@ int32_t GraphTable::parse_edge_and_load(
           std::string etype_path = edge_to_edgedir[etypes[i]];
           bool only_load_reverse_edge = false;
           if (!reverse) {
-            only_load_reverse_edge = is_reverse_edge_map[i];
+            only_load_reverse_edge = (i < is_reverse_edge_map.size())
+            		? is_reverse_edge_map[i] : false;
           }
           if (only_load_reverse_edge) {
             VLOG(1) << "only_load_reverse_edge is True, etype[" << etypes[i]

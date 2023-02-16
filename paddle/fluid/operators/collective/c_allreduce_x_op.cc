@@ -30,12 +30,17 @@ class CAllReduceXOp : public framework::OperatorWithKernel {
   using framework::OperatorWithKernel::OperatorWithKernel;
   void InferShape(framework::InferShapeContext *ctx) const override {}
  protected:
-  framework::OpKernelType GetKernelTypeForVar(
+  phi::KernelKey GetKernelTypeForVar(
       const std::string &var_name, const phi::DenseTensor &tensor,
-      const framework::OpKernelType &expected_kernel_type) const override {
-    return framework::OpKernelType(expected_kernel_type.data_type_,
-                                   expected_kernel_type.place_,
-                                   tensor.layout());
+      const phi::KernelKey &expected_kernel_type) const override {
+    if (var_name == "Cond") {
+	  return phi::KernelKey(phi::Backend::ALL_BACKEND,
+						    expected_kernel_type.layout(),
+						    expected_kernel_type.dtype());
+    } else {
+	  return phi::KernelKey(
+		tensor.place(), tensor.layout(), expected_kernel_type.dtype());
+    }
   }
 };
 template <typename T>
