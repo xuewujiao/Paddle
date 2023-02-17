@@ -120,11 +120,6 @@ void GraphGpuWrapper::init_conf(const std::string &first_node_type,
       infer_cursor_.push_back(0);
       cursor_.push_back(0);
     }
-    if (!type_keys_initialized_) {
-      init_type_keys(d_graph_all_type_total_keys_,
-                     h_graph_all_type_keys_len_);
-      type_keys_initialized_ = true;
-    }
   }
 }
 
@@ -516,22 +511,15 @@ int GraphGpuWrapper::set_node_iter_from_file(
     std::string node_types_file_path,
     int part_num,
     bool training) {
-  // 1. init type keys
-  if (!type_keys_initialized_) {
-    init_type_keys(d_graph_all_type_total_keys_,
-                   h_graph_all_type_keys_len_);
-    type_keys_initialized_ = true;
-  }
-
-  // 2. load cpu node
+  // 1. load cpu node
   ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->parse_node_and_load(
       ntype2files, node_types_file_path, part_num, false);
 
-  // 3. init node iter keys on cpu and release cpu node shards.
+  // 2. init node iter keys on cpu and release cpu node shards.
   ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->build_node_iter_type_keys();
   ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->clear_node_shard();
 
-  // 4. init train or infer type keys.
+  // 3. init train or infer type keys.
   if (!training) {
     init_type_keys(d_node_iter_graph_all_type_keys_,
                    h_node_iter_graph_all_type_keys_len_);
