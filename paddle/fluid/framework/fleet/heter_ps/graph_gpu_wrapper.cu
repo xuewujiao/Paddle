@@ -516,6 +516,18 @@ int GraphGpuWrapper::set_node_iter_from_file(
       ntype2files, node_types_file_path, part_num, false);
 
   // 2. init node iter keys on cpu and release cpu node shards.
+  if (type_keys_initialized_) {
+    // release d_graph_all_type_total_keys_ and h_graph_all_type_keys_len_
+    for (size_t f_idx = 0; f_idx < d_graph_all_type_total_keys_.size(); f_idx++) {
+      for (size_t j = 0; j < d_graph_all_type_total_keys_[f_idx].size(); j++) {
+        d_graph_all_type_total_keys_[f_idx][j].reset();
+      }
+    }
+    d_graph_all_type_total_keys_.clear();
+    h_graph_all_type_keys_len_.clear();
+    type_keys_initialized_ = false;
+  }
+
   ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->build_node_iter_type_keys();
   ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->clear_node_shard();
 
