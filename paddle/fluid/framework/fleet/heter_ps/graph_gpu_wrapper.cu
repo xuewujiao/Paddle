@@ -171,7 +171,7 @@ void GraphGpuWrapper::init_type_keys(
       platform::CUDADeviceGuard guard(gpuid);
       keys[f_idx][j] =
           memory::AllocShared(place, tmp_keys[j].size() * sizeof(uint64_t), 
-              phi::Stream(reinterpret_cast<phi::StreamId>(stream));
+              phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
       cudaMemcpyAsync(keys[f_idx][j]->ptr(),
                       tmp_keys[j].data(),
                       sizeof(uint64_t) * tmp_keys[j].size(),
