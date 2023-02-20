@@ -1729,8 +1729,7 @@ class TheOnePSRuntime(RuntimeBase):
 
     def _save_persistables(self, *args, **kwargs):
         fleet.util.barrier()
-        if self.role_maker._is_first_worker():
-            self._save_distributed_persistables(*args, **kwargs)
+        self._save_distributed_persistables(*args, **kwargs)
         fleet.util.barrier()
 
     def _save_inference_model(self, *args, **kwargs):
