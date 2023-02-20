@@ -1953,14 +1953,14 @@ void SlotRecordDataset::DynamicAdjustBatchNum() {
         VLOG(0) << "GLOO is not inited";
         gloo_wrapper->Init();
       }
-    }
-    std::vector<int> thread_batch_num_vec(1, thread_max_batch_num);
-    auto thread_max_batch_num_vec =
+      std::vector<int> thread_batch_num_vec(1, thread_max_batch_num);
+      auto thread_max_batch_num_vec =
                   gloo_wrapper->AllReduce(thread_batch_num_vec, "max");
-    thread_max_batch_num = thread_max_batch_num_vec[0];
-    VLOG(3) << "thread max batch num:" << thread_max_batch_num;
-    for (size_t i = 0; i < readers_.size(); i++) {
-      readers_[i]->SetNewBatchsize(thread_max_batch_num);
+      thread_max_batch_num = thread_max_batch_num_vec[0];
+      VLOG(3) << "thread max batch num:" << thread_max_batch_num;
+      for (size_t i = 0; i < readers_.size(); i++) {
+        readers_[i]->SetNewBatchsize(thread_max_batch_num);
+      }
     }
 #endif
   }
