@@ -45,6 +45,10 @@ PADDLE_DEFINE_EXPORTED_bool(graph_edges_split_only_by_src_id,
 PADDLE_DEFINE_EXPORTED_bool(graph_edges_hard_split_debug,
                             false,
                             "graph split hard split by debug");
+PADDLE_DEFINE_EXPORTED_string(
+    graph_edges_split_mode,
+    "hard",
+    "graph split split, optional: [dbh,hard,none], default:hard");
 
 namespace paddle {
 namespace distributed {
@@ -1326,7 +1330,8 @@ int32_t GraphTable::parse_edge_and_load(
           bool only_load_reverse_edge = false;
           if (!reverse) {
             only_load_reverse_edge = (i < is_reverse_edge_map.size())
-            		? is_reverse_edge_map[i] : false;
+                                         ? is_reverse_edge_map[i]
+                                         : false;
           }
           if (only_load_reverse_edge) {
             VLOG(1) << "only_load_reverse_edge is True, etype[" << etypes[i]
@@ -1360,7 +1365,174 @@ int32_t GraphTable::parse_edge_and_load(
         }));
   }
   for (size_t i = 0; i < tasks.size(); i++) tasks[i].get();
+  if (node_num_ > 1) {
+    graph_partition();
+  }
   return 0;
+}
+void GraphTable::graph_partition() {
+  std::string mode = FLAGS_graph_edges_split_mode;
+  if (mode == "dbh" || mode == "DBH") {
+    VLOG(0) << "Graph partitioning DBH";
+    dbh_graph_partition();
+    VLOG(0) << "Graph partitioning DBH Done";
+  } else if (mode == "hard" || mode == "HARD") {
+    VLOG(0) << "Graph partitioning Hard Hash Split";
+  } else if (mode == "none" || mode == "NONE") {
+    VLOG(0) << "No Graph partitioning Split";
+  } else {
+    // TODO(danleifeng): Graph partitioning other method.
+    VLOG(0) << "Unknown graph partitioning mode " << mode;
+  }
+}
+
+void GraphTable::dbh_graph_partition() {
+  std::vector<std::vector<GraphShard *>> tmp_edge_shards, tmp_feature_shards;
+  tmp_edge_shards.resize(edge_shards.size());
+  tmp_feature_shards.resize(feature_shards.size());
+  for (size_t k = 0; k < edge_shards.size(); k++) {
+    for (size_t i = 0; i < shard_num_per_server; i++) {
+      tmp_edge_shards[k].push_back(new GraphShard());
+    }
+  }
+  for (size_t k = 0; k < feature_shards.size(); k++) {
+    for (size_t i = 0; i < shard_num_per_server; i++) {
+      tmp_feature_shards[k].push_back(new GraphShard());
+    }
+  }
+
+  // all edges
+  std::vector<std::future<int>> tasks;
+  std::vector<std::vector<std::mutex *>> feature_mutex;
+  feature_mutex.resize(feature_shards.size());
+  for (size_t i = 0; i < feature_mutex.size(); ++i) {
+    feature_mutex[i].resize(shard_num);
+    for (size_t j = 0; j < shard_num; j++) {
+      feature_mutex[i][j] = new std::mutex();
+    }
+  }
+  for (size_t idx = 0; idx < id_to_edge.size(); idx++) {
+    tasks.push_back(_shards_task_pool[idx % task_pool_size_]->enqueue(
+        [&, idx, feature_mutex, this]() -> int {
+          auto node_type =
+              paddle::string::split_string<std::string>(id_to_edge[idx], "2");
+          std::vector<int> src_edge_ids;
+          std::vector<int> dest_edge_ids;
+          for (size_t k = 0; k < id_to_edge.size(); k++) {
+            if (id_to_edge[k] == id_to_edge[idx]) {
+              VLOG(2) << "continue, edge_type:" << id_to_edge[k];
+              continue;
+            }
+            auto edge_type_list =
+                paddle::string::split_string<std::string>(id_to_edge[k], "2");
+            if (node_type[0] == edge_type_list[0]) {
+              src_edge_ids.push_back(k);
+            }
+            if (node_type[1] == edge_type_list[0]) {
+              dest_edge_ids.push_back(k);
+            }
+          }
+          int src_fea_idx = feature_to_id[node_type[0]];
+          std::vector<std::future<int>> shard_tasks;
+          for (size_t part_id = 0; part_id < shard_num; ++part_id) {
+            shard_tasks.push_back(
+                load_node_edge_task_pool->enqueue([&,
+                                                   part_id,
+                                                   idx,
+                                                   src_fea_idx,
+                                                   node_type,
+                                                   src_edge_ids,
+                                                   dest_edge_ids,
+                                                   feature_mutex,
+                                                   this]() -> int {
+                  auto &shards = edge_shards[idx][part_id]->get_bucket();
+                  for (auto node : shards) {
+                    uint64_t id = node->get_id();
+                    // 由于节点id的度计算需要到不同类型的边表中去查找
+                    size_t src_degree = node->get_neighbor_size();
+                    for (size_t edge_type_id = 0;
+                         edge_type_id < src_edge_ids.size();
+                         edge_type_id++) {
+                      Node *src_node = find_node(GraphTableType::EDGE_TABLE,
+                                                 src_edge_ids[edge_type_id],
+                                                 id);
+                      if (src_node == nullptr) {
+                        VLOG(3) << "src_node " << id << " from type"
+                                << src_edge_ids[edge_type_id] << "not found";
+                      } else {
+                        src_degree += src_node->get_neighbor_size();
+                      }
+                    }
+                    for (size_t n_i = 0; n_i < node->get_neighbor_size();
+                         ++n_i) {
+                      auto d_id = node->get_neighbor_id(n_i);
+                      auto is_weighted = node->get_is_weighted();
+                      auto weight = node->get_neighbor_weight(n_i);
+                      size_t dest_degree = 0;
+                      for (size_t dst_type_id = 0;
+                           dst_type_id < dest_edge_ids.size();
+                           dst_type_id++) {
+                        Node *dst_node = find_node(GraphTableType::EDGE_TABLE,
+                                                   dest_edge_ids[dst_type_id],
+                                                   d_id);
+                        if (dst_node == nullptr) {
+                          VLOG(3) << "dst_node " << d_id << " from type"
+                                  << dest_edge_ids[dst_type_id] << "not found";
+                        } else {
+                          dest_degree += dst_node->get_neighbor_size();
+                        }
+                      }
+                      if (src_degree < dest_degree) {
+                        // 每台机器只保存%hash的一部分id到tmp_edge_shards
+                        if (is_key_for_self_rank(id)) {
+                          VLOG(5) << "Add src; neighbor id " << d_id
+                                  << " degree: " << dest_degree << "; src id "
+                                  << id << " degree: " << src_degree;
+                          auto new_node =
+                              tmp_edge_shards[idx][part_id]->add_graph_node(id);
+                          if (new_node != NULL) {
+                            new_node->build_edges(is_weighted);
+                            new_node->add_edge(d_id, weight);
+                          }
+                        }
+                      } else {
+                        // hash到dest_id对应的机器上
+                        if (is_key_for_self_rank(d_id)) {
+                          VLOG(5) << "Add dest; neighbor id " << d_id
+                                  << " degree: " << dest_degree << "; src id "
+                                  << id << " degree: " << src_degree;
+                          auto new_node =
+                              tmp_edge_shards[idx][part_id]->add_graph_node(id);
+                          if (new_node != NULL) {
+                            new_node->build_edges(is_weighted);
+                            new_node->add_edge(d_id, weight);
+                          }
+                        }
+                      }
+                      feature_mutex[src_fea_idx][part_id]->lock();
+                      tmp_feature_shards[src_fea_idx][part_id]
+                          ->add_feature_node(id, false);
+                      feature_mutex[src_fea_idx][part_id]->unlock();
+                      // TODO(danleifeng): add feature slot
+                    }
+                  }
+                  return 0;
+                }));
+          }
+          for (size_t j = 0; j < shard_tasks.size(); j++) {
+            shard_tasks[j].get();
+          }
+          return 0;
+        }));
+  }
+  for (size_t j = 0; j < tasks.size(); j++) {
+    tasks[j].get();
+  }
+  // 替换原来的shards
+  clear_edge_shard();
+  clear_feature_shard();
+  feature_shards = std::move(tmp_feature_shards);
+  edge_shards = std::move(tmp_edge_shards);
 }
 
 int32_t GraphTable::parse_node_and_load(std::string ntype2files,
@@ -1591,7 +1763,9 @@ bool GraphTable::is_key_for_self_rank(const uint64_t &id) {
 #endif
 }
 std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
-    const std::string &path, const std::string &node_type, int idx,
+    const std::string &path,
+    const std::string &node_type,
+    int idx,
     bool load_slot) {
   std::ifstream file(path);
   std::string line;
@@ -1612,10 +1786,13 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
       continue;
     }
     uint64_t id = std::strtoul(vals[0].ptr, NULL, 10);
-    if (!is_key_for_self_rank(id)) {
-      VLOG(2) << "id " << id << " not matched, node_id: " << node_id_
-              << " , node_num:" << node_num_;
-      continue;
+    if (FLAGS_graph_edges_split_mode == "hard" ||
+        FLAGS_graph_edges_split_mode == "HARD") {
+      if (!is_key_for_self_rank(id)) {
+        VLOG(2) << "id " << id << " not matched, node_id: " << node_id_
+                << " , node_num:" << node_num_;
+        continue;
+      }
     }
     size_t shard_id = id % shard_num;
     if (shard_id >= shard_end || shard_id < shard_start) {
@@ -1686,10 +1863,13 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
       continue;
     }
     local_count++;
-    if (!is_key_for_self_rank(id)) {
-      VLOG(2) << "id " << id << " not matched, node_id: " << node_id_
-              << " , node_num:" << node_num_;
-      continue;
+    if (FLAGS_graph_edges_split_mode == "hard" ||
+        FLAGS_graph_edges_split_mode == "HARD") {
+      if (!is_key_for_self_rank(id)) {
+        VLOG(2) << "id " << id << " not matched, node_id: " << node_id_
+                << " , node_num:" << node_num_;
+        continue;
+      }
     }
     size_t index = shard_id - shard_start;
     if (load_slot) {
@@ -1716,7 +1896,8 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
 }
 
 // // TODO(danleifeng): opt load all node_types in once reading
-int32_t GraphTable::load_nodes(const std::string &path, std::string node_type,
+int32_t GraphTable::load_nodes(const std::string &path,
+                               std::string node_type,
                                bool load_slot) {
   auto paths = paddle::string::split_string<std::string>(path, ";");
   uint64_t count = 0;
@@ -1814,20 +1995,24 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_edge_file(
               << ", please check id distribution";
       continue;
     }
-    // src id
-    if (!is_key_for_self_rank(src_id)) {
-      VLOG(2) << " node num :" << src_id
-              << " not split into node_id_:" << node_id_
-              << " node_num:" << node_num_;
-      continue;
-    }
-    // dst id
-    if (!FLAGS_graph_edges_split_only_by_src_id
-              && !is_key_for_self_rank(dst_id)) {
-      VLOG(2) << " dest node num :" << dst_id
-              << " will not add egde, node_id_:" << node_id_
-              << " node_num:" << node_num_;
-      continue;
+    if (FLAGS_graph_edges_split_mode == "hard" ||
+        FLAGS_graph_edges_split_mode == "HARD") {
+      // only keep hash(src_id) = hash(dst_id) = node_id edges
+      // src id
+      if (!is_key_for_self_rank(src_id)) {
+        VLOG(2) << " node num :" << src_id
+                << " not split into node_id_:" << node_id_
+                << " node_num:" << node_num_;
+        continue;
+      }
+      // dst id
+      if (!FLAGS_graph_edges_split_only_by_src_id &&
+          !is_key_for_self_rank(dst_id)) {
+        VLOG(2) << " dest node num :" << dst_id
+                << " will not add egde, node_id_:" << node_id_
+                << " node_num:" << node_num_;
+        continue;
+      }
     }
 
     float weight = 1;
@@ -1936,9 +2121,10 @@ Node *GraphTable::find_node(GraphTableType table_type, uint64_t id) {
   }
   Node *node = nullptr;
   size_t index = shard_id - shard_start;
-  auto &search_shards =
-      table_type == GraphTableType::EDGE_TABLE ? edge_shards :
-      table_type == GraphTableType::FEATURE_TABLE ? feature_shards : node_shards;
+  auto &search_shards = table_type == GraphTableType::EDGE_TABLE ? edge_shards
+                        : table_type == GraphTableType::FEATURE_TABLE
+                            ? feature_shards
+                            : node_shards;
   for (auto &search_shard : search_shards) {
     PADDLE_ENFORCE_NOT_NULL(search_shard[index],
                             paddle::platform::errors::InvalidArgument(
@@ -1958,8 +2144,9 @@ Node *GraphTable::find_node(GraphTableType table_type, int idx, uint64_t id) {
   }
   size_t index = shard_id - shard_start;
   auto &search_shards =
-      table_type == GraphTableType::EDGE_TABLE ? edge_shards[idx] :
-      table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx] : node_shards[idx];
+      table_type == GraphTableType::EDGE_TABLE      ? edge_shards[idx]
+      : table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx]
+                                                    : node_shards[idx];
   PADDLE_ENFORCE_NOT_NULL(search_shards[index],
                           paddle::platform::errors::InvalidArgument(
                               "search_shard[%d] should not be null.", index));
@@ -1977,8 +2164,9 @@ uint32_t GraphTable::get_thread_pool_index_by_shard_index(
 
 int32_t GraphTable::clear_nodes(GraphTableType table_type, int idx) {
   auto &search_shards =
-      table_type == GraphTableType::EDGE_TABLE ? edge_shards[idx] :
-      table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx] : node_shards[idx];
+      table_type == GraphTableType::EDGE_TABLE      ? edge_shards[idx]
+      : table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx]
+                                                    : node_shards[idx];
   for (size_t i = 0; i < search_shards.size(); i++) {
     search_shards[i]->clear();
   }
@@ -2371,9 +2559,10 @@ int GraphTable::get_all_id(GraphTableType table_type,
                            int slice_num,
                            std::vector<std::vector<uint64_t>> *output) {
   MergeShardVector shard_merge(output, slice_num);
-  auto &search_shards =
-      table_type == GraphTableType::EDGE_TABLE ? edge_shards :
-      table_type == GraphTableType::FEATURE_TABLE ? feature_shards : node_shards;
+  auto &search_shards = table_type == GraphTableType::EDGE_TABLE ? edge_shards
+                        : table_type == GraphTableType::FEATURE_TABLE
+                            ? feature_shards
+                            : node_shards;
 
   std::vector<std::future<size_t>> tasks;
   for (size_t idx = 0; idx < search_shards.size(); idx++) {
@@ -2400,9 +2589,10 @@ int GraphTable::get_all_neighbor_id(
     int slice_num,
     std::vector<std::vector<uint64_t>> *output) {
   MergeShardVector shard_merge(output, slice_num);
-  auto &search_shards =
-      table_type == GraphTableType::EDGE_TABLE ? edge_shards :
-      table_type == GraphTableType::FEATURE_TABLE ? feature_shards : node_shards;
+  auto &search_shards = table_type == GraphTableType::EDGE_TABLE ? edge_shards
+                        : table_type == GraphTableType::FEATURE_TABLE
+                            ? feature_shards
+                            : node_shards;
   std::vector<std::future<size_t>> tasks;
   for (size_t idx = 0; idx < search_shards.size(); idx++) {
     for (size_t j = 0; j < search_shards[idx].size(); j++) {
@@ -2429,8 +2619,9 @@ int GraphTable::get_all_id(GraphTableType table_type,
                            std::vector<std::vector<uint64_t>> *output) {
   MergeShardVector shard_merge(output, slice_num);
   auto &search_shards =
-      table_type == GraphTableType::EDGE_TABLE ? edge_shards[idx] :
-      table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx] : node_shards[idx];
+      table_type == GraphTableType::EDGE_TABLE      ? edge_shards[idx]
+      : table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx]
+                                                    : node_shards[idx];
   std::vector<std::future<size_t>> tasks;
   VLOG(3) << "begin task, task_pool_size_[" << task_pool_size_ << "]";
   for (size_t i = 0; i < search_shards.size(); i++) {
@@ -2457,8 +2648,9 @@ int GraphTable::get_all_neighbor_id(
     std::vector<std::vector<uint64_t>> *output) {
   MergeShardVector shard_merge(output, slice_num);
   auto &search_shards =
-      table_type == GraphTableType::EDGE_TABLE ? edge_shards[idx] :
-      table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx] : node_shards[idx];
+      table_type == GraphTableType::EDGE_TABLE      ? edge_shards[idx]
+      : table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx]
+                                                    : node_shards[idx];
   std::vector<std::future<size_t>> tasks;
   VLOG(3) << "begin task, task_pool_size_[" << task_pool_size_ << "]";
   for (size_t i = 0; i < search_shards.size(); i++) {
@@ -2486,8 +2678,9 @@ int GraphTable::get_all_feature_ids(
     std::vector<std::vector<uint64_t>> *output) {
   MergeShardVector shard_merge(output, slice_num);
   auto &search_shards =
-      table_type == GraphTableType::EDGE_TABLE ? edge_shards[idx] :
-      table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx] : node_shards[idx];
+      table_type == GraphTableType::EDGE_TABLE      ? edge_shards[idx]
+      : table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx]
+                                                    : node_shards[idx];
   std::vector<std::future<size_t>> tasks;
   for (size_t i = 0; i < search_shards.size(); i++) {
     tasks.push_back(_shards_task_pool[i % task_pool_size_]->enqueue(
@@ -2527,8 +2720,9 @@ int32_t GraphTable::pull_graph_list(GraphTableType table_type,
   if (start < 0) start = 0;
   int size = 0, cur_size;
   auto &search_shards =
-      table_type == GraphTableType::EDGE_TABLE ? edge_shards[idx] :
-      table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx] : node_shards[idx];
+      table_type == GraphTableType::EDGE_TABLE      ? edge_shards[idx]
+      : table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx]
+                                                    : node_shards[idx];
   std::vector<std::future<std::vector<Node *>>> tasks;
   for (size_t i = 0; i < search_shards.size() && total_size > 0; i++) {
     cur_size = search_shards[i]->get_size();
@@ -2790,8 +2984,9 @@ void GraphTable::build_graph_type_keys() {
     graph_total_keys_.insert(
         graph_total_keys_.end(), keys[0].begin(), keys[0].end());
   }
-  VLOG(0) << "finish insert feature into graph_total_keys, feature embedding keys="
-          << graph_total_keys_.size();
+  VLOG(0)
+      << "finish insert feature into graph_total_keys, feature embedding keys="
+      << graph_total_keys_.size();
 }
 
 void GraphTable::build_node_iter_type_keys() {
