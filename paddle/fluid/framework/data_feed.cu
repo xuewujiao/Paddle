@@ -826,7 +826,11 @@ int GraphDataGenerator::GenerateBatch() {
         res = FillInsBuf(train_stream_);
         if (res == -1) {
           if (ins_buf_pair_len_ == 0) {
-            return 0;
+            //pass ins end,reset buf state in multi node
+            pass_end_ = 1;
+            buf_state_.Reset(total_row_);
+            VLOG(0) << "pass make ins 0, reset buf state ";
+            //return 0;
           } else {
             break;
           }
@@ -2463,6 +2467,7 @@ int GraphDataGenerator::FillWalkBufMultiPath() {
                       : once_sample_startid_len_;
     bool update = true;
     if (tmp_len == 0) {
+      epoch_finish_ = true;
       break;
     }
 
@@ -2805,7 +2810,7 @@ void GraphDataGenerator::AllocResource(
   }
 
   d_slot_tensor_ptr_ =
-      memory::AllocShared(place_, slot_num_ * sizeof(uint64_t *), 
+      memory::AllocShared(place_, slot_num_ * sizeof(uint64_t *),
               phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
   d_slot_lod_tensor_ptr_ =
       memory::AllocShared(place_, slot_num_ * sizeof(uint64_t *),

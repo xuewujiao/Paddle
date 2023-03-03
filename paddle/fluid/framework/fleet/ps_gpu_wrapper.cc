@@ -1490,6 +1490,25 @@ void PSGPUWrapper::LoadIntoMemory(bool is_shuffle) {
 		  << "s, total ins num:" << total_ins_num
 		  << ", dataset[" << dataset_ << "]";
   gpu_graph_mode_ = dataset_->GetGpuGraphMode();
+#ifdef PADDLE_WITH_GLOO
+  auto gloo_wrapper = paddle::framework::GlooWrapper::GetInstance();
+  if (gloo_wrapper->Size() > 1) {
+    if (!gloo_wrapper->IsInitialized()) {
+      VLOG(0) << "GLOO is not inited";
+      gloo_wrapper->Init();
+    }
+    std::vector<int> ins_num_vec(1, total_ins_num);
+    auto min_ins_num_vec =
+             gloo_wrapper->AllReduce(ins_num_vec, "min");
+    int64_t min_ins_num = min_ins_num_vec[0];
+    VLOG(0) << "ori ins num:" << total_ins_num <<", min ins num:" << min_ins_num;
+    if (min_ins_num == 0) {
+      VLOG(0) << "get min memory size == 0 in multi node";
+      return;
+    }
+  }
+#endif
+
   if (total_ins_num == 0) {
     VLOG(0) << "GetMemoryDataSize == 0";
     return;
