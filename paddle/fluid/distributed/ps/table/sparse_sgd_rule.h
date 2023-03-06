@@ -106,6 +106,26 @@ class SparseAdaGradSGDRule : public SparseValueSGDRule {
   float _initial_g2sum;
 };
 
+class SparseAdaGradV2SGDRule : public SparseValueSGDRule {
+ public:
+  virtual void LoadConfig(const SparseCommonSGDRuleParameter& param,
+                          size_t emb_dim);
+  virtual void UpdateValueWork(float* w,
+                               float* sgd,
+                               const float* push_value,
+                               float scale);
+  virtual void InitValueWork(float* value, float* sgd, bool zero_init);
+  virtual size_t Dim() { return 1; }
+  size_t G2SumIndex() { return 0; }
+
+ private:
+  float learning_rate_;
+  float _initial_g2sum;
+};
+
+
+
+
 class StdAdaGradSGDRule : public SparseValueSGDRule {
  public:
   virtual void LoadConfig(const SparseCommonSGDRuleParameter& param,
