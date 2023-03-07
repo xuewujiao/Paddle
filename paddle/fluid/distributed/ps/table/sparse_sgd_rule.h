@@ -107,6 +107,9 @@ class SparseAdaGradSGDRule : public SparseValueSGDRule {
 };
 
 class SparseAdaGradV2SGDRule : public SparseValueSGDRule {
+ // a new SparseAdaGradV2 use standard adagrad update rules.
+ // g2sum = grad_x * grad_x + g2sum
+ // x = x + lr * grad_x / sqrt(g2sum + epsilon)
  public:
   virtual void LoadConfig(const SparseCommonSGDRuleParameter& param,
                           size_t emb_dim);

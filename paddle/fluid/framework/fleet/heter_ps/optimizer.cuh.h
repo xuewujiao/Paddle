@@ -474,6 +474,9 @@ class SparseAdamSharedOptimizer {
 
 template <typename GPUAccessor>
 class SparseAdagradV2Optimizer {
+ // a new SparseAdaGradV2 use standard adagrad update rules.
+ // g2sum = grad_x * grad_x + g2sum
+ // x = x + lr * grad_x / sqrt(g2sum + epsilon)
  public:
   SparseAdagradV2Optimizer() {}
   SparseAdagradV2Optimizer(GPUAccessor gpu_accessor) {
