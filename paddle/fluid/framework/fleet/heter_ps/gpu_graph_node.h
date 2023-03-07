@@ -330,13 +330,15 @@ struct NeighborSampleResultV2 {
   // Used in graphsage.
   uint64_t *val;
   int *actual_sample_size;
-  std::shared_ptr<memory::Allocation> val_mem, actual_sample_size_mem;
+  float *edge_weight;
+  std::shared_ptr<memory::Allocation> val_mem, actual_sample_size_mem, edge_weight_mem;
   cudaStream_t stream = 0;
 
   void set_stream(cudaStream_t stream_t) { stream = stream_t; }
   void initialize(int _sample_size,
                   int _key_size,
                   int _edge_to_id_len,
+                  bool return_weight,
                   int dev_id) {
     platform::CUDADeviceGuard guard(dev_id);
     platform::CUDAPlace place = platform::CUDAPlace(dev_id);
@@ -349,14 +351,28 @@ struct NeighborSampleResultV2 {
           place,
           _key_size * _edge_to_id_len * sizeof(int),
           phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+      if (return_weight) {
+        edge_weight_mem = memory::AllocShared(
+            place,
+            _sample_size * _key_size * _edge_to_id_len * sizeof(float),
+            phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+      }
     } else {
       val_mem = memory::AllocShared(
           place, _sample_size * _key_size * _edge_to_id_len * sizeof(uint64_t));
       actual_sample_size_mem =
           memory::AllocShared(place, _key_size * _edge_to_id_len * sizeof(int));
+      if (return_weight) {
+        edge_weight_mem = memory::AllocShared(
+            place,
+            _sample_size * _key_size * _edge_to_id_len * sizeof(float));
+      }
     }
     val = reinterpret_cast<uint64_t *>(val_mem->ptr());
     actual_sample_size = reinterpret_cast<int *>(actual_sample_size_mem->ptr());
+    if (return_weight) {
+      edge_weight = reinterpret_cast<float *>(edge_weight_mem->ptr());
+    }
   }
   NeighborSampleResultV2() {}
   ~NeighborSampleResultV2() {}

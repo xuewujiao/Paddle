@@ -235,10 +235,12 @@ __global__ void neighbor_sample_kernel_all_edge_type(
     GpuPsNodeInfo* node_info_base,
     int* actual_size_base,
     uint64_t* sample_array_base,
+    float* weight_array_base,
     int sample_len,
     int n,  // edge_type * shard_len
     int default_value,
-    int shard_len) {
+    int shard_len,
+    bool return_weight) {
   // graph: All edge tables.
   // node_info_list: The input node query, must be unique, otherwise the
   // randomness gets worse. actual_size_base: The begin position of actual
@@ -259,16 +261,24 @@ __global__ void neighbor_sample_kernel_all_edge_type(
     } else {
       uint64_t* sample_array =
           sample_array_base + edge_idx * shard_len * sample_len;
+      float* weight_array = nullptr;
+      if (return_weight) {
+        weight_array = weight_array_base + edge_idx * shard_len * sample_len;
+      }
       int neighbor_len = node_info_list[node_i].neighbor_size;
       uint32_t data_offset = node_info_list[node_i].neighbor_offset;
       int offset = node_i * sample_len;
       uint64_t* data = graphs[edge_idx].neighbor_list;
+      float* weight = graphs[edge_idx].weight_list;
       uint64_t tmp;
       int split, begin;
       if (neighbor_len <= sample_len) {
         actual_size_array[node_i] = neighbor_len;
         for (int j = 0; j < neighbor_len; j++) {
           sample_array[offset + j] = data[data_offset + j];
+          if (return_weight) {
+            weight_array[offset + j] = weight[data_offset + j];
+          }
         }
       } else {
         actual_size_array[node_i] = sample_len;
@@ -286,9 +296,14 @@ __global__ void neighbor_sample_kernel_all_edge_type(
                                                         data_offset + num),
               static_cast<unsigned long long int>(  // NOLINT
                   data[data_offset + idx]));
+          weight[data_offset + idx] = atomicExch(
+              weight + data_offset + num, weight[data_offset + idx]);
         }
         for (int idx = 0; idx < sample_len; idx++) {
           sample_array[offset + idx] = data[data_offset + begin + idx];
+          if (return_weight) {
+            weight_array[offset + idx] = weight[data_offset + begin + idx];
+          }
         }
       }
     }
@@ -345,7 +360,9 @@ __global__ void weight_sample_large_kernel(GpuPsCommGraph graph,
                                            float* weight_keys_buff,
                                            int n,
                                            int sample_len,
-                                           unsigned long long random_seed) {
+                                           unsigned long long random_seed,
+                                           float* weight_array,
+                                           bool return_weight) {
   int i = blockIdx.x;
   if (i >= n) return;
   int gidx = threadIdx.x + blockIdx.x * BLOCK_SIZE;
@@ -358,6 +375,9 @@ __global__ void weight_sample_large_kernel(GpuPsCommGraph graph,
   if (neighbor_len <= sample_len) {  // directly copy
     for (int j = threadIdx.x; j < neighbor_len; j += BLOCK_SIZE) {
       res[offset + j] = data[data_offset + j];
+      if (return_weight) {
+        weight_array[offset + j] = weight[data_offset + j];
+      }
     }
   } else {
     RandomNumGen rng(gidx, random_seed);  // get weight thredshold
@@ -392,6 +412,9 @@ __global__ void weight_sample_large_kernel(GpuPsCommGraph graph,
         if (has_topk) {
           int write_index = atomicAdd(&cnt, 1);
           res[offset + write_index] = data[data_offset + j];
+          if (return_weight) {
+            weight_array[offset + write_index] = weight[data_offset + j];
+          }
         }
       }
     } else {
@@ -401,6 +424,9 @@ __global__ void weight_sample_large_kernel(GpuPsCommGraph graph,
         if (has_topk) {
           int write_index = atomicAdd(&cnt, 1);
           res[offset + write_index] = data[data_offset + j];
+          if (return_weight) {
+            weight_array[offset + write_index] = weight[data_offset + j];
+          }
         }
       }
       __syncthreads();
@@ -414,6 +440,9 @@ __global__ void weight_sample_large_kernel(GpuPsCommGraph graph,
             break;
           }
           res[offset + write_index] = data[data_offset + j];
+          if (return_weight) {
+            weight_array[offset + write_index] = weight[data_offset + j];
+          }
         }
       }
     }
@@ -428,7 +457,9 @@ __global__ void weight_sample_kernel(GpuPsCommGraph graph,
                                      uint64_t* res,
                                      int n,
                                      int sample_len,
-                                     unsigned long long random_seed) {
+                                     unsigned long long random_seed,
+                                     float* weight_array,
+                                     bool return_weight) {
   int i = blockIdx.x;
   if (i >= n) return;
   int gidx = threadIdx.x + blockIdx.x * BLOCK_SIZE;
@@ -441,6 +472,9 @@ __global__ void weight_sample_kernel(GpuPsCommGraph graph,
   if (neighbor_len <= sample_len) {
     for (int j = threadIdx.x; j < neighbor_len; j += BLOCK_SIZE) {
       res[offset + j] = data[data_offset + j];
+      if (return_weight) {
+        weight_array[offset + j] = weight[data_offset + j];
+      }
     }
   } else {
     RandomNumGen rng(gidx, random_seed);
@@ -491,6 +525,9 @@ __global__ void weight_sample_kernel(GpuPsCommGraph graph,
       int idx = j * BLOCK_SIZE + tx;
       if (idx < sample_len) {
         res[offset + idx] = data[data_offset + neighbor_idxs[j]];
+        if (return_weight) {
+          weight_array[offset + idx] = weight[data_offset + neighbor_idxs[j]];
+        }
       }
     }
   }
@@ -713,6 +750,8 @@ void GpuPsGraphTable::move_result_to_source_gpu_all_edge_type(
     int* h_right,
     uint64_t* src_sample_res,
     int* actual_sample_size,
+    float* edge_weight,
+    bool return_weight,
     int edge_type_len,
     int len) {
   int shard_len[gpu_num];  // NOLINT
@@ -742,16 +781,37 @@ void GpuPsGraphTable::move_result_to_source_gpu_all_edge_type(
         continue;
       }
       auto& node = path_[start_index][j].nodes_.front();
-      MemcpyPeerAsync(
-          reinterpret_cast<char*>(src_sample_res + i * len * sample_size +
-                                  h_left[j] * sample_size),
-          node.val_storage + sizeof(int64_t) * shard_len[j] * edge_type_len +
-              sizeof(int) * (shard_len[j] * edge_type_len +
-                             (shard_len[j] * edge_type_len) % 2) +
-              sizeof(uint64_t) * i * shard_len[j] * sample_size,
-          sizeof(uint64_t) * shard_len[j] * sample_size,
-          node.out_stream);
-      MemcpyPeerAsync(
+      if (!return_weight) {
+        MemcpyPeerAsync(  // sample array
+            reinterpret_cast<char*>(src_sample_res + i * len * sample_size +
+                                    h_left[j] * sample_size),
+            node.val_storage + sizeof(int64_t) * shard_len[j] * edge_type_len +
+                sizeof(int) * (shard_len[j] * edge_type_len +
+                               (shard_len[j] * edge_type_len) % 2) +
+                sizeof(uint64_t) * i * shard_len[j] * sample_size,
+            sizeof(uint64_t) * shard_len[j] * sample_size,
+            node.out_stream);
+      } else {
+        MemcpyPeerAsync(  // edge weight
+            reinterpret_cast<char*>(edge_weight + i * len * sample_size +
+                                    h_left[j] * sample_size),
+            node.val_storage + sizeof(int64_t) * shard_len[j] * edge_type_len +
+                sizeof(int) * (shard_len[j] * edge_type_len) +
+                sizeof(float) * i * shard_len[j] * sample_size,
+            sizeof(float) * shard_len[j] * sample_size,
+            node.out_stream);
+        MemcpyPeerAsync(  // sample array
+            reinterpret_cast<char*>(src_sample_res + i * len * sample_size +
+                                    h_left[j] * sample_size),
+            node.val_storage + sizeof(int64_t) * shard_len[j] * edge_type_len +
+                sizeof(int) * (shard_len[j] * edge_type_len) +
+                sizeof(float) * (shard_len[j] * sample_size * edge_type_len) +
+                sizeof(int) * ((shard_len[j] * edge_type_len) * (sample_size + 1)) % 2 +
+                sizeof(uint64_t) * i * shard_len[j] * sample_size,
+            sizeof(uint64_t) * shard_len[j] * sample_size,
+            node.out_stream);
+      }
+      MemcpyPeerAsync(  // actual sample size
           reinterpret_cast<char*>(actual_sample_size + i * len + h_left[j]),
           node.val_storage + sizeof(int64_t) * shard_len[j] * edge_type_len +
               sizeof(int) * i * shard_len[j],
@@ -835,10 +895,13 @@ __global__ void fill_dvalues_with_edge_type(uint64_t* d_shard_vals,
                                             uint64_t* d_vals,
                                             int* d_shard_actual_sample_size,
                                             int* d_actual_sample_size,
+                                            float* d_shard_weights,
+                                            float* d_weights,
                                             int* idx,
                                             int sample_size,
                                             int len,    // len * edge_type_len
-                                            int mod) {  // len
+                                            int mod,
+                                            bool return_weight) {  // len
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < len) {
     int a = i % mod, b = i - i % mod;
@@ -847,6 +910,9 @@ __global__ void fill_dvalues_with_edge_type(uint64_t* d_shard_vals,
     size_t offset2 = i * sample_size;
     for (int j = 0; j < d_shard_actual_sample_size[i]; j++) {
       d_vals[offset1 + j] = d_shard_vals[offset2 + j];
+      if (return_weight) {
+        d_weights[offset1 + j] = d_shard_weights[offset2 + j];
+      }
     }
   }
 }
@@ -1452,10 +1518,12 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
         constexpr int BLOCK_SIZE = 256;
         weight_sample_large_kernel<BLOCK_SIZE><<<shard_len, BLOCK_SIZE, 0, cur_stream>>>(
             graph, node_info_list, sample_array, neighbor_offset,
-            target_weights_key_buf_ptr, shard_len, sample_size, random_seed);
+            target_weights_key_buf_ptr, shard_len, sample_size, random_seed,
+            nullptr, false);
       } else {
         using WeightedSampleFuncType = void (*)(GpuPsCommGraph, GpuPsNodeInfo *,
-                                                uint64_t *, int, int, unsigned long long);
+                                                uint64_t *, int, int, unsigned long long,
+                                                float *, bool);
         static const WeightedSampleFuncType func_array[7] = {
             weight_sample_kernel<4, 128>, weight_sample_kernel<6, 128>,
             weight_sample_kernel<4, 256>, weight_sample_kernel<5, 256>,
@@ -1479,7 +1547,8 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
         int func_idx = choose_func_idx(sample_size);
         int block_size = block_sizes[func_idx];
         func_array[func_idx]<<<shard_len, block_size, 0, cur_stream>>>(
-            graph, node_info_list, sample_array, shard_len, sample_size, random_seed);
+            graph, node_info_list, sample_array, shard_len, sample_size, random_seed,
+            nullptr, false);
       }
     }
   }
@@ -1679,11 +1748,13 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
     int sample_size,
     int len,
     std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,
-    bool weighted) {
+    bool weighted,
+    bool return_weight) {
   NeighborSampleResultV2 result;
   auto stream = resource_->local_stream(gpu_id, 0);
   result.set_stream(stream);
-  result.initialize(sample_size, len, edge_type_len, resource_->dev_id(gpu_id));
+  result.initialize(sample_size, len, edge_type_len, return_weight,
+                    resource_->dev_id(gpu_id));
   if (len == 0) {
     return result;
   }
@@ -1693,6 +1764,7 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
 
   int* actual_sample_size = result.actual_sample_size;
   uint64_t* val = result.val;
+  float* edge_weight = result.edge_weight;
   int total_gpu = resource_->total_device();
 
   int grid_size = (len - 1) / block_size_ + 1;
@@ -1734,6 +1806,16 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
   int* d_shard_actual_sample_size_ptr =
       reinterpret_cast<int*>(d_shard_actual_sample_size->ptr());
 
+  float* d_shard_edge_weight_ptr = nullptr;
+  if (return_weight) {
+    auto d_shard_edge_weight =
+        memory::Alloc(place,
+                      sample_size * len * edge_type_len * sizeof(float),
+                      phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+    d_shard_edge_weight_ptr =
+        reinterpret_cast<float*>(d_shard_edge_weight->ptr());
+  }
+
   split_idx_to_shard(reinterpret_cast<uint64_t*>(key),
                        d_idx_ptr,
                        len,
@@ -1763,15 +1845,28 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
     if (shard_len == 0) {
       continue;
     }
-    create_storage(
-        gpu_id,
-        i,
-        shard_len * sizeof(uint64_t),
-        shard_len * sizeof(uint64_t) * edge_type_len +  // key
-            (shard_len * sample_size * sizeof(uint64_t)) *
-                edge_type_len +                        // sample
-            shard_len * sizeof(int) * edge_type_len +  // actual sample size
-            ((shard_len * edge_type_len) % 2) * sizeof(int));  // align
+    if (!return_weight) {
+      create_storage(
+          gpu_id,
+          i,
+          shard_len * sizeof(uint64_t),
+          shard_len * sizeof(uint64_t) * edge_type_len +  // key
+              (shard_len * sample_size * sizeof(uint64_t)) *
+                  edge_type_len +                        // sample
+              shard_len * sizeof(int) * edge_type_len +  // actual sample size
+              ((shard_len * edge_type_len) % 2) * sizeof(int));  // align
+    } else {
+      create_storage(
+          gpu_id,
+          i,
+          shard_len * sizeof(uint64_t),
+          shard_len * sizeof(uint64_t) * edge_type_len +  // key
+              (shard_len * sample_size * sizeof(uint64_t)) *
+                  edge_type_len +                         // sample
+              shard_len * sizeof(int) * edge_type_len +   // actual sample size
+              shard_len * sample_size * sizeof(float) * edge_type_len +   // edge weight
+              (((shard_len * edge_type_len) * (1 + sample_size)) % 2) * sizeof(int));  // align, sizeof(int) == sizeof(float)
+    }
   }
   walk_to_dest(gpu_id,
                total_gpu,
@@ -1813,9 +1908,19 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
         reinterpret_cast<GpuPsCommGraph*>(d_commgraph_mem->ptr());
     int* actual_size_base =
         reinterpret_cast<int*>(node_info_base + shard_len * edge_type_len);
-    uint64_t* sample_array_base = reinterpret_cast<uint64_t*>(
-        actual_size_base + shard_len * edge_type_len +
-        (shard_len * edge_type_len) % 2);
+    float* weight_array_base = nullptr;
+    uint64_t* sample_array_base = nullptr;
+    if (return_weight) {
+      weight_array_base =
+          reinterpret_cast<float*>(actual_size_base + shard_len * edge_type_len);
+      sample_array_base = reinterpret_cast<uint64_t*>(
+          weight_array_base + shard_len * edge_type_len * sample_size +
+          ((shard_len * edge_type_len) * (1 + sample_size) % 2));
+    } else {
+      sample_array_base = reinterpret_cast<uint64_t*>(
+          actual_size_base + shard_len * edge_type_len +
+          (shard_len * edge_type_len) % 2);
+    }
 
     if (!weighted) {
       int grid_size_ = (shard_len * edge_type_len - 1) / block_size_ + 1;
@@ -1827,10 +1932,12 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
           node_info_base,
           actual_size_base,
           sample_array_base,
+          weight_array_base,
           sample_size,
           shard_len * edge_type_len,
           default_value,
-          shard_len);
+          shard_len,
+          return_weight);
     } else {
       // Weighted sample.
       constexpr int sample_size_thredshold = 1024;
@@ -1858,6 +1965,10 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
         GpuPsNodeInfo* node_info_list = node_info_base + edge_idx * shard_len;
         int* actual_size_array = actual_size_base + edge_idx * shard_len;
         uint64_t* sample_array = sample_array_base + edge_idx * shard_len * sample_size;
+        float* weight_array = nullptr;
+        if (return_weight) {
+          weight_array = weight_array_base + edge_idx * shard_len * sample_size;
+        }
         int offset = get_graph_list_offset(i, edge_idx);
         auto graph = gpu_graph_list_[offset];
 
@@ -1898,10 +2009,12 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
 
           weight_sample_large_kernel<BLOCK_SIZE><<<shard_len, BLOCK_SIZE, 0, cur_stream>>>(
               graph, node_info_list, sample_array, neighbor_offset,
-              target_weights_key_buf_ptr, shard_len, sample_size, random_seed);
+              target_weights_key_buf_ptr, shard_len, sample_size, random_seed,
+              weight_array, return_weight);
         } else {
           using WeightedSampleFuncType = void (*)(GpuPsCommGraph, GpuPsNodeInfo *,
-                                                  uint64_t *, int, int, unsigned long long);
+                                                  uint64_t *, int, int, unsigned long long,
+                                                  float *, bool);
           static const WeightedSampleFuncType func_array[7] = {
               weight_sample_kernel<4, 128>, weight_sample_kernel<6, 128>,
               weight_sample_kernel<4, 256>, weight_sample_kernel<5, 256>,
@@ -1925,7 +2038,8 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
           int func_idx = choose_func_idx(sample_size);
           int block_size = block_sizes[func_idx];
           func_array[func_idx]<<<shard_len, block_size, 0, cur_stream>>>(
-              graph, node_info_list, sample_array, shard_len, sample_size, random_seed);
+              graph, node_info_list, sample_array, shard_len, sample_size, random_seed,
+              weight_array, return_weight);
         }
       }
     }
@@ -1945,6 +2059,8 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
                                           h_right,
                                           d_shard_vals_ptr,
                                           d_shard_actual_sample_size_ptr,
+                                          d_shard_edge_weight_ptr,
+                                          return_weight,
                                           edge_type_len,
                                           len);
 
@@ -1954,10 +2070,13 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
       val,
       d_shard_actual_sample_size_ptr,
       actual_sample_size,
+      d_shard_edge_weight_ptr,
+      edge_weight,
       d_idx_ptr,
       sample_size,
       len * edge_type_len,
-      len);
+      len,
+      return_weight);
   CUDA_CHECK(cudaStreamSynchronize(stream));
 
   for (int i = 0; i < total_gpu; i++) {

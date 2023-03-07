@@ -116,7 +116,8 @@ class GpuPsGraphTable
       int sample_size,
       int len,
       std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,
-      bool weighted);
+      bool weighted,
+      bool return_weight);
   std::vector<std::shared_ptr<phi::Allocation>> get_edge_type_graph(
       int gpu_id, int edge_type_len);
   void get_node_degree(int gpu_id,
@@ -170,6 +171,8 @@ class GpuPsGraphTable
                                                int *h_right,
                                                uint64_t *src_sample_res,
                                                int *actual_sample_size,
+                                               float* edge_weight,
+                                               bool return_weight,
                                                int edge_type_len,
                                                int len);
   int init_cpu_table(const paddle::distributed::GraphParameter &graph,
