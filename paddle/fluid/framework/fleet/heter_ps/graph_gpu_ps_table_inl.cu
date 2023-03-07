@@ -296,8 +296,10 @@ __global__ void neighbor_sample_kernel_all_edge_type(
                                                         data_offset + num),
               static_cast<unsigned long long int>(  // NOLINT
                   data[data_offset + idx]));
-          weight[data_offset + idx] = atomicExch(
-              weight + data_offset + num, weight[data_offset + idx]);
+          if (return_weight) {
+            weight[data_offset + idx] = atomicExch(
+                weight + data_offset + num, weight[data_offset + idx]);
+          }
         }
         for (int idx = 0; idx < sample_len; idx++) {
           sample_array[offset + idx] = data[data_offset + begin + idx];

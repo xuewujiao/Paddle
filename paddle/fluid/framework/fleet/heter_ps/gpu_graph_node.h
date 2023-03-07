@@ -372,6 +372,8 @@ struct NeighborSampleResultV2 {
     actual_sample_size = reinterpret_cast<int *>(actual_sample_size_mem->ptr());
     if (return_weight) {
       edge_weight = reinterpret_cast<float *>(edge_weight_mem->ptr());
+    } else {
+      edge_weight = nullptr;
     }
   }
   NeighborSampleResultV2() {}
