@@ -1387,33 +1387,19 @@ void GraphTable::graph_partition() {
 }
 
 void GraphTable::dbh_graph_partition() {
-  std::vector<std::vector<GraphShard *>> tmp_edge_shards, tmp_feature_shards;
+  std::vector<std::vector<GraphShard *>> tmp_edge_shards;
   tmp_edge_shards.resize(edge_shards.size());
-  tmp_feature_shards.resize(feature_shards.size());
   for (size_t k = 0; k < edge_shards.size(); k++) {
     for (size_t i = 0; i < shard_num_per_server; i++) {
       tmp_edge_shards[k].push_back(new GraphShard());
     }
   }
-  for (size_t k = 0; k < feature_shards.size(); k++) {
-    for (size_t i = 0; i < shard_num_per_server; i++) {
-      tmp_feature_shards[k].push_back(new GraphShard());
-    }
-  }
 
   // all edges
   std::vector<std::future<int>> tasks;
-  std::vector<std::vector<std::mutex *>> feature_mutex;
-  feature_mutex.resize(feature_shards.size());
-  for (size_t i = 0; i < feature_mutex.size(); ++i) {
-    feature_mutex[i].resize(shard_num);
-    for (size_t j = 0; j < shard_num; j++) {
-      feature_mutex[i][j] = new std::mutex();
-    }
-  }
   for (size_t idx = 0; idx < id_to_edge.size(); idx++) {
     tasks.push_back(_shards_task_pool[idx % task_pool_size_]->enqueue(
-        [&, idx, feature_mutex, this]() -> int {
+        [&, idx, this]() -> int {
           auto node_type =
               paddle::string::split_string<std::string>(id_to_edge[idx], "2");
           std::vector<int> src_edge_ids;
@@ -1443,7 +1429,6 @@ void GraphTable::dbh_graph_partition() {
                                                    node_type,
                                                    src_edge_ids,
                                                    dest_edge_ids,
-                                                   feature_mutex,
                                                    this]() -> int {
                   auto &shards = edge_shards[idx][part_id]->get_bucket();
                   for (auto node : shards) {
@@ -1509,11 +1494,6 @@ void GraphTable::dbh_graph_partition() {
                           }
                         }
                       }
-                      feature_mutex[src_fea_idx][part_id]->lock();
-                      tmp_feature_shards[src_fea_idx][part_id]
-                          ->add_feature_node(id, false);
-                      feature_mutex[src_fea_idx][part_id]->unlock();
-                      // TODO(danleifeng): add feature slot
                     }
                   }
                   return 0;
@@ -1530,8 +1510,6 @@ void GraphTable::dbh_graph_partition() {
   }
   // 替换原来的shards
   clear_edge_shard();
-  clear_feature_shard();
-  feature_shards = std::move(tmp_feature_shards);
   edge_shards = std::move(tmp_edge_shards);
 }
 
