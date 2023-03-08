@@ -269,7 +269,10 @@ __global__ void neighbor_sample_kernel_all_edge_type(
       uint32_t data_offset = node_info_list[node_i].neighbor_offset;
       int offset = node_i * sample_len;
       uint64_t* data = graphs[edge_idx].neighbor_list;
-      float* weight = graphs[edge_idx].weight_list;
+      float* weight = nullptr;
+      if (return_weight) {
+        weight = graphs[edge_idx].weight_list;
+      }
       uint64_t tmp;
       int split, begin;
       if (neighbor_len <= sample_len) {
