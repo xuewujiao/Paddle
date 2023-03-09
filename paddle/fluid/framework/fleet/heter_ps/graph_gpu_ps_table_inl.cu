@@ -20,8 +20,8 @@
 #include "math.h"
 #pragma once
 #ifdef PADDLE_WITH_HETERPS
-#include "random.cuh"
-#include "block_radix_topk.cuh"
+#include "cudf/random.cuh"
+#include "cudf/block_radix_topk.cuh"
 #include "paddle/fluid/framework/fleet/heter_ps/gpu_graph_utils.h"
 #include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_ps_table.h"
 #define ALIGN_INT64(LEN) (uint64_t((LEN) + 7) & uint64_t(~7))
@@ -360,7 +360,7 @@ __global__ void weight_sample_large_kernel(GpuPsCommGraph graph,
       res[offset + j] = data[data_offset + j];
     }
   } else {
-    RandomNumGen rng(gidx, random_seed);  // get weight thredshold
+    RandomNumGen rng(gidx, random_seed);  // get weight threshold
     for (int j = threadIdx.x; j < neighbor_len; j += BLOCK_SIZE) {
       float thread_weight = weight[data_offset + j];
       weight_keys_local_buff[j] = static_cast<float>(gen_key_from_weight(thread_weight, rng));
@@ -493,6 +493,93 @@ __global__ void weight_sample_kernel(GpuPsCommGraph graph,
         res[offset + idx] = data[data_offset + neighbor_idxs[j]];
       }
     }
+  }
+}
+
+void GpuPsGraphTable::weighted_sample_usage_function(
+    GpuPsCommGraph& graph,
+    GpuPsNodeInfo* node_info_list,
+    int* actual_size_array,
+    uint64_t* sample_array,
+    int* neighbor_count_ptr,
+    int cur_gpu_id,
+    int remote_gpu_id,
+    int sample_size,
+    int sample_size_threshold,
+    int shard_len,
+    bool need_neighbor_count,
+    unsigned long long random_seed,
+    int default_value) {
+  platform::CUDAPlace place = platform::CUDAPlace(resource_->dev_id(cur_gpu_id));
+  auto cur_stream = resource_->remote_stream(remote_gpu_id, cur_gpu_id);
+  constexpr int BLOCK_SIZE = 256;
+
+  int grid_size = (shard_len + 127) / 128;
+  if (need_neighbor_count) {
+    get_actual_size_and_neighbor_count<true><<<
+        grid_size, 128, 0, cur_stream>>>(node_info_list, actual_size_array,
+                                         neighbor_count_ptr, sample_size,
+                                         shard_len, default_value);
+  } else {
+    get_actual_size_and_neighbor_count<false><<<
+        grid_size, 128, 0, cur_stream>>>(node_info_list, actual_size_array,
+                                         nullptr, sample_size, shard_len,
+                                         default_value);
+  }
+  CUDA_CHECK(cudaStreamSynchronize(cur_stream));
+
+  paddle::memory::ThrustAllocator<cudaStream_t> allocator(place, cur_stream);
+  if (sample_size > sample_size_threshold) {
+    // to be optimized
+    thrust::exclusive_scan(thrust::cuda::par(allocator).on(cur_stream),
+                           neighbor_count_ptr,
+                           neighbor_count_ptr + shard_len + 1,
+                           neighbor_count_ptr);
+    int* neighbor_offset = neighbor_count_ptr;
+    int target_neighbor_counts = 0;
+    cudaMemcpyAsync(&target_neighbor_counts,
+                    neighbor_offset + shard_len,
+                    sizeof(int),
+                    cudaMemcpyDeviceToHost,
+                    cur_stream);
+    CUDA_CHECK(cudaStreamSynchronize(cur_stream));
+
+    auto target_weights_key_buf =
+        memory::Alloc(place,
+                      target_neighbor_counts * sizeof(float),
+                      phi::Stream(reinterpret_cast<phi::StreamId>(cur_stream)));
+    float* target_weights_key_buf_ptr =
+        reinterpret_cast<float* >(target_weights_key_buf->ptr());
+    weight_sample_large_kernel<BLOCK_SIZE><<<shard_len, BLOCK_SIZE, 0, cur_stream>>>(
+        graph, node_info_list, sample_array, neighbor_offset,
+        target_weights_key_buf_ptr, shard_len, sample_size, random_seed);
+  } else {
+    using WeightedSampleFuncType = void (*)(GpuPsCommGraph, GpuPsNodeInfo *,
+                                            uint64_t *, int, int, unsigned long long);
+    static const WeightedSampleFuncType func_array[7] = {
+            weight_sample_kernel<4, 128>, weight_sample_kernel<6, 128>,
+            weight_sample_kernel<4, 256>, weight_sample_kernel<5, 256>,
+            weight_sample_kernel<6, 256>, weight_sample_kernel<8, 256>,
+            weight_sample_kernel<8, 512>,
+    };
+    const int block_sizes[7] = {128, 128, 256, 256, 256, 256, 512};
+    auto choose_func_idx = [](int sample_size) {
+      if (sample_size <= 128) {
+        return 0;
+      }
+      if (sample_size <= 384) {
+        return (sample_size - 129) / 64 + 4;
+      }
+      if (sample_size <= 512) {
+        return 5;
+      } else {
+        return 6;
+      }
+    };
+    int func_idx = choose_func_idx(sample_size);
+    int block_size = block_sizes[func_idx];
+    func_array[func_idx]<<<shard_len, block_size, 0, cur_stream>>>(
+        graph, node_info_list, sample_array, shard_len, sample_size, random_seed);
   }
 }
 
@@ -1397,14 +1484,14 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
               default_value);
     } else {
       // Weighted sample.
-      constexpr int sample_size_thredshold = 1024;
+      constexpr int sample_size_threshold = 1024;
 
       thread_local std::random_device rd;
       thread_local std::mt19937 gen(rd());
       thread_local std::uniform_int_distribution<unsigned long long> distrib;
       unsigned long long random_seed = distrib(gen);
 
-      const bool need_neighbor_count = sample_size > sample_size_thredshold;
+      const bool need_neighbor_count = sample_size > sample_size_threshold;
       int *neighbor_count_ptr = nullptr;
       if (need_neighbor_count) {
         auto neighbor_count =
@@ -1412,75 +1499,16 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
                           (shard_len + 1) * sizeof(int),
                           phi::Stream(reinterpret_cast<phi::StreamId>(cur_stream)));
         neighbor_count_ptr = reinterpret_cast<int* >(neighbor_count->ptr());
-        int grid_size = (shard_len + 127) / 128;
-        get_actual_size_and_neighbor_count<true><<<grid_size, 128, 0, cur_stream>>>(
-            node_info_list, actual_size_array, neighbor_count_ptr, sample_size, shard_len,
-            default_value);
-      } else {
-        int grid_size = (shard_len + 127) / 128;
-        get_actual_size_and_neighbor_count<false><<<grid_size, 128, 0, cur_stream>>>(
-            node_info_list, actual_size_array, nullptr, sample_size, shard_len, default_value);
       }
-      CUDA_CHECK(cudaStreamSynchronize(cur_stream));
 
-      paddle::memory::ThrustAllocator<cudaStream_t> allocator(place, cur_stream);
       PADDLE_ENFORCE_GT(sample_size,
                         0,
                         platform::errors::InvalidArgument("sample_size should be greater than 0."));
-      if (sample_size > sample_size_thredshold) {
-        // To be optimized.
-        thrust::exclusive_scan(thrust::cuda::par(allocator).on(cur_stream),
-                               neighbor_count_ptr,
-                               neighbor_count_ptr + shard_len + 1,
-                               neighbor_count_ptr);
-        int *neighbor_offset = neighbor_count_ptr;
-        int target_neighbor_counts = 0;
-        cudaMemcpyAsync(&target_neighbor_counts,
-                        neighbor_offset + shard_len,
-                        sizeof(int),
-                        cudaMemcpyDeviceToHost,
-                        cur_stream);
-        CUDA_CHECK(cudaStreamSynchronize(cur_stream));
-
-        auto target_weights_key_buf =
-            memory::Alloc(place,
-                          target_neighbor_counts * sizeof(float),
-                          phi::Stream(reinterpret_cast<phi::StreamId>(cur_stream)));
-        float *target_weights_key_buf_ptr =
-            reinterpret_cast<float* >(target_weights_key_buf->ptr());
-
-        constexpr int BLOCK_SIZE = 256;
-        weight_sample_large_kernel<BLOCK_SIZE><<<shard_len, BLOCK_SIZE, 0, cur_stream>>>(
-            graph, node_info_list, sample_array, neighbor_offset,
-            target_weights_key_buf_ptr, shard_len, sample_size, random_seed);
-      } else {
-        using WeightedSampleFuncType = void (*)(GpuPsCommGraph, GpuPsNodeInfo *,
-                                                uint64_t *, int, int, unsigned long long);
-        static const WeightedSampleFuncType func_array[7] = {
-            weight_sample_kernel<4, 128>, weight_sample_kernel<6, 128>,
-            weight_sample_kernel<4, 256>, weight_sample_kernel<5, 256>,
-            weight_sample_kernel<6, 256>, weight_sample_kernel<8, 256>,
-            weight_sample_kernel<8, 512>,
-        };
-        const int block_sizes[7] = {128, 128, 256, 256, 256, 256, 512};
-        auto choose_func_idx = [](int sample_size) {
-          if (sample_size <= 128) {
-            return 0;
-          }
-          if (sample_size <= 384) {
-            return (sample_size - 129) / 64 + 4;
-          }
-          if (sample_size <= 512) {
-            return 5;
-          } else {
-            return 6;
-          }
-        };
-        int func_idx = choose_func_idx(sample_size);
-        int block_size = block_sizes[func_idx];
-        func_array[func_idx]<<<shard_len, block_size, 0, cur_stream>>>(
-            graph, node_info_list, sample_array, shard_len, sample_size, random_seed);
-      }
+      weighted_sample_usage_function(graph, node_info_list, actual_size_array,
+                                     sample_array, neighbor_count_ptr, gpu_id,
+                                     i, sample_size, sample_size_threshold,
+                                     shard_len, need_neighbor_count, random_seed,
+                                     default_value);
     }
   }
 
@@ -1833,14 +1861,13 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
           shard_len);
     } else {
       // Weighted sample.
-      constexpr int sample_size_thredshold = 1024;
+      constexpr int sample_size_threshold = 1024;
       thread_local std::random_device rd;
       thread_local std::mt19937 gen(rd());
       thread_local std::uniform_int_distribution<unsigned long long> distrib;
       unsigned long long random_seed = distrib(gen);
-      constexpr int BLOCK_SIZE = 256;
 
-      const bool need_neighbor_count = sample_size > sample_size_thredshold;
+      const bool need_neighbor_count = sample_size > sample_size_threshold;
       int* neighbor_count_ptr = nullptr;
       if (need_neighbor_count) {
         auto neighbor_count =
@@ -1861,72 +1888,11 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
         int offset = get_graph_list_offset(i, edge_idx);
         auto graph = gpu_graph_list_[offset];
 
-        int grid_size = (shard_len + 127) / 128;
-        if (need_neighbor_count) {
-          get_actual_size_and_neighbor_count<true><<<
-              grid_size, 128, 0, cur_stream>>>(node_info_list, actual_size_array,
-                                               neighbor_count_ptr, sample_size, shard_len,
-                                               default_value);
-        } else {
-          get_actual_size_and_neighbor_count<false><<<
-              grid_size, 128, 0, cur_stream>>>(node_info_list, actual_size_array,
-                                               nullptr, sample_size, shard_len, default_value);
-        }
-        paddle::memory::ThrustAllocator<cudaStream_t> allocator(place, cur_stream);
-        if (sample_size > sample_size_thredshold) {
-          // To be optimized
-          thrust::exclusive_scan(thrust::cuda::par(allocator).on(cur_stream),
-                                 neighbor_count_ptr,
-                                 neighbor_count_ptr + shard_len + 1,
-                                 neighbor_count_ptr);
-          int* neighbor_offset = neighbor_count_ptr;
-          int target_neighbor_counts = 0;
-          cudaMemcpyAsync(&target_neighbor_counts,
-                          neighbor_offset + shard_len,
-                          sizeof(int),
-                          cudaMemcpyDeviceToHost,
-                          cur_stream);
-          CUDA_CHECK(cudaStreamSynchronize(cur_stream));
-
-          // to be optimized
-          auto target_weights_key_buf =
-              memory::Alloc(place,
-                            target_neighbor_counts * sizeof(float),
-                            phi::Stream(reinterpret_cast<phi::StreamId>(cur_stream)));
-          float* target_weights_key_buf_ptr =
-              reinterpret_cast<float* >(target_weights_key_buf->ptr());
-
-          weight_sample_large_kernel<BLOCK_SIZE><<<shard_len, BLOCK_SIZE, 0, cur_stream>>>(
-              graph, node_info_list, sample_array, neighbor_offset,
-              target_weights_key_buf_ptr, shard_len, sample_size, random_seed);
-        } else {
-          using WeightedSampleFuncType = void (*)(GpuPsCommGraph, GpuPsNodeInfo *,
-                                                  uint64_t *, int, int, unsigned long long);
-          static const WeightedSampleFuncType func_array[7] = {
-              weight_sample_kernel<4, 128>, weight_sample_kernel<6, 128>,
-              weight_sample_kernel<4, 256>, weight_sample_kernel<5, 256>,
-              weight_sample_kernel<6, 256>, weight_sample_kernel<8, 256>,
-              weight_sample_kernel<8, 512>,
-          };
-          const int block_sizes[7] = {128, 128, 256, 256, 256, 256, 512};
-          auto choose_func_idx = [](int sample_size) {
-            if (sample_size <= 128) {
-              return 0;
-            }
-            if (sample_size <= 384) {
-              return (sample_size - 129) / 64 + 4;
-            }
-            if (sample_size <= 512) {
-              return 5;
-            } else {
-              return 6;
-            }
-          };
-          int func_idx = choose_func_idx(sample_size);
-          int block_size = block_sizes[func_idx];
-          func_array[func_idx]<<<shard_len, block_size, 0, cur_stream>>>(
-              graph, node_info_list, sample_array, shard_len, sample_size, random_seed);
-        }
+        weighted_sample_usage_function(graph, node_info_list, actual_size_array,
+                                       sample_array, neighbor_count_ptr,
+                                       gpu_id, i, sample_size, sample_size_threshold,
+                                       shard_len, need_neighbor_count, random_seed,
+                                       default_value);
       }
     }
   }
