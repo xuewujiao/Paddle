@@ -26,6 +26,7 @@
 #include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_ps_table.h"
 #define ALIGN_INT64(LEN) (uint64_t((LEN) + 7) & uint64_t(~7))
 #define HBMPS_MAX_BUFF 1024 * 1024
+#define SAMPLE_SIZE_THRESHOLD 1024
 
 DECLARE_bool(enable_neighbor_list_use_uva);
 
@@ -338,14 +339,14 @@ __device__ __forceinline__ float gen_key_from_weight(const float weight, RandomN
 
 template <unsigned int BLOCK_SIZE>
 __launch_bounds__(BLOCK_SIZE)
-__global__ void weight_sample_large_kernel(GpuPsCommGraph graph,
-                                           GpuPsNodeInfo* node_info_list,
-                                           uint64_t* res,
-                                           const int* target_neighbor_offset,
-                                           float* weight_keys_buff,
-                                           int n,
-                                           int sample_len,
-                                           unsigned long long random_seed) {
+__global__ void weighted_sample_large_kernel(GpuPsCommGraph graph,
+                                             GpuPsNodeInfo* node_info_list,
+                                             uint64_t* res,
+                                             const int* target_neighbor_offset,
+                                             float* weight_keys_buff,
+                                             int n,
+                                             int sample_len,
+                                             unsigned long long random_seed) {
   int i = blockIdx.x;
   if (i >= n) return;
   int gidx = threadIdx.x + blockIdx.x * BLOCK_SIZE;
@@ -423,12 +424,12 @@ __global__ void weight_sample_large_kernel(GpuPsCommGraph graph,
 // A-RES algorithm
 template <unsigned int ITEMS_PER_THREAD, unsigned int BLOCK_SIZE>
 __launch_bounds__(BLOCK_SIZE)
-__global__ void weight_sample_kernel(GpuPsCommGraph graph,
-                                     GpuPsNodeInfo* node_info_list,
-                                     uint64_t* res,
-                                     int n,
-                                     int sample_len,
-                                     unsigned long long random_seed) {
+__global__ void weighted_sample_kernel(GpuPsCommGraph graph,
+                                       GpuPsNodeInfo* node_info_list,
+                                       uint64_t* res,
+                                       int n,
+                                       int sample_len,
+                                       unsigned long long random_seed) {
   int i = blockIdx.x;
   if (i >= n) return;
   int gidx = threadIdx.x + blockIdx.x * BLOCK_SIZE;
@@ -496,7 +497,7 @@ __global__ void weight_sample_kernel(GpuPsCommGraph graph,
   }
 }
 
-void GpuPsGraphTable::weighted_sample_usage_function(
+void GpuPsGraphTable::weighted_sample(
     GpuPsCommGraph& graph,
     GpuPsNodeInfo* node_info_list,
     int* actual_size_array,
@@ -505,7 +506,6 @@ void GpuPsGraphTable::weighted_sample_usage_function(
     int cur_gpu_id,
     int remote_gpu_id,
     int sample_size,
-    int sample_size_threshold,
     int shard_len,
     bool need_neighbor_count,
     unsigned long long random_seed,
@@ -529,7 +529,7 @@ void GpuPsGraphTable::weighted_sample_usage_function(
   CUDA_CHECK(cudaStreamSynchronize(cur_stream));
 
   paddle::memory::ThrustAllocator<cudaStream_t> allocator(place, cur_stream);
-  if (sample_size > sample_size_threshold) {
+  if (sample_size > SAMPLE_SIZE_THRESHOLD) {
     // to be optimized
     thrust::exclusive_scan(thrust::cuda::par(allocator).on(cur_stream),
                            neighbor_count_ptr,
@@ -550,17 +550,17 @@ void GpuPsGraphTable::weighted_sample_usage_function(
                       phi::Stream(reinterpret_cast<phi::StreamId>(cur_stream)));
     float* target_weights_key_buf_ptr =
         reinterpret_cast<float* >(target_weights_key_buf->ptr());
-    weight_sample_large_kernel<BLOCK_SIZE><<<shard_len, BLOCK_SIZE, 0, cur_stream>>>(
+    weighted_sample_large_kernel<BLOCK_SIZE><<<shard_len, BLOCK_SIZE, 0, cur_stream>>>(
         graph, node_info_list, sample_array, neighbor_offset,
         target_weights_key_buf_ptr, shard_len, sample_size, random_seed);
   } else {
     using WeightedSampleFuncType = void (*)(GpuPsCommGraph, GpuPsNodeInfo *,
                                             uint64_t *, int, int, unsigned long long);
     static const WeightedSampleFuncType func_array[7] = {
-            weight_sample_kernel<4, 128>, weight_sample_kernel<6, 128>,
-            weight_sample_kernel<4, 256>, weight_sample_kernel<5, 256>,
-            weight_sample_kernel<6, 256>, weight_sample_kernel<8, 256>,
-            weight_sample_kernel<8, 512>,
+            weighted_sample_kernel<4, 128>, weighted_sample_kernel<6, 128>,
+            weighted_sample_kernel<4, 256>, weighted_sample_kernel<5, 256>,
+            weighted_sample_kernel<6, 256>, weighted_sample_kernel<8, 256>,
+            weighted_sample_kernel<8, 512>,
     };
     const int block_sizes[7] = {128, 128, 256, 256, 256, 256, 512};
     auto choose_func_idx = [](int sample_size) {
@@ -1484,14 +1484,12 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
               default_value);
     } else {
       // Weighted sample.
-      constexpr int sample_size_threshold = 1024;
-
       thread_local std::random_device rd;
       thread_local std::mt19937 gen(rd());
       thread_local std::uniform_int_distribution<unsigned long long> distrib;
       unsigned long long random_seed = distrib(gen);
 
-      const bool need_neighbor_count = sample_size > sample_size_threshold;
+      const bool need_neighbor_count = sample_size > SAMPLE_SIZE_THRESHOLD;
       int *neighbor_count_ptr = nullptr;
       if (need_neighbor_count) {
         auto neighbor_count =
@@ -1504,11 +1502,9 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
       PADDLE_ENFORCE_GT(sample_size,
                         0,
                         platform::errors::InvalidArgument("sample_size should be greater than 0."));
-      weighted_sample_usage_function(graph, node_info_list, actual_size_array,
-                                     sample_array, neighbor_count_ptr, gpu_id,
-                                     i, sample_size, sample_size_threshold,
-                                     shard_len, need_neighbor_count, random_seed,
-                                     default_value);
+      weighted_sample(graph, node_info_list, actual_size_array, sample_array,
+                      neighbor_count_ptr, gpu_id, i, sample_size, shard_len,
+                      need_neighbor_count, random_seed, default_value);
     }
   }
 
@@ -1861,13 +1857,12 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
           shard_len);
     } else {
       // Weighted sample.
-      constexpr int sample_size_threshold = 1024;
       thread_local std::random_device rd;
       thread_local std::mt19937 gen(rd());
       thread_local std::uniform_int_distribution<unsigned long long> distrib;
       unsigned long long random_seed = distrib(gen);
 
-      const bool need_neighbor_count = sample_size > sample_size_threshold;
+      const bool need_neighbor_count = sample_size > SAMPLE_SIZE_THRESHOLD;
       int* neighbor_count_ptr = nullptr;
       if (need_neighbor_count) {
         auto neighbor_count =
@@ -1888,11 +1883,9 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
         int offset = get_graph_list_offset(i, edge_idx);
         auto graph = gpu_graph_list_[offset];
 
-        weighted_sample_usage_function(graph, node_info_list, actual_size_array,
-                                       sample_array, neighbor_count_ptr,
-                                       gpu_id, i, sample_size, sample_size_threshold,
-                                       shard_len, need_neighbor_count, random_seed,
-                                       default_value);
+        weighted_sample(graph, node_info_list, actual_size_array, sample_array,
+                        neighbor_count_ptr, gpu_id, i, sample_size, shard_len,
+                        need_neighbor_count, random_seed, default_value);
       }
     }
   }
