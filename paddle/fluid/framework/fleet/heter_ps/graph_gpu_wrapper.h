@@ -123,7 +123,8 @@ class GraphGpuWrapper {
                                   int query_size);
   NeighborSampleResult graph_neighbor_sample_v3(NeighborSampleQuery q,
                                                 bool cpu_switch,
-                                                bool compress);
+                                                bool compress,
+                                                bool weighted);
   NeighborSampleResult graph_neighbor_sample(int gpu_id,
                                              uint64_t* device_keys,
                                              int walk_degree,
@@ -134,7 +135,8 @@ class GraphGpuWrapper {
       uint64_t* key,
       int sample_size,
       int len,
-      std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs);
+      std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,
+      bool weighted);
   void get_node_degree(int gpu_id,
                        int edge_idx,
                        uint64_t* key,
