@@ -312,7 +312,7 @@ __global__ void FillSlotValueOffsetKernel(const int ins_num,
   }
 }
 
-struct RandInt 
+struct RandInt
 {
     int low, high;
 
@@ -500,8 +500,8 @@ __global__ void GraphFillIdKernel(uint64_t *id_tensor,
     int col_idx = (central_word + row_col_shift[idx]) % col_num;
     int src = row[idx] * col_num + col_idx;
     int last_row = row[idx] * col_num;
-    int next_row = last_row + col_num;  
-    
+    int next_row = last_row + col_num;
+
     if ((src + step) >= last_row && (src + step) < next_row &&  walk[src] != 0 && walk[src + step] != 0) {
       for (int i = 0; i < excluded_train_pair_len; i += 2) {
         if (walk_ntype[src] == excluded_train_pair[i] &&
@@ -877,7 +877,21 @@ int GraphDataGenerator::GenerateBatch() {
         res = FillInsBuf(train_stream_);
         if (res == -1) {
           if (ins_buf_pair_len_ == 0) {
+#ifdef PADDLE_WITH_GLOO
+            auto gloo_wrapper = paddle::framework::GlooWrapper::GetInstance();
+            if (gloo_wrapper->Size() > 1) {
+              pass_end_ = 1;
+              if (total_row_ != 0) {
+                buf_state_.Reset(total_row_);
+                VLOG(1) << "reset buf state to make batch num equal in multi node";
+
+              }
+            } else {
+              return 0;
+            }
+#else
             return 0;
+#endif
           } else {
             break;
           }
@@ -2553,6 +2567,7 @@ int GraphDataGenerator::FillWalkBufMultiPath() {
                       : once_sample_startid_len_;
     bool update = true;
     if (tmp_len == 0) {
+      epoch_finish_ = true;
       break;
     }
 
@@ -2912,7 +2927,7 @@ void GraphDataGenerator::AllocResource(
   }
 
   d_slot_tensor_ptr_ =
-      memory::AllocShared(place_, slot_num_ * sizeof(uint64_t *), 
+      memory::AllocShared(place_, slot_num_ * sizeof(uint64_t *),
               phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
   d_slot_lod_tensor_ptr_ =
       memory::AllocShared(place_, slot_num_ * sizeof(uint64_t *),
