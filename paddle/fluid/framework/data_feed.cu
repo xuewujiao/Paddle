@@ -877,21 +877,15 @@ int GraphDataGenerator::GenerateBatch() {
         res = FillInsBuf(train_stream_);
         if (res == -1) {
           if (ins_buf_pair_len_ == 0) {
-#ifdef PADDLE_WITH_GLOO
-            auto gloo_wrapper = paddle::framework::GlooWrapper::GetInstance();
-            if (gloo_wrapper->Size() > 1) {
+            if (is_multi_node_) {
               pass_end_ = 1;
               if (total_row_ != 0) {
                 buf_state_.Reset(total_row_);
                 VLOG(1) << "reset buf state to make batch num equal in multi node";
-
               }
             } else {
               return 0;
             }
-#else
-            return 0;
-#endif
           } else {
             break;
           }
@@ -2793,6 +2787,13 @@ void GraphDataGenerator::AllocResource(
     slot_num_ = (feed_vec.size() - offset - samples_.size() * sample_offset) / 2;
   }
 
+  is_multi_node_ = false;
+#if defined(PADDLE_WITH_GLOO)
+  auto gloo = paddle::framework::GlooWrapper::GetInstance();
+  if (gloo->Size() > 1) {
+    is_multi_node_ = true;
+  }
+#endif
   // infer_node_type_start_ = std::vector<int>(h_device_keys_.size(), 0);
   // for (size_t i = 0; i < h_device_keys_.size(); i++) {
   //   for (size_t j = 0; j < h_device_keys_[i]->size(); j++) {

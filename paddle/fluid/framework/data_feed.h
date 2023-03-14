@@ -1090,6 +1090,7 @@ class GraphDataGenerator {
   bool get_degree_;
   bool weighted_sample_;
   bool return_weight_;
+  bool is_multi_node_;
 };
 
 class DataFeed {
