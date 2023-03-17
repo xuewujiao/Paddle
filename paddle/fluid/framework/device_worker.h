@@ -265,8 +265,7 @@ class CPUWorkerBase : public DeviceWorker {
 class HogwildWorker : public CPUWorkerBase {
  public:
   HogwildWorker() {}
-  virtual ~HogwildWorker() {
-  }
+  virtual ~HogwildWorker() {}
   virtual void Initialize(const TrainerDesc& desc);
   virtual void TrainFiles();
   virtual void TrainFilesWithProfiler();
@@ -296,7 +295,8 @@ class HogwildWorker : public CPUWorkerBase {
   phi::DenseTensor sync_stat_;
   // skip vars
   std::vector<std::string> skip_vars_;
-  std::unordered_map<const OperatorBase *, std::vector<std::string>> unused_vars_;
+  std::unordered_map<const OperatorBase*, std::vector<std::string>>
+      unused_vars_;
 };
 
 class DownpourWorker : public HogwildWorker {

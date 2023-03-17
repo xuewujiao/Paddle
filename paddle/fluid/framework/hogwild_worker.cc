@@ -31,9 +31,10 @@ limitations under the License. */
 #endif
 
 DECLARE_bool(enable_exit_when_partial_worker);
-PADDLE_DEFINE_EXPORTED_bool(gpugraph_force_device_batch_num_equal,
-                            false,
-                            "enable force_device_batch_num_equal, default false");
+PADDLE_DEFINE_EXPORTED_bool(
+    gpugraph_force_device_batch_num_equal,
+    false,
+    "enable force_device_batch_num_equal, default false");
 namespace paddle {
 namespace framework {
 
@@ -60,7 +61,7 @@ void HogwildWorker::Initialize(const TrainerDesc &desc) {
 void HogwildWorker::CreateThreadOperators(const ProgramDesc &program) {
   auto &block = program.Block(0);
   op_names_.clear();
-  auto &all_desc = block.AllOps();
+  auto all_desc = block.AllOps();
   for (auto &op_desc : all_desc) {
     bool need_skip = false;
     for (auto t = 0u; t < skip_ops_.size(); ++t) {
@@ -86,12 +87,16 @@ void HogwildWorker::CreateThreadOperators(const ProgramDesc &program) {
   }
   operators::PrepareSafeEagerDeletionOnConditionalOpAndConditionalGradOp(
       program, 0, ops_);
+  // not need gc
+  int64_t max_memory_size = GetEagerDeletionThreshold();
+  if (max_memory_size < 0) {
+    return;
+  }
   // skip dump fields
   if (need_dump_field_ && dump_fields_ != nullptr) {
-    skip_vars_.insert(skip_vars_.end(),
-        dump_fields_->begin(), dump_fields_->end());
+    skip_vars_.insert(
+        skip_vars_.end(), dump_fields_->begin(), dump_fields_->end());
   }
-  int batch_per_print = fetch_config_.print_period();
   int fetch_var_num = fetch_config_.fetch_var_names_size();
   if (fetch_var_num > 0) {
     for (int i = 0; i < fetch_var_num; ++i) {
@@ -101,7 +106,7 @@ void HogwildWorker::CreateThreadOperators(const ProgramDesc &program) {
   }
   unused_vars_ = GetUnusedVars(block, ops_, skip_vars_);
   // debug
-  VLOG(0) << "total op count=" << all_desc.size()
+  VLOG(1) << "total op count=" << all_desc.size()
           << ", create op count=" << ops_.size()
           << ", skip vars count=" << skip_vars_.size()
           << ", unused vars op count=" << unused_vars_.size();
@@ -188,12 +193,12 @@ bool HogwildWorker::CheckBatchNum(int flag) {
   } else if (flag < 0) {
     flag = 0;
   }
-//  g_barrier.wait();
+  //  g_barrier.wait();
   float *stat_ptr = sync_stat_.data<float>();
   auto comm =
       platform::NCCLCommContext::Instance().Get(0, place_.GetDeviceId());
-//  auto stream = static_cast<phi::GPUContext *>(dev_ctx_)->stream();
-//  PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
+  //  auto stream = static_cast<phi::GPUContext *>(dev_ctx_)->stream();
+  //  PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
   auto stream = comm->stream();
   PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllReduce(&stat_ptr[flag],
                                                               &stat_ptr[2],
@@ -221,12 +226,12 @@ bool HogwildWorker::GetPassEnd(int flag) {
   } else if (flag < 0) {
     flag = 0;
   }
-//  g_barrier.wait();
+  //  g_barrier.wait();
   float *stat_ptr = sync_stat_.data<float>();
   auto comm =
-       platform::NCCLCommContext::Instance().Get(0, place_.GetDeviceId());
-//  auto stream = static_cast<phi::GPUContext *>(dev_ctx_)->stream();
-//  PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
+      platform::NCCLCommContext::Instance().Get(0, place_.GetDeviceId());
+  //  auto stream = static_cast<phi::GPUContext *>(dev_ctx_)->stream();
+  //  PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
   auto stream = comm->stream();
   PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllReduce(&stat_ptr[flag],
                                                               &stat_ptr[2],
@@ -286,17 +291,19 @@ void HogwildWorker::TrainFilesWithProfiler() {
 
   std::unique_ptr<GarbageCollector> gc = nullptr;
   int64_t max_memory_size = GetEagerDeletionThreshold();
-  if (max_memory_size > 0) {
+  if (max_memory_size >= 0) {
     gc = CreateGarbageCollector(place_, max_memory_size);
   }
 
   while (1) {
     cur_batch = device_reader_->Next();
 #if defined(PADDLE_WITH_GPU_GRAPH)
-    if (train_mode && (FLAGS_gpugraph_force_device_batch_num_equal || is_multi_node)) {
+    if (train_mode &&
+        (FLAGS_gpugraph_force_device_batch_num_equal || is_multi_node)) {
       int pass_end = device_reader_->get_pass_end();
       bool res = GetPassEnd(pass_end);
-      VLOG(2) << "reader pass end: " << pass_end << ", hogwild worker pass end: " << res;
+      VLOG(2) << "reader pass end: " << pass_end
+              << ", hogwild worker pass end: " << res;
       if (res) {
         device_reader_->reset_pass_end();
         VLOG(1) << "get all pass end, train pass will exit";
@@ -333,7 +340,8 @@ void HogwildWorker::TrainFilesWithProfiler() {
       op_total_time[i] += timeline.ElapsedSec();
       total_time += timeline.ElapsedSec();
       if (gc) {
-        DeleteUnusedTensors(*thread_scope_, ops_[i].get(), unused_vars_, gc.get());
+        DeleteUnusedTensors(
+            *thread_scope_, ops_[i].get(), unused_vars_, gc.get());
       }
     }
 
@@ -349,8 +357,8 @@ void HogwildWorker::TrainFilesWithProfiler() {
     PrintFetchVars();
 #ifdef PADDLE_WITH_HETERPS
     dev_ctx_->Wait();
-    for (size_t i = 0; i < op_name.size(); ++i) {
-      VLOG(1) << "card:" << thread_id_ << ", op: " << op_name[i]
+    for (size_t i = 0; i < op_names_.size(); ++i) {
+      VLOG(1) << "card:" << thread_id_ << ", op: " << op_names_[i]
               << ", mean time: " << op_total_time[i] / total_inst
               << "s, totol time:" << op_total_time[i] << "sec";
     }
@@ -371,9 +379,7 @@ void HogwildWorker::TrainFilesWithProfiler() {
     }
 #endif
     if (gc) {
-      gc->DirectClearCallback([this]() {
-        thread_scope_->DropKids();
-      });
+      gc->DirectClearCallback([this]() { thread_scope_->DropKids(); });
     } else {
       thread_scope_->DropKids();
     }
@@ -433,16 +439,18 @@ void HogwildWorker::TrainFiles() {
 
   std::unique_ptr<GarbageCollector> gc = nullptr;
   int64_t max_memory_size = GetEagerDeletionThreshold();
-  if (max_memory_size > 0) {
+  if (max_memory_size >= 0) {
     gc = CreateGarbageCollector(place_, max_memory_size);
   }
   while (1) {
     cur_batch = device_reader_->Next();
 #if defined(PADDLE_WITH_GPU_GRAPH)
-    if (train_mode && (FLAGS_gpugraph_force_device_batch_num_equal || is_multi_node)) {
+    if (train_mode &&
+        (FLAGS_gpugraph_force_device_batch_num_equal || is_multi_node)) {
       int pass_end = device_reader_->get_pass_end();
       bool res = GetPassEnd(pass_end);
-      VLOG(2) << "reader pass end: " << pass_end << ", hogwild worker pass end: " << res;
+      VLOG(2) << "reader pass end: " << pass_end
+              << ", hogwild worker pass end: " << res;
       if (res) {
         device_reader_->reset_pass_end();
         VLOG(1) << "get all pass end, train pass will exit";
@@ -481,9 +489,7 @@ void HogwildWorker::TrainFiles() {
     ++batch_cnt;
     PrintFetchVars();
     if (gc) {
-      gc->DirectClearCallback([this]() {
-        thread_scope_->DropKids();
-      });
+      gc->DirectClearCallback([this]() { thread_scope_->DropKids(); });
     } else {
       thread_scope_->DropKids();
     }

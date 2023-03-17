@@ -334,18 +334,17 @@ std::unique_ptr<GarbageCollector> CreateGarbageCollector(
 #ifdef PADDLE_WITH_CUSTOM_DEVICE
     if (IsFastEagerDeletionModeEnabled()) {
       VLOG(4) << "Use unsafe fast gc for " << place << ".";
-      gc.reset(new CustomDeviceUnsafeFastGarbageCollector(place,
-                                                          max_memory_size));
+      gc.reset(
+          new CustomDeviceUnsafeFastGarbageCollector(place, max_memory_size));
     } else {
       VLOG(4) << "Use default stream gc for " << place << ".";
-      gc.reset(
-          new CustomDefaultStreamGarbageCollector(place, max_memory_size));
+      gc.reset(new CustomDefaultStreamGarbageCollector(place, max_memory_size));
     }
 #else
     PADDLE_THROW(platform::errors::Unimplemented("No CustomDevice gc found"));
 #endif
   }
-  return gc.release();
+  return std::unique_ptr<GarbageCollector>(gc.release());
 }
 
 }  // namespace framework
