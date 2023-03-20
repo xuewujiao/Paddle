@@ -312,7 +312,7 @@ __global__ void FillSlotValueOffsetKernel(const int ins_num,
   }
 }
 
-struct RandInt 
+struct RandInt
 {
     int low, high;
 
@@ -472,6 +472,7 @@ int GraphDataGenerator::AcquireInstance(BufState *state) {
 }
 
 __global__ void GraphFillIdKernel(uint64_t *id_tensor,
+                                  int32_t *pair_label_tensor,
                                   int *fill_ins_num,
                                   uint64_t *walk,
                                   uint8_t *walk_ntype,
@@ -482,8 +483,11 @@ __global__ void GraphFillIdKernel(uint64_t *id_tensor,
                                   int len,
                                   int col_num,
                                   uint8_t *excluded_train_pair,
-                                  int excluded_train_pair_len) {
+                                  int excluded_train_pair_len,
+                                  int32_t *pair_label_conf,
+                                  int node_type_num) {
   __shared__ uint64_t local_key[CUDA_NUM_THREADS * 2];
+  __shared__ uint8_t local_pair_label[CUDA_NUM_THREADS];
   __shared__ int local_num;
   __shared__ int global_num;
   bool need_filter = false;
@@ -500,8 +504,8 @@ __global__ void GraphFillIdKernel(uint64_t *id_tensor,
     int col_idx = (central_word + row_col_shift[idx]) % col_num;
     int src = row[idx] * col_num + col_idx;
     int last_row = row[idx] * col_num;
-    int next_row = last_row + col_num;  
-    
+    int next_row = last_row + col_num;
+
     if ((src + step) >= last_row && (src + step) < next_row &&  walk[src] != 0 && walk[src + step] != 0) {
       for (int i = 0; i < excluded_train_pair_len; i += 2) {
         if (walk_ntype[src] == excluded_train_pair[i] &&
@@ -515,6 +519,10 @@ __global__ void GraphFillIdKernel(uint64_t *id_tensor,
         size_t dst = atomicAdd(&local_num, 1);
         local_key[dst * 2] = walk[src];
         local_key[dst * 2 + 1] = walk[src + step];
+        if (pair_label_conf != NULL) {
+          int pair_label_conf_index = walk_ntype[src] * node_type_num + walk_ntype[src + step];
+          local_pair_label[dst] = pair_label_conf[pair_label_conf_index];
+        }
       }
     }
   }
@@ -530,6 +538,9 @@ __global__ void GraphFillIdKernel(uint64_t *id_tensor,
     id_tensor[global_num * 2 + 2 * threadIdx.x] = local_key[2 * threadIdx.x];
     id_tensor[global_num * 2 + 2 * threadIdx.x + 1] =
         local_key[2 * threadIdx.x + 1];
+    if (pair_label_conf != NULL) {
+      pair_label_tensor[global_num + threadIdx.x] = local_pair_label[threadIdx.x];
+    }
   }
 }
 
@@ -575,9 +586,12 @@ __global__ void FillActualNeighbors(int64_t *vals,
                                     int64_t *actual_vals_dst,
                                     int *actual_sample_size,
                                     int *cumsum_actual_sample_size,
+                                    float *weights,
+                                    float *actual_weights,
                                     int sample_size,
                                     int len,
-                                    int mod) {
+                                    int mod,
+                                    bool return_weight) {
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < len) {
     int offset1 = cumsum_actual_sample_size[i];
@@ -586,6 +600,9 @@ __global__ void FillActualNeighbors(int64_t *vals,
     for (int j = 0; j < actual_sample_size[i]; j++) {
       actual_vals[offset1 + j] = vals[offset2 + j];
       actual_vals_dst[offset1 + j] = dst_id;
+      if (return_weight) {
+        actual_weights[offset1 + j] = weights[offset2 + j];
+      }
     }
   }
 }
@@ -608,7 +625,16 @@ int GraphDataGenerator::FillIdShowClkTensor(int total_instance,
                     sizeof(uint64_t) * total_instance,
                     cudaMemcpyDeviceToDevice,
                     train_stream_);
+
+    if (enable_pair_label_) {
+      pair_label_ptr_ = feed_vec_[3]->mutable_data<int32_t>({total_instance / 2}, this->place_);
+      int32_t *pair_label_buf = reinterpret_cast<int32_t *>(d_pair_label_buf_->ptr());
+      int32_t *pair_label_cursor = pair_label_buf + ins_buf_pair_len_ - total_instance / 2;
+      cudaMemcpyAsync(pair_label_ptr_, pair_label_cursor, sizeof(int32_t) * total_instance / 2,
+              cudaMemcpyDeviceToDevice, train_stream_);
+    }
   } else {
+    // infer
     uint64_t *d_type_keys =
         reinterpret_cast<uint64_t *>(d_device_keys_[cursor]->ptr());
     d_type_keys += infer_node_start_;
@@ -640,7 +666,15 @@ int GraphDataGenerator::FillGraphIdShowClkTensor(int uniq_instance,
       feed_vec_[1]->mutable_data<int64_t>({uniq_instance}, this->place_);
   clk_tensor_ptr_ =
       feed_vec_[2]->mutable_data<int64_t>({uniq_instance}, this->place_);
-  int index_offset = 3 + slot_num_ * 2 + 5 * samples_.size();
+  int index_offset = 0;
+  if (enable_pair_label_) {
+    pair_label_ptr_ = feed_vec_[3]->mutable_data<int32_t>({uniq_instance / 2}, this->place_);
+  }
+  if (!return_weight_) {
+    index_offset = id_offset_of_feed_vec_ + slot_num_ * 2 + 5 * samples_.size();
+  } else {
+    index_offset = id_offset_of_feed_vec_ + slot_num_ * 2 + 6 * samples_.size();  // add edge weights
+  }
   index_tensor_ptr_ = feed_vec_[index_offset]->mutable_data<int>(
       {total_instance}, this->place_);
   if (get_degree_) {
@@ -654,13 +688,16 @@ int GraphDataGenerator::FillGraphIdShowClkTensor(int uniq_instance,
   int64_t *edges_src_tensor_ptr_[len_samples];
   int64_t *edges_dst_tensor_ptr_[len_samples];
   int *edges_split_tensor_ptr_[len_samples];
+  float *edges_weight_tensor_ptr_[len_samples];
 
   std::vector<std::vector<int>> edges_split_num_for_graph =
       edges_split_num_vec_[index];
   std::vector<std::shared_ptr<phi::Allocation>> graph_edges =
       graph_edges_vec_[index];
+  int graph_edges_index = 0;
   for (int i = 0; i < len_samples; i++) {
-    int offset = 3 + 2 * slot_num_ + 5 * i;
+    int offset = return_weight_ ? (id_offset_of_feed_vec_ + 2 * slot_num_ + 6 * i) :
+        (id_offset_of_feed_vec_ + 2 * slot_num_ + 5 * i);
     std::vector<int> edges_split_num = edges_split_num_for_graph[i];
 
     int neighbor_len = edges_split_num[edge_to_id_len_ + 2];
@@ -674,6 +711,10 @@ int GraphDataGenerator::FillGraphIdShowClkTensor(int uniq_instance,
         {neighbor_len, 1}, this->place_);
     edges_split_tensor_ptr_[i] = feed_vec_[offset + 4]->mutable_data<int>(
         {edge_to_id_len_}, this->place_);
+    if (return_weight_) {
+      edges_weight_tensor_ptr_[i] = feed_vec_[offset + 5]->mutable_data<float>(
+          {neighbor_len, 1}, this->place_);
+    }
 
     // [edges_split_num, next_num_nodes, num_nodes, neighbor_len]
     cudaMemcpyAsync(next_num_nodes_tensor_ptr_[i],
@@ -692,15 +733,22 @@ int GraphDataGenerator::FillGraphIdShowClkTensor(int uniq_instance,
                     cudaMemcpyHostToDevice,
                     train_stream_);
     cudaMemcpyAsync(edges_src_tensor_ptr_[i],
-                    graph_edges[i * 2]->ptr(),
+                    graph_edges[graph_edges_index++]->ptr(),
                     sizeof(int64_t) * neighbor_len,
                     cudaMemcpyDeviceToDevice,
                     train_stream_);
     cudaMemcpyAsync(edges_dst_tensor_ptr_[i],
-                    graph_edges[i * 2 + 1]->ptr(),
+                    graph_edges[graph_edges_index++]->ptr(),
                     sizeof(int64_t) * neighbor_len,
                     cudaMemcpyDeviceToDevice,
                     train_stream_);
+    if (return_weight_) {
+      cudaMemcpyAsync(edges_weight_tensor_ptr_[i],
+                      graph_edges[graph_edges_index++]->ptr(),
+                      sizeof(float) * neighbor_len,
+                      cudaMemcpyDeviceToDevice,
+                      train_stream_);
+    }
   }
 
   cudaMemcpyAsync(id_tensor_ptr_,
@@ -758,12 +806,20 @@ int GraphDataGenerator::MakeInsPair(cudaStream_t stream) {
   uint64_t *walk = reinterpret_cast<uint64_t *>(d_walk_->ptr());
   uint8_t *walk_ntype = NULL;
   uint8_t *excluded_train_pair = NULL;
-  if (excluded_train_pair_len_ > 0) {
+  if (need_walk_ntype_) {
     walk_ntype = reinterpret_cast<uint8_t *>(d_walk_ntype_->ptr());
+  }
+  if (excluded_train_pair_len_ > 0) {
     excluded_train_pair =
         reinterpret_cast<uint8_t *>(d_excluded_train_pair_->ptr());
   }
   uint64_t *ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_->ptr());
+  int32_t *pair_label_buf = NULL;
+  int32_t *pair_label_conf = NULL;
+  if (enable_pair_label_) {
+    pair_label_buf = reinterpret_cast<int32_t *>(d_pair_label_buf_->ptr());
+    pair_label_conf = reinterpret_cast<int32_t *>(d_pair_label_conf_->ptr());
+  }
   int *random_row = reinterpret_cast<int *>(d_random_row_->ptr());
   int *random_row_col_shift = reinterpret_cast<int *>(d_random_row_col_shift_->ptr());
   int *d_pair_num = reinterpret_cast<int *>(d_pair_num_->ptr());
@@ -773,6 +829,7 @@ int GraphDataGenerator::MakeInsPair(cudaStream_t stream) {
   // make pair
   GraphFillIdKernel<<<GET_BLOCKS(len), CUDA_NUM_THREADS, 0, stream>>>(
       ins_buf + ins_buf_pair_len_ * 2,
+      pair_label_buf + ins_buf_pair_len_,
       d_pair_num,
       walk,
       walk_ntype,
@@ -783,7 +840,9 @@ int GraphDataGenerator::MakeInsPair(cudaStream_t stream) {
       len,
       walk_len_,
       excluded_train_pair,
-      excluded_train_pair_len_);
+      excluded_train_pair_len_,
+      pair_label_conf,
+      node_type_num_);
   int h_pair_num;
   cudaMemcpyAsync(
       &h_pair_num, d_pair_num, sizeof(int), cudaMemcpyDeviceToHost, stream);
@@ -853,7 +912,15 @@ int GraphDataGenerator::GenerateBatch() {
         res = FillInsBuf(train_stream_);
         if (res == -1) {
           if (ins_buf_pair_len_ == 0) {
-            return 0;
+            if (is_multi_node_) {
+              pass_end_ = 1;
+              if (total_row_ != 0) {
+                buf_state_.Reset(total_row_);
+                VLOG(1) << "reset buf state to make batch num equal in multi node";
+              }
+            } else {
+              return 0;
+            }
           } else {
             break;
           }
@@ -896,7 +963,7 @@ int GraphDataGenerator::GenerateBatch() {
   feed_vec_[0]->set_lod(lod);
   if (slot_num_ > 0) {
     for (int i = 0; i < slot_num_; ++i) {
-      feed_vec_[3 + 2 * i]->set_lod(lod);
+      feed_vec_[id_offset_of_feed_vec_ + 2 * i]->set_lod(lod);
     }
   }
 
@@ -1254,10 +1321,10 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num) {
   if (fea_num == 0) {
     int64_t default_lod = 1;
     for (int i = 0; i < slot_num_; ++i) {
-      slot_lod_tensor_ptr_[i] = feed_vec_[3 + 2 * i + 1]->mutable_data<int64_t>(
+      slot_lod_tensor_ptr_[i] = feed_vec_[id_offset_of_feed_vec_ + 2 * i + 1]->mutable_data<int64_t>(
           {(long)key_num + 1}, this->place_);  // NOLINT
       slot_tensor_ptr_[i] =
-          feed_vec_[3 + 2 * i]->mutable_data<int64_t>({1, 1}, this->place_);
+          feed_vec_[id_offset_of_feed_vec_ + 2 * i]->mutable_data<int64_t>({1, 1}, this->place_);
       CUDA_CHECK(cudaMemsetAsync(
           slot_tensor_ptr_[i], 0, sizeof(int64_t), train_stream_));
       CUDA_CHECK(cudaMemsetAsync(slot_lod_tensor_ptr_[i],
@@ -1327,7 +1394,7 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num) {
   CUDA_CHECK(cudaStreamSynchronize(train_stream_));
 
   for (int i = 0; i < slot_num_; ++i) {
-    slot_lod_tensor_ptr_[i] = feed_vec_[3 + 2 * i + 1]->mutable_data<int64_t>(
+    slot_lod_tensor_ptr_[i] = feed_vec_[id_offset_of_feed_vec_ + 2 * i + 1]->mutable_data<int64_t>(
         {(long)key_num + 1}, this->place_);  // NOLINT
   }
   size_t temp_storage_bytes = 0;
@@ -1360,7 +1427,7 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num) {
   }
   CUDA_CHECK(cudaStreamSynchronize(train_stream_));
   for (int i = 0; i < slot_num_; ++i) {
-    slot_tensor_ptr_[i] = feed_vec_[3 + 2 * i]->mutable_data<int64_t>(
+    slot_tensor_ptr_[i] = feed_vec_[id_offset_of_feed_vec_ + 2 * i]->mutable_data<int64_t>(
         {each_slot_fea_num[i], 1}, this->place_);
   }
   int64_t default_lod = 1;
@@ -1378,7 +1445,7 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num) {
     // trick for empty tensor
     if (each_slot_fea_num[i] == 0) {
       slot_tensor_ptr_[i] =
-          feed_vec_[3 + 2 * i]->mutable_data<int64_t>({1, 1}, this->place_);
+          feed_vec_[id_offset_of_feed_vec_ + 2 * i]->mutable_data<int64_t>({1, 1}, this->place_);
       CUDA_CHECK(cudaMemsetAsync(
           slot_tensor_ptr_[i], 0, sizeof(uint64_t), train_stream_));
       CUDA_CHECK(cudaMemcpyAsync(
@@ -1573,7 +1640,8 @@ GraphDataGenerator::SampleNeighbors(int64_t *uniq_nodes,
       sample_size,
       len,
       edge_type_graph_,
-      weighted_sample_);
+      weighted_sample_,
+      return_weight_);
 
   int *all_sample_count_ptr =
       reinterpret_cast<int *>(sample_res.actual_sample_size_mem->ptr());
@@ -1634,6 +1702,19 @@ GraphDataGenerator::SampleNeighbors(int64_t *uniq_nodes,
       reinterpret_cast<int64_t *>(final_sample_val_dst->ptr());
   int64_t *all_sample_val_ptr =
       reinterpret_cast<int64_t *>(sample_res.val_mem->ptr());
+
+  std::shared_ptr<phi::Allocation> final_sample_weight;
+  float *final_sample_weight_ptr = nullptr, *all_sample_weight_ptr = nullptr;
+  if (return_weight_) {
+    final_sample_weight = memory::AllocShared(
+        place_,
+        all_sample_size * sizeof(float),
+        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+    final_sample_weight_ptr =
+        reinterpret_cast<float*>(final_sample_weight->ptr());
+    all_sample_weight_ptr =
+        reinterpret_cast<float*>(sample_res.weight_mem->ptr());
+  }
   FillActualNeighbors<<<GET_BLOCKS(len * edge_to_id_len_),
                         CUDA_NUM_THREADS,
                         0,
@@ -1642,15 +1723,21 @@ GraphDataGenerator::SampleNeighbors(int64_t *uniq_nodes,
                                           final_sample_val_dst_ptr,
                                           all_sample_count_ptr,
                                           cumsum_actual_sample_size_ptr,
+                                          all_sample_weight_ptr,
+                                          final_sample_weight_ptr,
                                           sample_size,
                                           len * edge_to_id_len_,
-                                          len);
+                                          len,
+                                          return_weight_);
   *neighbor_len = all_sample_size;
   cudaStreamSynchronize(sample_stream_);
 
   std::vector<std::shared_ptr<phi::Allocation>> sample_results;
   sample_results.emplace_back(final_sample_val);
   sample_results.emplace_back(final_sample_val_dst);
+  if (return_weight_) {
+    sample_results.emplace_back(final_sample_weight);
+  }
   return sample_results;
 }
 
@@ -1827,7 +1914,7 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
 
   for (int i = 0; i < len_samples; i++) {
     edges_split_num.clear();
-    std::shared_ptr<phi::Allocation> neighbors, reindex_dst;
+    std::shared_ptr<phi::Allocation> neighbors, reindex_dst, weights;
     int64_t neighbors_len = 0;
     if (i == 0) {
       auto sample_results = SampleNeighbors(uniq_nodes_data,
@@ -1837,6 +1924,9 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
                                             &neighbors_len);
       neighbors = sample_results[0];
       reindex_dst = sample_results[1];
+      if (return_weight_) {
+        weights = sample_results[2];
+      }
       edges_split_num.push_back(uniq_len);
     } else {
       int64_t *final_nodes_data =
@@ -1848,6 +1938,9 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
                                             &neighbors_len);
       neighbors = sample_results[0];
       reindex_dst = sample_results[1];
+      if (return_weight_) {
+        weights = sample_results[2];
+      }
       edges_split_num.push_back(final_nodes_len_vec[i - 1]);
     }
 
@@ -1878,6 +1971,9 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
     edges_split_num.emplace_back(neighbors_len);
     graph_edges.emplace_back(neighbors);
     graph_edges.emplace_back(reindex_dst);
+    if (return_weight_) {
+      graph_edges.emplace_back(weights);
+    }
     edges_split_num_for_graph.emplace_back(edges_split_num);
   }
   graph_edges_vec_.emplace_back(graph_edges);
@@ -2200,7 +2296,7 @@ int GraphDataGenerator::FillWalkBuf() {
   uint64_t *d_sample_keys = reinterpret_cast<uint64_t *>(d_sample_keys_->ptr());
   cudaMemsetAsync(walk, 0, buf_size_ * sizeof(uint64_t), sample_stream_);
   uint8_t *walk_ntype = NULL;
-  if (excluded_train_pair_len_ > 0) {
+  if (need_walk_ntype_) {
     walk_ntype = reinterpret_cast<uint8_t *>(d_walk_ntype_->ptr());
     cudaMemsetAsync(walk_ntype, 0, buf_size_ * sizeof(uint8_t), sample_stream_);
   }
@@ -2258,7 +2354,7 @@ int GraphDataGenerator::FillWalkBuf() {
     VLOG(2) << "gpuid = " << gpuid_ << " path[0] = " << path[0];
     uint64_t *cur_walk = walk + i;
     uint8_t *cur_walk_ntype = NULL;
-    if (excluded_train_pair_len_ > 0) {
+    if (need_walk_ntype_) {
       cur_walk_ntype = walk_ntype + i;
     }
 
@@ -2460,7 +2556,7 @@ int GraphDataGenerator::FillWalkBufMultiPath() {
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   uint64_t *walk = reinterpret_cast<uint64_t *>(d_walk_->ptr());
   uint8_t *walk_ntype = NULL;
-  if (excluded_train_pair_len_ > 0) {
+  if (need_walk_ntype_) {
     walk_ntype = reinterpret_cast<uint8_t *>(d_walk_ntype_->ptr());
   }
   int *len_per_row = reinterpret_cast<int *>(d_len_per_row_->ptr());
@@ -2500,13 +2596,14 @@ int GraphDataGenerator::FillWalkBufMultiPath() {
                       : once_sample_startid_len_;
     bool update = true;
     if (tmp_len == 0) {
+      epoch_finish_ = true;
       break;
     }
 
     VLOG(2) << "gpuid = " << gpuid_ << " path[0] = " << path[0];
     uint64_t *cur_walk = walk + i;
     uint8_t *cur_walk_ntype = NULL;
-    if (excluded_train_pair_len_ > 0) {
+    if (need_walk_ntype_) {
       cur_walk_ntype = walk_ntype + i;
     }
 
@@ -2716,13 +2813,14 @@ void GraphDataGenerator::AllocResource(
   VLOG(1) << "AllocResource gpuid " << gpuid_
           << " feed_vec.size: " << feed_vec.size()
           << " table cap: " << train_table_cap_;
-  // feed_vec_ = feed_vec;
-  if (!sage_mode_) {
-    slot_num_ = (feed_vec.size() - 3) / 2;
-  } else {
-    slot_num_ = (feed_vec.size() - 4 - samples_.size() * 5) / 2;
-  }
 
+  is_multi_node_ = false;
+#if defined(PADDLE_WITH_GLOO)
+  auto gloo = paddle::framework::GlooWrapper::GetInstance();
+  if (gloo->Size() > 1) {
+    is_multi_node_ = true;
+  }
+#endif
   // infer_node_type_start_ = std::vector<int>(h_device_keys_.size(), 0);
   // for (size_t i = 0; i < h_device_keys_.size(); i++) {
   //   for (size_t j = 0; j < h_device_keys_[i]->size(); j++) {
@@ -2791,13 +2889,6 @@ void GraphDataGenerator::AllocResource(
                                excluded_train_pair_len_ * sizeof(uint8_t),
                                cudaMemcpyHostToDevice,
                                sample_stream_));
-
-    d_walk_ntype_ = memory::AllocShared(
-        place_,
-        buf_size_ * sizeof(uint8_t),
-        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-    cudaMemsetAsync(
-        d_walk_ntype_->ptr(), 0, buf_size_ * sizeof(uint8_t), sample_stream_);
   }
 
   d_sample_keys_ = memory::AllocShared(
@@ -2839,25 +2930,44 @@ void GraphDataGenerator::AllocResource(
   shuffle_seed_ = 0;
 
   ins_buf_pair_len_ = 0;
-  if (!sage_mode_) {
-    d_ins_buf_ =
-        memory::AllocShared(place_, (batch_size_ * 2 * 2) * sizeof(uint64_t),
+  d_ins_buf_ = memory::AllocShared(place_, (batch_size_ * 2 * 2) * sizeof(uint64_t),
+          phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+  d_pair_num_ = memory::AllocShared(place_, sizeof(int),
+          phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+  enable_pair_label_ = gpu_graph_training_ && gpu_graph_ptr->pair_label_conf_.size() > 0;
+  if (enable_pair_label_) {
+    node_type_num_ = gpu_graph_ptr->id_to_feature.size();
+    d_pair_label_buf_ = memory::AllocShared(place_, (batch_size_ * 2) * sizeof(int32_t),
             phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-    d_pair_num_ = memory::AllocShared(place_, sizeof(int),
+    d_pair_label_conf_ = memory::AllocShared(place_,
+            node_type_num_ * node_type_num_ * sizeof(int32_t),
             phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+    CUDA_CHECK(cudaMemcpyAsync(d_pair_label_conf_->ptr(),
+                               gpu_graph_ptr->pair_label_conf_.data(),
+                               node_type_num_ * node_type_num_ * sizeof(int32_t),
+                               cudaMemcpyHostToDevice, sample_stream_));
+    id_offset_of_feed_vec_ = 4;
   } else {
-    d_ins_buf_ = memory::AllocShared(
-        place_,
-        (batch_size_ * 2 * 2) * sizeof(uint64_t),
+    id_offset_of_feed_vec_ = 3;
+  }
+
+  need_walk_ntype_ = excluded_train_pair_len_ > 0 || enable_pair_label_;
+  if (need_walk_ntype_) {
+    d_walk_ntype_ = memory::AllocShared(place_, buf_size_ * sizeof(uint8_t),
         phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-    d_pair_num_ = memory::AllocShared(
-        place_,
-        sizeof(int),
-        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+    cudaMemsetAsync(d_walk_ntype_->ptr(), 0, buf_size_ * sizeof(uint8_t), sample_stream_);
+  }
+
+  if (!sage_mode_) {
+    slot_num_ = (feed_vec.size() - id_offset_of_feed_vec_) / 2;
+  } else {
+    int offset = get_degree_ ? id_offset_of_feed_vec_ + 2 : id_offset_of_feed_vec_ + 1;
+    int sample_offset = return_weight_ ? 6 : 5;
+    slot_num_ = (feed_vec.size() - offset - samples_.size() * sample_offset) / 2;
   }
 
   d_slot_tensor_ptr_ =
-      memory::AllocShared(place_, slot_num_ * sizeof(uint64_t *), 
+      memory::AllocShared(place_, slot_num_ * sizeof(uint64_t *),
               phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
   d_slot_lod_tensor_ptr_ =
       memory::AllocShared(place_, slot_num_ * sizeof(uint64_t *),
@@ -2970,6 +3080,7 @@ void GraphDataGenerator::SetConfig(
   infer_table_cap_ = graph_config.infer_table_cap();
   get_degree_ = graph_config.get_degree();
   weighted_sample_ = graph_config.weighted_sample();
+  return_weight_ = graph_config.return_weight();
 
   epoch_finish_ = false;
   VLOG(1) << "Confirm GraphConfig, walk_degree : " << walk_degree_
@@ -2986,7 +3097,7 @@ void GraphDataGenerator::SetConfig(
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   debug_gpu_memory_info("init_conf start");
   gpu_graph_ptr->init_conf(
-      first_node_type, meta_path, graph_config.excluded_train_pair());
+      first_node_type, meta_path, graph_config.excluded_train_pair(), graph_config.pair_label());
   debug_gpu_memory_info("init_conf end");
 
   auto edge_to_id = gpu_graph_ptr->edge_to_id;
