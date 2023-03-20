@@ -63,6 +63,15 @@ void HogwildWorker::CreateThreadOperators(const ProgramDesc &program) {
   op_names_.clear();
   auto all_desc = block.AllOps();
   for (auto &op_desc : all_desc) {
+    // skip feed fetch op
+    if (op_desc->Type() == "feed" || op_desc->Type() == "fetch") {
+      for (auto &o : op_desc->Inputs()) {
+        skip_vars_.insert(skip_vars_.end(), o.second.begin(), o.second.end());
+      }
+      for (auto &o : op_desc->Outputs()) {
+        skip_vars_.insert(skip_vars_.end(), o.second.begin(), o.second.end());
+      }
+    }
     bool need_skip = false;
     for (auto t = 0u; t < skip_ops_.size(); ++t) {
       if (op_desc->Type().find(skip_ops_[t]) != std::string::npos) {
@@ -72,15 +81,6 @@ void HogwildWorker::CreateThreadOperators(const ProgramDesc &program) {
     }
     if (need_skip) {
       continue;
-    }
-    // skip feed fetch op
-    if (op_desc->Type() == "feed" || op_desc->Type() == "fetch") {
-      for (auto &o : op_desc->Inputs()) {
-        skip_vars_.insert(skip_vars_.end(), o.second.begin(), o.second.end());
-      }
-      for (auto &o : op_desc->Outputs()) {
-        skip_vars_.insert(skip_vars_.end(), o.second.begin(), o.second.end());
-      }
     }
     op_names_.push_back(op_desc->Type());
     ops_.emplace_back(OpRegistry::CreateOp(*op_desc));
@@ -493,10 +493,10 @@ void HogwildWorker::TrainFiles() {
     } else {
       thread_scope_->DropKids();
     }
-#ifdef PADDLE_WITH_HETERPS
-    dev_ctx_->Wait();
-#endif
   }
+#ifdef PADDLE_WITH_HETERPS
+  dev_ctx_->Wait();
+#endif
   timeline.Pause();
   VLOG(1) << "worker " << thread_id_ << " train cost " << timeline.ElapsedSec()
           << " seconds, batch_num: " << total_batch_num;
