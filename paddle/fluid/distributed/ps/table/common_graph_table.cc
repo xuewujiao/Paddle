@@ -2966,8 +2966,26 @@ void GraphTable::build_graph_type_keys() {
     std::vector<std::vector<uint64_t>> keys;
     this->get_all_id(GraphTableType::FEATURE_TABLE, node_idx, 1, &keys);
     type_to_index_[node_idx] = cnt;
-    total_key += keys[0].size();
-    graph_type_keys_[cnt++] = std::move(keys[0]);
+
+    if (FLAGS_graph_edges_split_mode == "hard" ||
+        FLAGS_graph_edges_split_mode == "HARD" ||
+        FLAGS_graph_edges_split_mode == "dbh" ||
+        FLAGS_graph_edges_split_mode == "DBH") {
+
+      std::vector<uint64_t> halo_keys;
+      for(size_t i = 0; i < keys[0].size();i ++) {
+          if(is_key_for_self_rank(keys[0][i])) {
+              halo_keys.push_back(keys[0][i]);
+          }
+      }
+
+      total_key += halo_keys.size();
+      graph_type_keys_[cnt++] = std::move(halo_keys);
+
+    } else {
+      total_key += keys[0].size();
+      graph_type_keys_[cnt++] = std::move(keys[0]);
+    }
   }
   VLOG(0) << "finish build_graph_type_keys, total type keys=" << total_key;
 
@@ -2977,10 +2995,35 @@ void GraphTable::build_graph_type_keys() {
   for (auto &it : this->feature_to_id) {
     auto node_idx = it.second;
     std::vector<std::vector<uint64_t>> keys;
+
     this->get_all_feature_ids(
         GraphTableType::FEATURE_TABLE, node_idx, 1, &keys);
-    graph_total_keys_.insert(
+
+    if (FLAGS_graph_edges_split_mode == "hard" ||
+        FLAGS_graph_edges_split_mode == "HARD" ||
+        FLAGS_graph_edges_split_mode == "dbh" ||
+        FLAGS_graph_edges_split_mode == "DBH") {
+
+      std::vector<uint64_t> halo_keys;
+
+      for(size_t i = 0; i < keys[0].size();i ++) {
+          if(is_key_for_self_rank(keys[0][i])) {
+              halo_keys.push_back(keys[0][i]);
+          }
+      }
+
+      total_key += halo_keys.size();
+      graph_type_keys_[cnt++] = std::move(halo_keys);
+
+
+
+      graph_total_keys_.insert(
+        graph_total_keys_.end(), halo_keys.begin(), halo_keys.end());
+
+    } else { 
+      graph_total_keys_.insert(
         graph_total_keys_.end(), keys[0].begin(), keys[0].end());
+    }
   }
   VLOG(0)
       << "finish insert feature into graph_total_keys, feature embedding keys="
