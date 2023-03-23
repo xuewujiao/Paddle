@@ -595,6 +595,7 @@ void GpuPsGraphTable::weighted_sample(
         graph, node_info_list, sample_array, neighbor_offset,
         target_weights_key_buf_ptr, shard_len, sample_size, random_seed,
         weight_array, return_weight);
+    CUDA_CHECK(cudaStreamSynchronize(cur_stream));
   } else {
     using WeightedSampleFuncType = void (*)(GpuPsCommGraph, GpuPsNodeInfo *,
                                             uint64_t *, int, int, unsigned long long,
@@ -624,6 +625,7 @@ void GpuPsGraphTable::weighted_sample(
     func_array[func_idx]<<<shard_len, block_size, 0, cur_stream>>>(
         graph, node_info_list, sample_array, shard_len, sample_size, random_seed,
         weight_array, return_weight);
+    CUDA_CHECK(cudaStreamSynchronize(cur_stream));
   }
 }
 
