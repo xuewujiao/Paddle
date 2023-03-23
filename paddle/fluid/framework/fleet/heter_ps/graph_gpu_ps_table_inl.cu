@@ -1564,11 +1564,12 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
 
       const bool need_neighbor_count = sample_size > SAMPLE_SIZE_THRESHOLD;
       int *neighbor_count_ptr = nullptr;
+      std::shared_ptr<phi::Allocation> neighbor_count;
       if (need_neighbor_count) {
-        auto neighbor_count =
-            memory::Alloc(place,
-                          (shard_len + 1) * sizeof(int),
-                          phi::Stream(reinterpret_cast<phi::StreamId>(cur_stream)));
+        neighbor_count =
+            memory::AllocShared(place,
+                                (shard_len + 1) * sizeof(int),
+                                phi::Stream(reinterpret_cast<phi::StreamId>(cur_stream)));
         neighbor_count_ptr = reinterpret_cast<int* >(neighbor_count->ptr());
       }
 
@@ -1836,11 +1837,12 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
       reinterpret_cast<int*>(d_shard_actual_sample_size->ptr());
 
   float* d_shard_weight_ptr = nullptr;
+  std::shared_ptr<phi::Allocation> d_shard_weight;
   if (return_weight) {
-    auto d_shard_weight =
-        memory::Alloc(place,
-                      sample_size * len * edge_type_len * sizeof(float),
-                      phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+    d_shard_weight =
+        memory::AllocShared(place,
+                            sample_size * len * edge_type_len * sizeof(float),
+                            phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
     d_shard_weight_ptr =
         reinterpret_cast<float*>(d_shard_weight->ptr());
   }
@@ -1976,11 +1978,12 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
 
       const bool need_neighbor_count = sample_size > SAMPLE_SIZE_THRESHOLD;
       int* neighbor_count_ptr = nullptr;
+      std::shared_ptr<phi::Allocation> neighbor_count;
       if (need_neighbor_count) {
-        auto neighbor_count =
-            memory::Alloc(place,
-                          (shard_len + 1) * sizeof(int),
-                          phi::Stream(reinterpret_cast<phi::StreamId>(cur_stream)));
+        neighbor_count =
+            memory::AllocShared(place,
+                                (shard_len + 1) * sizeof(int),
+                                phi::Stream(reinterpret_cast<phi::StreamId>(cur_stream)));
         neighbor_count_ptr = reinterpret_cast<int* >(neighbor_count->ptr());
       }
 
