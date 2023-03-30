@@ -1301,6 +1301,15 @@ class Executor:
                 self._default_executor.release_trainer(trainer_instance)
                 del trainer_instance
             self._default_executor.close()
+            
+    def flush(self):
+        """
+            flush all trainer param to root_scope
+        """
+        for _, trainer_instance in self.trainer_caches.items():
+            self._default_executor.release_trainer(trainer_instance)
+            del trainer_instance
+        self.trainer_caches.clear()
 
     def _run_parallel(
         self,
@@ -2300,7 +2309,10 @@ class Executor:
 
         dataset._dynamic_adjust_before_train(trainer.proto_desc.thread_num)
 
-        if program._heter_pipeline_opt is None:
+        reused_trainer = (not program._heter_pipeline_opt is None or \
+            (not program._fleet_opt is None and program._fleet_opt.get("use_ps_gpu", True)))
+        
+        if reused_trainer is False:
             trainer_instance = (
                 self._default_executor.init_for_dataset(  # -->InitForDataset
                     program.desc, trainer._desc(), scope, dataset.dataset
@@ -2327,11 +2339,11 @@ class Executor:
             fetch_monitor.start()
             self._default_executor.run_from_dataset(trainer_instance)
             fetch_monitor.stop()
-            if program._heter_pipeline_opt is None:
+            if reused_trainer is False:
                 self._default_executor.release_trainer(trainer_instance)
         else:
             self._default_executor.run_from_dataset(trainer_instance)
-            if program._heter_pipeline_opt is None:
+            if reused_trainer is False:
                 self._default_executor.release_trainer(trainer_instance)
 
         dataset._dynamic_adjust_after_train()
