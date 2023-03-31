@@ -1031,6 +1031,7 @@ class Executor:
         # NOTE(Ruibiao): The manually call of clear is required. Because in Python, executor_cache
         # may not immediately destructed after Executor instance deleted (so does not the _StandaloneExecutor),
         # that brings errors to mkl-dnn unit tests (see ClearMKLDNNCache in interpretercore.cc for why).
+        self.close()
         self._executor_cache.clear()
 
     def _get_scope_cache(self, program_cache_key):
@@ -1306,6 +1307,8 @@ class Executor:
         """
             flush all trainer param to root_scope
         """
+        if self._closed:
+            return
         for _, trainer_instance in self.trainer_caches.items():
             self._default_executor.release_trainer(trainer_instance)
             del trainer_instance
