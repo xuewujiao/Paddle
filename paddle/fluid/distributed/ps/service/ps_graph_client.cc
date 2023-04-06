@@ -226,7 +226,7 @@ void PsGraphClient::request_handler(const simple::RpcMessageHead &head,
           timeline.Pause();
 
           shard_mutex.lock();
-          char** valsptr = &shard_values.values[shard_size];
+          char **valsptr = &shard_values.values[shard_size];
           for (size_t i = 0; i < num; ++i) {
             valsptr[i] = pull_vals[i];
           }
@@ -257,19 +257,31 @@ std::shared_ptr<SparseShardValues> PsGraphClient::TakePassSparseReferedValues(
     const size_t &table_id, const uint16_t &pass_id, const uint16_t &dim_id) {
   SparseTableInfo &info = get_table_info(table_id);
   uint32_t id = DIM_PASS_ID(dim_id, pass_id);
-
+  int32_t retry_times = 0;
+  bool flag = false;
   SparsePassValues *pass_refered = nullptr;
-  info.pass_mutex.lock();
-  auto it = info.refered_feas.find(id);
-  if (it == info.refered_feas.end()) {
-    info.pass_mutex.unlock();
-    VLOG(0) << "table_id=" << table_id
-            << ", TakePassSparseReferedValues pass_id=" << pass_id
-            << ", dim_id=" << dim_id << " is nullptr";
-    return nullptr;
+
+  while (true) {
+    info.pass_mutex.lock();
+    auto it = info.refered_feas.find(id);
+    if (it == info.refered_feas.end()) {
+      info.pass_mutex.unlock();
+      VLOG(0) << "table_id=" << table_id
+              << ", TakePassSparseReferedValues pass_id=" << pass_id
+              << ", dim_id=" << dim_id << " is nullptr, wait for "
+              << retry_times << " times...";
+      retry_times++;
+      sleep(5);
+    } else {
+      pass_refered = it->second.get();
+      flag = true;
+      info.pass_mutex.unlock();
+    }
+    if (flag) {
+      break;
+    }
   }
-  pass_refered = it->second.get();
-  info.pass_mutex.unlock();
+
   int cnt = pass_refered->wg.count();
   VLOG(0) << "table_id=" << table_id
           << ", begin TakePassSparseReferedValues pass_id=" << pass_id
@@ -280,7 +292,7 @@ std::shared_ptr<SparseShardValues> PsGraphClient::TakePassSparseReferedValues(
   shard_ptr.reset(pass_refered->values);
   pass_refered->values = nullptr;
   // free shard mutex lock
-  delete [] pass_refered->shard_mutex;
+  delete[] pass_refered->shard_mutex;
 
   info.pass_mutex.lock();
   info.refered_feas.erase(id);
