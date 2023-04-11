@@ -3102,7 +3102,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
                        fea_size,
                        d_in_keys,
                        res.d_local_idx_parted,
-                       cache.d_merged_push_keys, // 现在当前机器对应gpu_id上进行part，放到d_merged_push_keys
+                       cache.d_merged_push_keys,
                        h_local_part_sizes,
                        node_size_,
                        stream);
@@ -3111,11 +3111,11 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
   int rank_offset = rank_id_ * node_size_;
   h_local_part_offsets[0] = 0;
   for (int i = 0; i < node_size_; ++i) {
-    h_push_fea_sizes[rank_offset + i] = h_local_part_sizes[i];  // push到对应node i的长度。
+    h_push_fea_sizes[rank_offset + i] = h_local_part_sizes[i];
     h_local_part_offsets[i + 1] =
         h_local_part_offsets[i] + h_local_part_sizes[i];
   }
-  CHECK_EQ(fea_size, h_local_part_offsets[node_size_]);  // 总的key长度，需要等同于最后一个offset值
+  CHECK_EQ(fea_size, h_local_part_offsets[node_size_]);
 
   PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyAsync(&res.d_node_size_ptr[rank_offset],
                                              &h_push_fea_sizes[rank_offset],
@@ -3129,7 +3129,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
   auto nccl_stream = resource_->comm_stream(gpu_id, 0);
   PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllGather(
       &res.d_node_size_ptr[rank_offset],
-      reinterpret_cast<void *>(res.d_node_size_ptr), // 这里的意思是从所有gpu gather node_size_个数据，将内容拷贝到res.d_node_size_ptr, 按照rank i的offset为 i * node_size_的bias来拷贝。
+      reinterpret_cast<void *>(res.d_node_size_ptr),
       node_size_,
       ncclInt,
       comm,
@@ -3137,7 +3137,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(nccl_stream));
   cache.node_barrier_.Pause();
 
-  PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyAsync(&h_push_fea_sizes[0], // 收到的长度
+  PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyAsync(&h_push_fea_sizes[0],
                                              res.d_node_size_ptr,
                                              all_shard_part_size * sizeof(int),
                                              cudaMemcpyDeviceToHost,
@@ -3153,8 +3153,8 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
     h_remote_part_offsets[i + 1] =
         h_remote_part_offsets[i] + h_remote_part_sizes[i];
   }
-  size_t &remote_size = h_remote_part_offsets[node_size_];  // remote_size：gather过来的总的key长度？
-  cache.alloc(remote_size, max_type_size_, HeterCommType::COPY_KEY); // COPY_KEY: 仅拷贝key。
+  size_t &remote_size = h_remote_part_offsets[node_size_];
+  cache.alloc(remote_size, max_type_size_, HeterCommType::COPY_KEY);
 
   size_t total_fea_num = 0;
   if (rdma_checker_->need_rdma_trans()) {
@@ -3176,7 +3176,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
         h_remote_part_sizes,
         h_remote_part_offsets,
         reinterpret_cast<const char *>(cache.d_merged_push_keys),
-        reinterpret_cast<char *>(cache.d_merged_keys), // 最终得到结果
+        reinterpret_cast<char *>(cache.d_merged_keys),
         stream);
   }
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
