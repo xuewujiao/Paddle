@@ -1546,7 +1546,6 @@ void GraphTable::dbh_graph_edge_partition() {
 
 void GraphTable::dbh_graph_feature_partition() {
   VLOG(0) << "start to process dbh feature shard";
-  // hashmap记录边表的key
   std::vector<std::future<int>> tasks;
   for (auto &it : this->feature_to_id) {
     auto node_idx = it.second;
