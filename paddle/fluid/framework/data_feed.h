@@ -980,6 +980,7 @@ class GraphDataGenerator {
   bool get_epoch_finish() { return epoch_finish_; }
   int get_pass_end() { return pass_end_; }
   void clear_gpu_mem();
+  bool GetPassEndForSage(int flag);
 
  protected:
   HashTable<uint64_t, uint64_t>* table_;
@@ -1095,6 +1096,8 @@ class GraphDataGenerator {
   bool weighted_sample_;
   bool return_weight_;
   bool is_multi_node_;
+
+  phi::DenseTensor sync_stat_;
 };
 
 class DataFeed {

@@ -27,6 +27,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/fleet/heter_ps/gpu_graph_node.h"
 #include "paddle/fluid/framework/fleet/heter_ps/gpu_graph_utils.h"
 #include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_wrapper.h"
+#include "paddle/fluid/platform/collective_helper.h"
 #endif
 #include "paddle/fluid/framework/fleet/heter_ps/hashtable.h"
 #include "paddle/fluid/framework/fleet/ps_gpu_wrapper.h"
@@ -2008,6 +2009,34 @@ uint64_t GraphDataGenerator::CopyUniqueNodes() {
   return 0;
 }
 
+bool GraphDataGenerator::GetPassEndForSage(int flag) {
+  float ret = 0.0;
+  if (flag > 1) {
+    flag = 1;
+  } else if (flag < 0) {
+    flag = 0;
+  }
+
+  float *stat_ptr = sync_stat_.data<float>();
+  auto comm =
+      platform::NCCLCommContext::Instance().Get(0, place_.GetDeviceId());
+  PADDLE_ENFORCE_GPU_SUCCESS(
+      platform::dynload::ncclAllReduce(&stat_ptr[flag],
+                                       &stat_ptr[2],
+                                       1,
+                                       ncclFloat32,
+                                       ncclProd,
+                                       comm->comm(),
+                                       sample_stream_));
+  CUDA_CHECK(cudaMemcpyAsync(&ret,
+                             &stat_ptr[2],
+                             sizeof(float),
+                             cudaMemcpyDeviceToHost,
+                             sample_stream_));
+  CUDA_CHECK(cudaStreamSynchronize(sample_stream_));
+  return (ret > 0.0);
+}
+
 void GraphDataGenerator::DoWalkandSage() {
   int device_id = place_.GetDeviceId();
   debug_gpu_memory_info(device_id, "DoWalkandSage start");
@@ -2031,12 +2060,32 @@ void GraphDataGenerator::DoWalkandSage() {
           int res = 0;
           while (ins_buf_pair_len_ < batch_size_) {
             res = FillInsBuf(sample_stream_);
+            // if total_ins = 0, res = -1.
+            VLOG(0) << "ins_buf_pair_len: " << ins_buf_pair_len_
+                    << " batch_size: " << batch_size_;
             if (res == -1) {
               if (ins_buf_pair_len_ == 0) {
-                ins_pair_flag = false;
+                if (is_multi_node_) {
+                  pass_end_ = 1;
+                  if (total_row_ != 0) {
+                    buf_state_.Reset(total_row_);
+                    VLOG(1) << "reset buf state to make batch num equal in multi node";
+                  }
+                } else {
+                  ins_pair_flag = false;
+                  break;
+                }
+              } else {
+                break;
               }
-              break;
             }
+          }
+
+          // check whether reach sage pass end
+          if (is_multi_node_) {
+            bool res = GetPassEndForSage(pass_end_);
+            // no need to reset here, we reset pass_end_ in hogwild_worker.
+            if (res) { ins_pair_flag = false; }
           }
 
           if (!ins_pair_flag) {
@@ -2287,7 +2336,7 @@ int GraphDataGenerator::FillWalkBuf() {
   // FIXME, 限制pass内采样batch数, 临时解决方案.
   // 规避由于d_walk打满导致的多卡pass级batch不一致导致的卡住问题
   // 不影响样本量, 后面将使用规范方案解决这个问题.
-  while (i <= remain_size && sample_times < 40) {
+  while (i <= remain_size && sample_times < 1) {
     int cur_node_idx = cursor % node_type_len;
     int node_type = first_node_type[cur_node_idx];
     auto &path = meta_path[cur_node_idx];
@@ -2793,6 +2842,17 @@ void GraphDataGenerator::AllocResource(
     is_multi_node_ = true;
   }
 #endif
+
+  if (is_multi_node_) {
+    float *stat_ptr = sync_stat_.mutable_data<float>(place_, sizeof(float) * 3);
+    float flags[] = {0.0, 1.0, 1.0};
+    CUDA_CHECK(cudaMemcpyAsync(stat_ptr,
+                               &flags,
+                               sizeof(float) * 3,
+                               cudaMemcpyHostToDevice,
+                               sample_stream_));
+    CUDA_CHECK(cudaStreamSynchronize(sample_stream_));
+  }
   // infer_node_type_start_ = std::vector<int>(h_device_keys_.size(), 0);
   // for (size_t i = 0; i < h_device_keys_.size(); i++) {
   //   for (size_t j = 0; j < h_device_keys_[i]->size(); j++) {

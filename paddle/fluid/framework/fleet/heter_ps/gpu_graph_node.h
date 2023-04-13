@@ -333,6 +333,7 @@ struct NeighborSampleResultV2 {
   uint64_t *val;
   int *actual_sample_size;
   float *weight;
+  int sample_size, key_size;
   std::shared_ptr<memory::Allocation> val_mem, actual_sample_size_mem, weight_mem;
   cudaStream_t stream = 0;
 
@@ -342,6 +343,8 @@ struct NeighborSampleResultV2 {
                   int _edge_to_id_len,
                   bool _return_weight,
                   int dev_id) {
+    sample_size = _sample_size;
+    key_size = _key_size;
     platform::CUDADeviceGuard guard(dev_id);
     platform::CUDAPlace place = platform::CUDAPlace(dev_id);
     if (stream != 0) {
@@ -378,6 +381,20 @@ struct NeighborSampleResultV2 {
     } else {
       weight = nullptr;
     }
+  }
+  void display() {
+    int *ac_size = new int[key_size];
+    cudaMemcpy(ac_size,
+               actual_sample_size,
+               key_size * sizeof(int),
+               cudaMemcpyDeviceToHost); // 0, 0, 0...
+    std::string print_ac;
+    for (int i = 0; i < key_size; i++) {
+      print_ac += std::to_string(ac_size[i]);
+      print_ac += ";";
+    }
+    VLOG(0) << "actual_sample_size for all keys are: " << print_ac;
+    delete[] ac_size;
   }
   NeighborSampleResultV2() {}
   ~NeighborSampleResultV2() {}

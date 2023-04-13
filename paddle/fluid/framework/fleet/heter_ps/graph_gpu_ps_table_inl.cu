@@ -1233,8 +1233,8 @@ __global__ void fill_dvalues_with_edge_type(uint64_t* d_shard_vals,
                                             int* idx,
                                             int sample_size,
                                             int len,    // len * edge_type_len
-                                            int mod,
-                                            bool return_weight) {  // len
+                                            int mod,    // len
+                                            bool return_weight) {
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < len) {
     int a = i % mod, b = i - i % mod;
@@ -2263,9 +2263,17 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_sage_all2all(
     std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,
     bool weighted,
     bool return_weight) {
+  VLOG(0) << "Enter graph_neighbor_sample_sage_all2all function";
+
   platform::CUDADeviceGuard guard(gpu_id);
   auto &loc = storage_[gpu_id];
   auto stream = resource_->local_stream(gpu_id, 0);
+
+  loc.alloc(len, sizeof(uint64_t) * edge_type_len * sample_size); // key_bytes
+
+  // all2all mode begins, init resource, partition keys, pull vals by all2all.
+  auto pull_size = gather_inter_keys_by_all2all(gpu_id, len, d_keys, stream);
+  VLOG(0) << "gather_inter_keys_by_all2all sage finish, pull_size=" << pull_size << ", len=" << len;
 
   NeighborSampleResultV2 final;
   final.set_stream(stream);
@@ -2297,7 +2305,7 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_sage_all2all(
   auto &loc = storage_[gpu_id];
   auto stream = resource_->local_stream(gpu_id, 0);
 
-  // loc.alloc(len, sizeof(uint64_t) * edge_type_len * sample_size); // key_bytes
+  loc.alloc(len, sizeof(uint64_t) * edge_type_len * sample_size); // key_bytes
 
   // all2all mode begins, init resource, partition keys, pull vals by all2all.
   auto pull_size = gather_inter_keys_by_all2all(gpu_id, len, d_keys, stream);
@@ -2377,7 +2385,6 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_sage_all2all(
       return_weight);
   VLOG(0) << "Finish rearange_neighbor_result" << " gpu_id=" << gpu_id;
 
-  VLOG(0) << "Use zero results";
   return final2;
 }*/
 
