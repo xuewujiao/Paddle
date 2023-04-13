@@ -2061,8 +2061,6 @@ void GraphDataGenerator::DoWalkandSage() {
           while (ins_buf_pair_len_ < batch_size_) {
             res = FillInsBuf(sample_stream_);
             // if total_ins = 0, res = -1.
-            VLOG(0) << "ins_buf_pair_len: " << ins_buf_pair_len_
-                    << " batch_size: " << batch_size_;
             if (res == -1) {
               if (ins_buf_pair_len_ == 0) {
                 if (is_multi_node_) {
