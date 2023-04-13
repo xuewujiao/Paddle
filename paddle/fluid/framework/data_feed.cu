@@ -2334,7 +2334,7 @@ int GraphDataGenerator::FillWalkBuf() {
   // FIXME, 限制pass内采样batch数, 临时解决方案.
   // 规避由于d_walk打满导致的多卡pass级batch不一致导致的卡住问题
   // 不影响样本量, 后面将使用规范方案解决这个问题.
-  while (i <= remain_size && sample_times < 1) {
+  while (i <= remain_size && sample_times < 40) {
     int cur_node_idx = cursor % node_type_len;
     int node_type = first_node_type[cur_node_idx];
     auto &path = meta_path[cur_node_idx];
