@@ -4060,7 +4060,8 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_vals_by_all2all_trans(
   auto h_remote_part_offsets = my_cache.shard_res.h_remote_part_offsets.data();
 
   size_t total_fea_num = 0;
-  if (!rdma_checker_->is_device_support_rdma(gpu_id)) {
+  if (!rdma_checker_->is_device_support_rdma(gpu_id)) {  // 0-3
+    VLOG(0) << gpu_id << ": send_vals_by_all2all_trans, not rdma";
     int trans_id = get_transfer_devid(gpu_id);
     auto &trans = storage_[trans_id];
 
@@ -4088,7 +4089,8 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_vals_by_all2all_trans(
                             recv_size * value_bytes,
                             stream));
     PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
-  } else {
+  } else {  // 4-7
+    VLOG(0) << gpu_id << ": send_vals_by_all2all_trans, with rdma";
     my_cache.sem_wait->wait();
     int trans_id = get_transfer_devid(gpu_id);
     auto &trans = storage_[trans_id];

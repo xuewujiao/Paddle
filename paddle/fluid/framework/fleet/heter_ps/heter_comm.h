@@ -600,7 +600,8 @@ class HeterComm {
           const T* d_in_vals,
           T* d_out_vals,
           T* d_tmp_vals,
-          const cudaStream_t& stream) {
+          const cudaStream_t& stream,
+          bool sage = false) {
     auto &cache = storage_[gpu_id];
     auto &res = cache.shard_res;
     auto h_local_part_sizes = res.h_local_part_sizes.data();
@@ -610,6 +611,9 @@ class HeterComm {
 
     size_t total_fea_num = 0;
     if (rdma_checker_->need_rdma_trans()) {
+      if (sage) {
+        VLOG(0) << gpu_id << ": enter send_vals_by_all2all_trans";
+      }
       total_fea_num =
           send_vals_by_all2all_trans(gpu_id,
                   rank_id_,
@@ -619,6 +623,9 @@ class HeterComm {
                   value_bytes,
                   stream);
     } else {
+      if (sage) {
+        VLOG(0) << gpu_id << ": enter send_data_by_all2all";
+      }
       total_fea_num = send_data_by_all2all(gpu_id,
               node_size_,
               rank_id_,

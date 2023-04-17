@@ -2301,7 +2301,8 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_sage_all2all(
                                        reinterpret_cast<const uint64_t*>(result.val),   // in
                                        reinterpret_cast<uint64_t*>(final.val),          // out
                                        reinterpret_cast<uint64_t*>(loc.d_merged_vals),  // tmp hbm
-                                       stream);
+                                       stream,
+                                       true);
   VLOG(0) << "scatter_inter_vals_by_all2all sage val finish" << " gpu_id=" << gpu_id;
 
   // all2all mode finish, scatter sample sizes of every node by all2all
