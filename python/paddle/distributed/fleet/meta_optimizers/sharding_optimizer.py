@@ -87,6 +87,7 @@ class ShardingOptimizer(MetaOptimizerBase):
         self._shard = Shard()
         self._verbose = False
         self._thread_mode = False
+        self._use_calc_stream = False
 
         # use sharding as outer parallelism (e.g. inner:Megatron & outer sharding)
         self.mp_degree = 1
@@ -1248,18 +1249,20 @@ class ShardingOptimizer(MetaOptimizerBase):
                     and self.hybrid_dp_mode == "sharding_hybrid_dp"
                     and len(shard_allredue_vars) >= 1
                 ):
-                    insert_sync_comm_ops(
-                        block,
-                        self._segments[-1]._end_idx,
-                        self.dp_ring_id,
-                        shard_allredue_vars,
-                    )
+                    if not self._use_calc_stream:
+                        insert_sync_comm_ops(
+                            block,
+                            self._segments[-1]._end_idx,
+                            self.dp_ring_id,
+                            shard_allredue_vars,
+                        )
                     insert_allreduce_ops(
                         block,
                         self._segments[-1]._end_idx,
                         self.dp_ring_id,
                         shard_allredue_vars,
                         user_defined_strategy=self.user_defined_strategy,
+                        use_calc_stream=self._use_calc_stream,
                     )
             # gradient merge
             elif (
@@ -1273,13 +1276,13 @@ class ShardingOptimizer(MetaOptimizerBase):
                     shard_allredue_vars,
                     self._shard,
                 )
-
-            insert_sync_comm_ops(
-                block,
-                self._segments[-1]._end_idx,
-                self.sharding_ring_id,
-                self._segments[-1]._allreduce_vars,
-            )
+            if not self._use_calc_stream:
+                insert_sync_comm_ops(
+                    block,
+                    self._segments[-1]._end_idx,
+                    self.sharding_ring_id,
+                    self._segments[-1]._allreduce_vars,
+                )
             # allreduce --> reduce
             insert_reduce_ops(
                 block,
@@ -1288,7 +1291,7 @@ class ShardingOptimizer(MetaOptimizerBase):
                 self._segments[-1]._allreduce_vars,
                 self._shard,
                 op_role=OpRole.Backward,
-                use_calc_stream=False,
+                use_calc_stream=self._use_calc_stream,
             )
 
         for idx, segment in reversed(list(enumerate(self._segments))):
@@ -1353,15 +1356,16 @@ class ShardingOptimizer(MetaOptimizerBase):
                     and self.hybrid_dp_mode == "sharding_hybrid_dp"
                     and len(shard_allredue_vars) >= 1
                 ):
-                    insert_sync_comm_ops(
-                        block,
-                        segment._end_idx,
-                        self.dp_ring_id,
-                        shard_allredue_vars,
-                    )
+                    if not self._use_calc_stream:
+                        insert_sync_comm_ops(
+                            block,
+                            segment._end_idx,
+                            self.dp_ring_id,
+                            shard_allredue_vars,
+                        )
 
                     broad_cast_vars = [x[0] for x in broadcast_vars]
-                    if len(broad_cast_vars) > 0:
+                    if not self._use_calc_stream and len(broad_cast_vars) > 0:
                         insert_sync_comm_ops(
                             block,
                             segment._end_idx,
@@ -1372,7 +1376,7 @@ class ShardingOptimizer(MetaOptimizerBase):
                     comm_dep_vars = allreduce_vars + [
                         x[0] for x in broadcast_vars
                     ]
-                    if len(comm_dep_vars) > 0:
+                    if not self._use_calc_stream and len(comm_dep_vars) > 0:
                         insert_sync_comm_ops(
                             block,
                             segment._end_idx,
@@ -1385,7 +1389,7 @@ class ShardingOptimizer(MetaOptimizerBase):
                 and self._gradient_merge_acc_step > 1
             ):
                 broad_cast_vars = [x[0] for x in broadcast_vars]
-                if len(broad_cast_vars) > 0:
+                if not self._use_calc_stream and len(broad_cast_vars) > 0:
                     insert_sync_comm_ops(
                         block,
                         segment._end_idx,
@@ -1399,7 +1403,7 @@ class ShardingOptimizer(MetaOptimizerBase):
                 + self._segments[idx]._allreduce_vars
             )
 
-            if len(calc_dep_vars) > 0:
+            if not self._use_calc_stream and len(calc_dep_vars) > 0:
                 insert_sync_calc_op(
                     block, segment._end_idx, [calc_dep_vars[-1]]
                 )
@@ -1427,7 +1431,11 @@ class ShardingOptimizer(MetaOptimizerBase):
                 )
 
             insert_broadcast_ops(
-                block, segment._start_idx, self.sharding_ring_id, broadcast_vars
+                block, 
+                segment._start_idx, 
+                self.sharding_ring_id, 
+                broadcast_vars, 
+                self._use_calc_stream
             )
 
             # step6: add all_reduce ops
@@ -1447,24 +1455,27 @@ class ShardingOptimizer(MetaOptimizerBase):
                         self.dp_ring_id,
                         shard_allredue_vars,
                         user_defined_strategy=self.user_defined_strategy,
+                        use_calc_stream=self._use_calc_stream,
                     )
+                    if not self._use_calc_stream:
+                        insert_sync_comm_ops(
+                            block,
+                            segment._start_idx,
+                            self.sharding_ring_id,
+                            allreduce_vars,
+                        )
+            # gradient merge
+            elif (
+                self.gradient_merge_mode == "sharding_gm"
+                and self._gradient_merge_acc_step > 1
+            ):
+                if not self._use_calc_stream:
                     insert_sync_comm_ops(
                         block,
                         segment._start_idx,
                         self.sharding_ring_id,
                         allreduce_vars,
                     )
-            # gradient merge
-            elif (
-                self.gradient_merge_mode == "sharding_gm"
-                and self._gradient_merge_acc_step > 1
-            ):
-                insert_sync_comm_ops(
-                    block,
-                    segment._start_idx,
-                    self.sharding_ring_id,
-                    allreduce_vars,
-                )
             # sharding
             # allreduce --> reduce
             # TODO temp change
@@ -1476,24 +1487,26 @@ class ShardingOptimizer(MetaOptimizerBase):
                     allreduce_vars,
                     self._shard,
                     op_role=OpRole.Backward,
-                    use_calc_stream=False,
+                    use_calc_stream=self._use_calc_stream,
                 )
 
             block._sync_with_cpp()
 
         if self._segments[0]._broadcast_vars:
             broadcast_vars = [x[0] for x in self._segments[0]._broadcast_vars]
-            insert_sync_comm_ops(
-                block,
-                self._segments[0]._start_idx,
-                self.sharding_ring_id,
-                broadcast_vars,
-            )
+            if not self._use_calc_stream:
+                insert_sync_comm_ops(
+                    block,
+                    self._segments[0]._start_idx,
+                    self.sharding_ring_id,
+                    broadcast_vars,
+                )
             insert_broadcast_ops(
                 block,
                 self._segments[0]._start_idx,
                 self.sharding_ring_id,
                 self._segments[0]._broadcast_vars,
+                self._use_calc_stream
             )
 
         fill_constant_vars = []
@@ -1507,7 +1520,7 @@ class ShardingOptimizer(MetaOptimizerBase):
                 cast_ops[k] = v
 
         calc_deps_vars = fill_constant_vars + [k for k, v in cast_ops.items()]
-        if fill_constant_vars or cast_ops:
+        if not self._use_calc_stream and (fill_constant_vars or cast_ops):
             insert_sync_calc_op(
                 block, self._segments[0]._start_idx, [calc_deps_vars[-1]]
             )
@@ -2188,6 +2201,7 @@ class ThreadShardingOptimizer(ShardingOptimizer):
             # "PipelineOptimizer",
         ]
         self._thread_mode = True
+        self._use_calc_stream = False
         op_maker = core.op_proto_and_checker_maker
         self.op_role_key = op_maker.kOpRoleAttrName()
         
@@ -2233,6 +2247,9 @@ class ThreadShardingOptimizer(ShardingOptimizer):
         """
             reset start program and main program
         """
+        sharding_configs = self.user_defined_strategy.sharding_configs
+        if "use_calc_stream" in sharding_configs:
+            self._use_calc_stream = sharding_configs["use_calc_stream"]
         optimize_ops, params_grads = super().minimize_impl(
             loss, startup_program, parameter_list, no_grad_set)
         # main_block = self._main_program.global_block()
