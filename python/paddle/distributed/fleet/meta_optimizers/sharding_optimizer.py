@@ -86,6 +86,7 @@ class ShardingOptimizer(MetaOptimizerBase):
         self._reduced_grads_to_param = {}
         self._shard = Shard()
         self._verbose = False
+        self._thread_mode = False
 
         # use sharding as outer parallelism (e.g. inner:Megatron & outer sharding)
         self.mp_degree = 1
@@ -997,7 +998,8 @@ class ShardingOptimizer(MetaOptimizerBase):
                     broadcast_var_name = unique_name.generate(
                         input_name + "@BroadCast"
                     )
-                    segment._fill_constant_vars.append(broadcast_var_name)
+                    if not self._thread_mode:
+                        segment._fill_constant_vars.append(broadcast_var_name)
 
                 # (JZ-LIANG) should use Param base name ?
                 broadcast_var_base_name = input_name
@@ -1530,7 +1532,6 @@ class ShardingOptimizer(MetaOptimizerBase):
                 # TODO why do we remove op, when only one var is removed
                 block._remove_op(idx, sync=False)
                 break
-
         for var_name in list(block.vars.keys()):
             if shard.has_var(var_name):
                 continue
@@ -1555,7 +1556,10 @@ class ShardingOptimizer(MetaOptimizerBase):
         self.global_word_size = self.role_maker._worker_num()
         self.global_rank = self.role_maker._worker_index()
         self.global_endpoints = self.role_maker._get_trainer_endpoints()
-        self.current_endpoint = self.global_endpoints[self.global_rank]
+        if self._thread_mode:
+            self.current_endpoint = self.global_endpoints[self.role_maker._role_id()]
+        else:
+            self.current_endpoint = self.global_endpoints[self.global_rank]
         self._collective_helper = CollectiveHelper(
             self.role_maker, nrings=self._nrings_sharding
         )
@@ -2164,5 +2168,185 @@ class ShardingOptimizer(MetaOptimizerBase):
             attrs={
                 'sub_block': cond_block,
                 'is_scalar_condition': True,
+            },
+        )
+
+class ThreadShardingOptimizer(ShardingOptimizer):
+    """Sharding Optimizer."""
+
+    def __init__(self, optimizer):
+        super().__init__(optimizer)
+        self.inner_opt = optimizer
+        self.meta_optimizers_white_list = [
+            "ParameterServerOptimizer",
+            "RecomputeOptimizer",
+            "AMPOptimizer",
+            "LarsOptimizer",
+            "LambOptimizer",
+            "ASPOptimizer",
+            # "ModelParallelOptimizer",
+            # "PipelineOptimizer",
+        ]
+        self._thread_mode = True
+        op_maker = core.op_proto_and_checker_maker
+        self.op_role_key = op_maker.kOpRoleAttrName()
+        
+    def _prune_main_program(self, block, shard, rings):
+        """
+        rename BroadCast param
+
+        """
+        var_names = set([])
+        for idx, op in enumerate(block.ops):
+            for input_name in op.desc.input_arg_names():
+                pos = input_name.find("@BroadCast")
+                if pos <= 0:
+                    continue
+                new_name = input_name[0 : pos]
+                op.desc._rename_input(
+                    input_name, new_name
+                )
+                var_names.add(input_name)
+            for output_name in op.desc.output_arg_names():
+                pos = output_name.find("@BroadCast")
+                if pos <= 0:
+                    continue
+                new_name = output_name[0 : pos]
+                op.desc._rename_output(
+                    output_name, new_name
+                )
+                var_names.add(output_name)
+        for var_name in var_names:
+            block._remove_var(var_name, sync=False)
+        print("remove broadcast param count=", len(var_names))
+        block._sync_with_cpp()
+        
+    def _prune_startup_program(self, block, shard):
+        """
+            not need process
+        """
+        block._sync_with_cpp()
+            
+    def minimize_impl(
+        self, loss, startup_program=None, parameter_list=None, no_grad_set=None
+    ):
+        """
+            reset start program and main program
+        """
+        optimize_ops, params_grads = super().minimize_impl(
+            loss, startup_program, parameter_list, no_grad_set)
+        # main_block = self._main_program.global_block()
+        # startup_block = self._startup_program.global_block()
+        loss.block.program = self._main_program
+        from paddle import fluid
+        fluid.framework.switch_startup_program(self._startup_program)
+        return optimize_ops, params_grads
+    
+    def _init_comm(self):
+        # sync var
+        self.role_id = self.role_maker._role_id()
+        self.node_nums = self.role_maker._node_num()
+        startup_block = self._startup_program.global_block()
+        node_nums = len(self.global_endpoints)
+        assert (
+            self.node_nums == node_nums
+        ), "end points not equal node nums"
+        self.current_endpoint = self.global_endpoints[self.role_id]
+        # mp ring
+        if self.mp_degree > 1:
+            if node_nums > 1:
+                self._init_communicator(
+                    self._startup_program,
+                    self.current_endpoint,
+                    self.mp_group_endpoints,
+                    self.role_id,
+                    self.mp_ring_id,
+                )
+            else:
+                startup_block.append_op(
+                    type='c_comm_init_all', 
+                    attrs={'ring_id': self.mp_ring_id})
+
+        # sharding ring
+        if self.sharding_degree > 1:
+            if node_nums > 1:
+                self._init_communicator(
+                    self._startup_program,
+                    self.current_endpoint,
+                    self.sharding_group_endpoints,
+                    self.role_id,
+                    self.sharding_ring_id,
+                )
+            else:
+                startup_block.append_op(
+                    type='c_comm_init_all', 
+                    attrs={'ring_id': self.sharding_ring_id})
+
+       
+        # pure dp ring
+        if self.dp_degree > 1:
+            if node_nums > 1:
+                self._init_communicator(
+                    self._startup_program,
+                    self.current_endpoint,
+                    self.dp_group_endpoints,
+                    self.role_id,
+                    self.dp_ring_id,
+                )
+            else:
+                startup_block.append_op(
+                    type='c_comm_init_all', 
+                    attrs={'ring_id': self.dp_ring_id})
+
+        startup_block._sync_with_cpp()
+
+    def _wait(self):
+        if len(self.global_endpoints) <= 1:
+            return
+        endpoints = self.global_endpoints[:]
+        current_endpoint = endpoints[self.role_maker._role_id()]
+        if self.global_rank == 0:
+            from paddle.fluid.transpiler.details import wait_server_ready
+            endpoints.remove(current_endpoint)
+            wait_server_ready(endpoints)
+            
+    def _init_communicator(
+        self,
+        program,
+        current_endpoint,
+        endpoints,
+        role_id,
+        ring_id
+    ):
+        nranks = len(endpoints)
+        other_endpoints = endpoints[:]
+        other_endpoints.remove(current_endpoint)
+        block = program.global_block()
+       
+        nccl_id_var = block.create_var(
+            name=unique_name.generate('nccl_id'),
+            persistable=True,
+            type=core.VarDesc.VarType.RAW,
+        )
+        block.append_op(
+            type='c_gen_nccl_id',
+            inputs={},
+            outputs={'Out': nccl_id_var},
+            attrs={
+                'rank': role_id,
+                'endpoint': current_endpoint,
+                'other_endpoints': other_endpoints,
+                self.op_role_key: OpRole.Forward,
+            },
+        )
+        block.append_op(
+            type='c_comm_init_multitrainer',
+            inputs={'X': nccl_id_var},
+            outputs={},
+            attrs={
+                'ntrainers': nranks,
+                'trainer_id': role_id,
+                'ring_id': ring_id,
+                self.op_role_key: OpRole.Forward,
             },
         )
