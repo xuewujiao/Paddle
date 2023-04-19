@@ -325,7 +325,6 @@ void HogwildWorker::CreateThreadScope(const ProgramDesc &program) {
   int persist_param = 0;
   int persist_share = 0;
   int persist_reset = 0;
-  std::unordered_set<Variable*> erase_root_vars;
   for (auto &var : block.AllVars()) {
     auto name = var->Name();
     if (remove_vars_.find(name) != remove_vars_.end()) {
@@ -386,10 +385,6 @@ void HogwildWorker::CreateThreadScope(const ProgramDesc &program) {
           need_copy_vars_.push_back(name);
         }
       } else {
-        Variable *root_var = root_scope_->FindVar(name);
-        if (root_var != nullptr) {
-          erase_root_vars.insert(root_var);
-        }
         // sharding vars
         auto *ptr = thread_scope_->Var(name);
         InitializeVariable(ptr, var->GetType());
@@ -403,17 +398,11 @@ void HogwildWorker::CreateThreadScope(const ProgramDesc &program) {
       InitializeVariable(ptr, var->GetType());
     }
   }
-  // erase root vars
-  if (!erase_root_vars.empty()) {
-    // erase root vars
-    root_scope_->EraseVarsExcept(erase_root_vars);
-  }
   VLOG(0) << "device id=" << thread_id_
           << ", total param count=" << all_param_.size()
           << ", persist count=" << persist_total << ", param=" << persist_param
           << ", share=" << persist_share << ", reset=" << persist_reset
-          << ", need copy param count=" << need_copy_vars_.size()
-          << ", erase root vars count=" << erase_root_vars.size();
+          << ", need copy param count=" << need_copy_vars_.size();
 }
 void HogwildWorker::Finalize() {
 #ifdef PADDLE_WITH_HETERPS
