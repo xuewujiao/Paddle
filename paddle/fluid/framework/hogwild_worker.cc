@@ -579,8 +579,11 @@ void HogwildWorker::TrainFilesWithProfiler() {
   while (1) {
     cur_batch = device_reader_->Next();
 #if defined(PADDLE_WITH_GPU_GRAPH)
-    if (train_mode &&
-        (FLAGS_gpugraph_force_device_batch_num_equal || is_multi_node)) {
+    if (FLAGS_gpugraph_force_device_batch_num_equal) {
+      if (!CheckBatchNum(cur_batch)) {
+        break;
+      }
+    } else if (train_mode && is_multi_node) {
       int pass_end = device_reader_->get_pass_end();
       bool res = GetPassEnd(pass_end);
       VLOG(2) << "reader pass end: " << pass_end
@@ -726,8 +729,11 @@ void HogwildWorker::TrainFiles() {
   while (1) {
     cur_batch = device_reader_->Next();
 #if defined(PADDLE_WITH_GPU_GRAPH)
-    if (train_mode &&
-        (FLAGS_gpugraph_force_device_batch_num_equal || is_multi_node)) {
+    if (FLAGS_gpugraph_force_device_batch_num_equal) {
+      if (!CheckBatchNum(cur_batch)) {
+        break;
+      }
+    } else if (train_mode && is_multi_node) {
       int pass_end = device_reader_->get_pass_end();
       bool res = GetPassEnd(pass_end);
       VLOG(2) << "reader pass end: " << pass_end
