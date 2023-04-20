@@ -2684,7 +2684,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_all2all(
     // fp16
     if (FLAGS_enable_all2all_use_fp16) {
       value_bytes = heter_comm_kernel_->compress_values(
-          pull_size,
+          fea_num,
           reinterpret_cast<const char *>(loc.d_merged_vals),
           reinterpret_cast<char *>(loc.d_merged_push_vals),
           pull_type_size_,
@@ -2692,7 +2692,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_all2all(
           max_value_bound_,
           stream);
       scatter_inter_vals_by_all2all(gpu_id,
-                                     pull_size,
+                                     fea_num,
                                      loc.d_merged_push_vals,
                                      loc.d_merged_push_vals,
                                      value_bytes,
@@ -4053,6 +4053,7 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_vals_by_all2all_trans(
     char *d_out_vals,
     const size_t &value_bytes,
     const cudaStream_t &stream) {
+
   auto &my_cache = storage_[gpu_id];
   auto h_local_part_sizes = my_cache.shard_res.h_local_part_sizes.data();
   auto h_local_part_offsets = my_cache.shard_res.h_local_part_offsets.data();
@@ -4067,36 +4068,15 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_vals_by_all2all_trans(
 
     const size_t &send_size = h_remote_part_offsets[nccl_node_size];
     // p2p copy
-    VLOG(0) << gpu_id << ": begin p2p copy";
 
-    VLOG(0) << "trans_id: " << trans_id
-            << " gpu_id: " << gpu_id
-            << " send_size * value_bytes: " << send_size * value_bytes;
-
-    /*
-    char* char_d_in_vals = const_cast<char *>(d_in_vals);
-    uint64_t* new_d_in_vals = reinterpret_cast<uint64_t*>(char_d_in_vals);
-     
-    uint64_t h_d_in_vals[(int)(send_size * value_bytes / sizeof(uint64_t))];
-    cudaMemcpy(h_d_in_vals,
-               new_d_in_vals,
-               send_size * value_bytes,
-               cudaMemcpyDeviceToHost);
-    std::string str;
-    for (int i = 0; i < (int)(send_size * value_bytes / sizeof(uint64_t)); i++) {
-      str += std::to_string(h_d_in_vals[i]);
-      str += " ";
-    }
-    str += "\n\n";
-    VLOG(0) << gpu_id << ": print h_d_in_vals in uint64_t: " << str;*/
-
+    VLOG(0) << gpu_id << ": begin cudaMemcpyPeerAsync";
     PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyPeerAsync(trans.d_merged_trans_vals, // void* dst
                                                    trans_id,                  // int dstDevice
                                                    d_in_vals,                 // const void* src
                                                    gpu_id,                    // int srcDevice
                                                    send_size * value_bytes,   // count
                                                    stream));                  // stream
-    VLOG(0) << gpu_id << ": begin sync stream";
+    VLOG(0) << gpu_id << ": sync stream";
     PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
 
     // wait node data ok

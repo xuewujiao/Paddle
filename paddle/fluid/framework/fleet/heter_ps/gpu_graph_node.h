@@ -333,7 +333,7 @@ struct NeighborSampleResultV2 {
   uint64_t *val;
   int *actual_sample_size;
   float *weight;
-  int sample_size, key_size;
+  int sample_size, key_size, edge_to_id_len;
   std::shared_ptr<memory::Allocation> val_mem, actual_sample_size_mem, weight_mem;
   cudaStream_t stream = 0;
 
@@ -345,6 +345,7 @@ struct NeighborSampleResultV2 {
                   int dev_id) {
     sample_size = _sample_size;
     key_size = _key_size;
+    edge_to_id_len = _edge_to_id_len;
     platform::CUDADeviceGuard guard(dev_id);
     platform::CUDAPlace place = platform::CUDAPlace(dev_id);
     if (stream != 0) {
@@ -362,7 +363,7 @@ struct NeighborSampleResultV2 {
             _sample_size * _key_size * _edge_to_id_len * sizeof(float),
             phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
       }
-      cudaStreamSynchronize(stream);
+      // cudaStreamSynchronize(stream);
     } else {
       val_mem = memory::AllocShared(
           place, _sample_size * _key_size * _edge_to_id_len * sizeof(uint64_t));
@@ -383,13 +384,13 @@ struct NeighborSampleResultV2 {
     }
   }
   void display() {
-    int *ac_size = new int[key_size];
+    int *ac_size = new int[key_size * edge_to_id_len];
     cudaMemcpy(ac_size,
                actual_sample_size,
-               key_size * sizeof(int),
+               key_size * edge_to_id_len * sizeof(int),
                cudaMemcpyDeviceToHost); // 0, 0, 0...
     std::string print_ac;
-    for (int i = 0; i < key_size; i++) {
+    for (int i = 0; i < key_size * edge_to_id_len; i++) {
       print_ac += std::to_string(ac_size[i]);
       print_ac += ";";
     }
