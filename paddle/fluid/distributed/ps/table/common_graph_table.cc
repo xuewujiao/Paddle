@@ -1380,16 +1380,21 @@ int32_t GraphTable::parse_edge_and_load(
         }));
   }
   for (size_t i = 0; i < tasks.size(); i++) tasks[i].get();
+
   if (node_num_ > 1) {
-    graph_partition();
+    graph_partition(true);
   }
   return 0;
 }
-void GraphTable::graph_partition() {
+void GraphTable::graph_partition(bool is_edge) {
   std::string mode = FLAGS_graph_edges_split_mode;
   if (mode == "dbh" || mode == "DBH") {
     VLOG(0) << "Graph partitioning DBH";
-    dbh_graph_partition();
+    if (is_edge) {
+      dbh_graph_edge_partition();
+    } else {
+      dbh_graph_feature_partition();
+    }
     VLOG(0) << "Graph partitioning DBH Done";
   } else if (mode == "hard" || mode == "HARD") {
     VLOG(0) << "Graph partitioning Hard Hash Split";
@@ -1401,7 +1406,8 @@ void GraphTable::graph_partition() {
   }
 }
 
-void GraphTable::dbh_graph_partition() {
+void GraphTable::dbh_graph_edge_partition() {
+  VLOG(0) << "start to process dbh egde shard";
   std::vector<std::vector<GraphShard *>> tmp_edge_shards;
   tmp_edge_shards.resize(edge_shards.size());
   for (size_t k = 0; k < edge_shards.size(); k++) {
@@ -1482,7 +1488,7 @@ void GraphTable::dbh_graph_partition() {
                           dest_degree += dst_node->get_neighbor_size();
                         }
                       }
-                      if (src_degree < dest_degree) {
+                      if (src_degree <= dest_degree) {
                         // 每台机器只保存%hash的一部分id到tmp_edge_shards
                         if (is_key_for_self_rank(id)) {
                           VLOG(5) << "Add src; neighbor id " << d_id
@@ -1526,6 +1532,49 @@ void GraphTable::dbh_graph_partition() {
   // 替换原来的shards
   clear_edge_shard();
   edge_shards = std::move(tmp_edge_shards);
+  std::vector<std::vector<uint64_t>> all_edge_keys;
+  unique_all_edge_keys_.clear();
+  VLOG(1) << "begin to get all_edge_keys";
+  this->get_all_id(GraphTableType::EDGE_TABLE, 1, &all_edge_keys);
+  VLOG(1) << "end to get all_edge_keys, size:" << all_edge_keys[0].size();
+  unique_all_edge_keys_.insert(all_edge_keys[0].begin(),
+                               all_edge_keys[0].end());
+  VLOG(1) << "insert unique_all_edge_keys_ done, size:"
+          << unique_all_edge_keys_.size();
+  VLOG(0) << "end to process dbh egde shard";
+}
+
+void GraphTable::dbh_graph_feature_partition() {
+  VLOG(0) << "start to process dbh feature shard";
+  std::vector<std::future<int>> tasks;
+  for (auto &it : this->feature_to_id) {
+    auto node_idx = it.second;
+    for (size_t i = 0; i < shard_num_per_server; i++) {
+      tasks.push_back(
+          load_node_edge_task_pool->enqueue([&, node_idx, i, this]() -> int {
+            std::vector<uint64_t> remove_keys;
+            auto &shards = feature_shards[node_idx][i]->get_bucket();
+            for (auto node : shards) {
+              uint64_t id = node->get_id();
+              // 在边表里的key以及hash对应的key保留，其余删除
+              if (!is_key_for_self_rank(id) &&
+                  (unique_all_edge_keys_.find(id) ==
+                   unique_all_edge_keys_.end())) {
+                remove_keys.push_back(id);
+              }
+            }
+            for (auto &key : remove_keys) {
+              feature_shards[node_idx][i]->delete_node(key);
+            }
+            return 0;
+          }));
+    }
+    for (size_t i = 0; i < tasks.size(); ++i) {
+      tasks[i].wait();
+    }
+    unique_all_edge_keys_.clear();
+    VLOG(0) << "end to process dbh feature shard";
+  }
 }
 
 int32_t GraphTable::parse_node_and_load(std::string ntype2files,
@@ -1572,6 +1621,11 @@ int32_t GraphTable::parse_node_and_load(std::string ntype2files,
       }
     }
   }
+
+  if (node_num_ > 1) {
+    graph_partition(false);
+  }
+
   return 0;
 }
 
@@ -1781,11 +1835,9 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
     }
     uint64_t id = std::strtoul(vals[0].ptr, NULL, 10);
     if (FLAGS_graph_edges_split_mode == "hard" ||
-        FLAGS_graph_edges_split_mode == "HARD" ||
-        FLAGS_graph_edges_split_mode == "dbh" ||
-        FLAGS_graph_edges_split_mode == "DBH") {
+        FLAGS_graph_edges_split_mode == "HARD") {
       if (!is_key_for_self_rank(id)) {
-        VLOG(2) << "id " << id << " not matched, node_id: " << node_id_
+        VLOG(3) << "id " << id << " not matched, node_id: " << node_id_
                 << " , node_num:" << node_num_;
         continue;
       }
@@ -1860,11 +1912,9 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
     }
     local_count++;
     if (FLAGS_graph_edges_split_mode == "hard" ||
-        FLAGS_graph_edges_split_mode == "HARD" ||
-        FLAGS_graph_edges_split_mode == "dbh" ||
-        FLAGS_graph_edges_split_mode == "DBH") {
+        FLAGS_graph_edges_split_mode == "HARD") {
       if (!is_key_for_self_rank(id)) {
-        VLOG(2) << "id " << id << " not matched, node_id: " << node_id_
+        VLOG(3) << "id " << id << " not matched, node_id: " << node_id_
                 << " , node_num:" << node_num_;
         continue;
       }
@@ -1998,7 +2048,7 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_edge_file(
       // only keep hash(src_id) = hash(dst_id) = node_id edges
       // src id
       if (!is_key_for_self_rank(src_id)) {
-        VLOG(2) << " node num :" << src_id
+        VLOG(3) << " node num :" << src_id
                 << " not split into node_id_:" << node_id_
                 << " node_num:" << node_num_;
         continue;
@@ -2006,7 +2056,7 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_edge_file(
       // dst id
       if (!FLAGS_graph_edges_split_only_by_src_id &&
           !is_key_for_self_rank(dst_id)) {
-        VLOG(2) << " dest node num :" << dst_id
+        VLOG(3) << " dest node num :" << dst_id
                 << " will not add egde, node_id_:" << node_id_
                 << " node_num:" << node_num_;
         continue;
@@ -2513,7 +2563,7 @@ int GraphTable::parse_feature(int idx,
       return 0;
     }
   } else {
-    VLOG(4) << "feature_name[" << name << "] is not in feat_id_map, ntype_id["
+    VLOG(10) << "feature_name[" << name << "] is not in feat_id_map, ntype_id["
             << idx << "] feat_id_map_size[" << feat_id_map.size() << "]";
   }
 
