@@ -1869,7 +1869,11 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
         }
       }
     } else {
-      node_shards[idx][index]->add_feature_node(id, false);
+      auto node = node_shards[idx][index]->add_feature_node(id, false);
+      if (cls_mode && node != NULL) {
+        int node_label = std::stoi(vals[1].to_string());
+        node->set_node_label(node_label);
+      }
     }
     local_valid_count++;
   }
@@ -1938,10 +1942,10 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
       }
     } else {
       // deal with cls mode.
-      if (!cls_mode) {
-        node_shards[idx][index]->add_feature_node(id, false);
-      } else {
-        continue;
+      auto node = node_shards[idx][index]->add_feature_node(id, false);
+      if (cls_mode && node != NULL) {
+        int node_label = std::stoi(vals[2].to_string());
+        node->set_node_label(node_label);
       }
     }
     local_valid_count++;
@@ -2579,9 +2583,10 @@ int GraphTable::parse_feature(int idx,
   return 0;
 }
 // thread safe shard vector merge
+template <typename T>
 class MergeShardVector {
  public:
-  MergeShardVector(std::vector<std::vector<uint64_t>> *output, int slice_num) {
+  MergeShardVector(std::vector<std::vector<T>> *output, int slice_num) {
     _slice_num = slice_num;
     _shard_keys = output;
     _shard_keys->resize(slice_num);
@@ -2594,7 +2599,7 @@ class MergeShardVector {
     }
   }
   // merge shard keys
-  void merge(const std::vector<std::vector<uint64_t>> &shard_keys) {
+  void merge(const std::vector<std::vector<T>> &shard_keys) {
     // add to shard
     for (int shard_id = 0; shard_id < _slice_num; ++shard_id) {
       auto &dest = (*_shard_keys)[shard_id];
@@ -2609,13 +2614,13 @@ class MergeShardVector {
  private:
   int _slice_num = 0;
   std::mutex *_mutexs = nullptr;
-  std::vector<std::vector<uint64_t>> *_shard_keys;
+  std::vector<std::vector<T>> *_shard_keys;
 };
 
 int GraphTable::get_all_id(GraphTableType table_type,
                            int slice_num,
                            std::vector<std::vector<uint64_t>> *output) {
-  MergeShardVector shard_merge(output, slice_num);
+  MergeShardVector<uint64_t> shard_merge(output, slice_num);
   auto &search_shards = table_type == GraphTableType::EDGE_TABLE ? edge_shards
                         : table_type == GraphTableType::FEATURE_TABLE
                             ? feature_shards
@@ -2641,11 +2646,45 @@ int GraphTable::get_all_id(GraphTableType table_type,
   return 0;
 }
 
+int GraphTable::get_all_id_and_label(GraphTableType table_type,
+                                     int idx,
+                                     int slice_num,
+                                     std::vector<std::vector<uint64_t>> *keys,
+                                     std::vector<std::vector<int>> *labels) {
+  MergeShardVector<uint64_t> shard_merge_keys(keys, slice_num);
+  MergeShardVector<int> shard_merge_labels(labels, slice_num);
+  auto &search_shards =
+      table_type == GraphTableType::EDGE_TABLE      ? edge_shards[idx]
+      : table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx]
+                                                    : node_shards[idx];
+  std::vector<std::future<size_t>> tasks;
+  for (size_t i = 0; i < search_shards.size(); i++) {
+    tasks.push_back(_shards_task_pool[i % task_pool_size_]->enqueue(
+        [&search_shards, i, slice_num, &shard_merge_keys,
+         &shard_merge_labels]() -> size_t {
+          std::vector<std::vector<uint64_t>> shard_keys;
+          std::vector<std::vector<int>> shard_labels;
+          size_t num =
+              search_shards[i]->get_all_id_and_label(&shard_keys,
+                                                     &shard_labels,
+                                                     slice_num);
+          // add to shard
+          shard_merge_keys.merge(shard_keys);
+          shard_merge_labels.merge(shard_labels);
+          return num;
+      }));
+  }
+  for (size_t i = 0; i < tasks.size(); ++i) {
+    tasks[i].wait();
+  }
+  return 0;
+}
+
 int GraphTable::get_all_neighbor_id(
     GraphTableType table_type,
     int slice_num,
     std::vector<std::vector<uint64_t>> *output) {
-  MergeShardVector shard_merge(output, slice_num);
+  MergeShardVector<uint64_t> shard_merge(output, slice_num);
   auto &search_shards = table_type == GraphTableType::EDGE_TABLE ? edge_shards
                         : table_type == GraphTableType::FEATURE_TABLE
                             ? feature_shards
@@ -2674,7 +2713,7 @@ int GraphTable::get_all_id(GraphTableType table_type,
                            int idx,
                            int slice_num,
                            std::vector<std::vector<uint64_t>> *output) {
-  MergeShardVector shard_merge(output, slice_num);
+  MergeShardVector<uint64_t> shard_merge(output, slice_num);
   auto &search_shards =
       table_type == GraphTableType::EDGE_TABLE      ? edge_shards[idx]
       : table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx]
@@ -2703,7 +2742,7 @@ int GraphTable::get_all_neighbor_id(
     int idx,
     int slice_num,
     std::vector<std::vector<uint64_t>> *output) {
-  MergeShardVector shard_merge(output, slice_num);
+  MergeShardVector<uint64_t> shard_merge(output, slice_num);
   auto &search_shards =
       table_type == GraphTableType::EDGE_TABLE      ? edge_shards[idx]
       : table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx]
@@ -2733,7 +2772,7 @@ int GraphTable::get_all_feature_ids(
     int idx,
     int slice_num,
     std::vector<std::vector<uint64_t>> *output) {
-  MergeShardVector shard_merge(output, slice_num);
+  MergeShardVector<uint64_t> shard_merge(output, slice_num);
   auto &search_shards =
       table_type == GraphTableType::EDGE_TABLE      ? edge_shards[idx]
       : table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx]
@@ -3046,17 +3085,30 @@ void GraphTable::build_graph_type_keys() {
       << graph_total_keys_.size();
 }
 
-void GraphTable::build_node_iter_type_keys() {
+void GraphTable::build_node_iter_type_keys(bool cls_mode) {
   VLOG(0) << "enter build_node_iter_type_keys";
   graph_type_keys_.clear();
   graph_type_keys_.resize(this->feature_to_id.size());
+
+  if (cls_mode) {
+    graph_type_labels_.clear();
+    graph_type_labels_.resize(this->feature_to_id.size());
+  }
 
   int cnt = 0;
   for (auto &it : this->feature_to_id) {
     auto node_idx = it.second;
     std::vector<std::vector<uint64_t>> keys;
-    this->get_all_id(GraphTableType::NODE_TABLE, node_idx, 1, &keys);
-    graph_type_keys_[cnt++] = std::move(keys[0]);
+    if (!cls_mode) {
+      this->get_all_id(GraphTableType::NODE_TABLE, node_idx, 1, &keys);
+      graph_type_keys_[cnt] = std::move(keys[0]);
+    } else {
+      std::vector<std::vector<int>> labels;
+      this->get_all_id_and_label(GraphTableType::NODE_TABLE, node_idx, 1, &keys, &labels);
+      graph_type_keys_[cnt] = std::move(keys[0]);
+      graph_type_labels_[cnt] = std::move(labels[0]);
+    }
+    cnt++;
   }
   VLOG(0) << "finish build_node_iter_type_keys";
 }

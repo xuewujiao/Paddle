@@ -939,6 +939,8 @@ class GraphDataGenerator {
   int FillWalkBufMultiPath();
   int FillInferBuf();
   void DoWalkandSage();
+  void DoSage();
+  void PrepareGraphData();
   int FillSlotFeature(uint64_t* d_walk);
   int FillIdShowClkTensor(int total_instance,
                           bool gpu_graph_training);
@@ -999,6 +1001,7 @@ class GraphDataGenerator {
   int64_t* clk_tensor_ptr_;
   int* degree_tensor_ptr_;
   int32_t* pair_label_ptr_;
+  int* node_label_ptr_;
 
   cudaStream_t train_stream_;
   cudaStream_t sample_stream_;
@@ -1007,6 +1010,7 @@ class GraphDataGenerator {
   std::vector<size_t> offset_;
   std::shared_ptr<phi::Allocation> d_prefix_sum_;
   std::vector<std::shared_ptr<phi::Allocation>> d_device_keys_;
+  std::vector<std::shared_ptr<phi::Allocation>> d_device_labels_;
   std::shared_ptr<phi::Allocation> d_train_metapath_keys_;
 
   std::shared_ptr<phi::Allocation> d_walk_;
@@ -1048,6 +1052,7 @@ class GraphDataGenerator {
   std::vector<std::shared_ptr<phi::Allocation>> inverse_vec_;
   std::vector<std::shared_ptr<phi::Allocation>> final_sage_nodes_vec_;
   std::vector<std::shared_ptr<phi::Allocation>> node_degree_vec_;
+  std::vector<std::shared_ptr<phi::Allocation>> node_label_vec_;
   std::vector<int> uniq_instance_vec_;
   std::vector<int> total_instance_vec_;
   std::vector<std::vector<std::shared_ptr<phi::Allocation>>> graph_edges_vec_;
@@ -1079,6 +1084,7 @@ class GraphDataGenerator {
   std::string infer_node_type_;
   bool is_multi_node_;
   phi::DenseTensor multi_node_sync_stat_;
+  bool cls_mode_;
 };
 
 class DataFeed {
@@ -1215,9 +1221,9 @@ class DataFeed {
     gpu_graph_data_generator_.ResetEpochFinish();
   }
 
-  virtual void DoWalkandSage() {
+  virtual void PrepareGraphData() {
     PADDLE_THROW(platform::errors::Unimplemented(
-        "This function(DoWalkandSage) is not implemented."));
+        "This function(PrepareGraphData) is not implemented."));
   }
 #endif
 
@@ -1843,7 +1849,7 @@ class SlotRecordInMemoryDataFeed : public InMemoryDataFeed<SlotRecord> {
 #if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
   virtual void InitGraphResource(void);
   virtual void InitGraphTrainResource(void);
-  virtual void DoWalkandSage();
+  virtual void PrepareGraphData();
 #endif
   virtual void DumpWalkPath(std::string dump_path, size_t dump_rate);
 

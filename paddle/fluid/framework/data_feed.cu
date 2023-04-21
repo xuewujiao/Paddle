@@ -2081,6 +2081,15 @@ uint64_t CopyUniqueNodes(HashTable<uint64_t, uint64_t>* table,
   return 0;
 }
 
+void GraphDataGenerator::PrepareGraphData() {
+  VLOG(0) << "in PrepareGraphData: " << cls_mode_;
+  if (!cls_mode_) {
+    DoWalkandSage();
+  } else {
+    DoSage();
+  }
+}
+
 void GraphDataGenerator::DoWalkandSage() {
   int device_id = place_.GetDeviceId();
   debug_gpu_memory_info(device_id, "DoWalkandSage start");
