@@ -912,6 +912,10 @@ class PSGPUWrapper {
   int GetRankId(void) { return rank_id_; }
   // rank size
   int GetRankNum(void) { return node_size_; }
+  // rank id
+  int GetNCCLRankId(const int &device_id) {
+    return (rank_id_ * device_num_ + device_id);
+  }
 
  private:
   static std::shared_ptr<PSGPUWrapper> s_instance_;
