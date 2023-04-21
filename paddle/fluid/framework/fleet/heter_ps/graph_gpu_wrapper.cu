@@ -583,6 +583,16 @@ int GraphGpuWrapper::set_node_iter_from_file(
   return 0;
 }
 
+int GraphGpuWrapper::set_cls_node_and_label_from_file(
+    std::string ntype2files,
+    std::string node_types_file_path,
+    int part_num,
+    bool training) {
+  // 1. load cpu node
+  ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->parse_node_and_load(
+      ntype2files, node_types_file_path, part_num, false, true);
+}
+
 int GraphGpuWrapper::set_node_iter_from_graph(bool training) {
   // 1. init type keys
   if (!type_keys_initialized_) {

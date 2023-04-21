@@ -1580,7 +1580,9 @@ void GraphTable::dbh_graph_feature_partition() {
 int32_t GraphTable::parse_node_and_load(std::string ntype2files,
                                         std::string graph_data_local_path,
                                         int part_num,
-                                        bool load_slot) {
+                                        bool load_slot,
+                                        bool cls_mode) {
+  // if cls_mode(classification) is True, then this file will have no slot information.
   std::vector<std::string> ntypes;
   std::unordered_map<std::string, std::string> node_to_nodedir;
   int res = parse_type_to_typepath(
@@ -1606,14 +1608,14 @@ int32_t GraphTable::parse_node_and_load(std::string ntype2files,
     return 0;
   }
   if (FLAGS_graph_load_in_parallel) {
-    int ret = this->load_nodes(npath_str, "", load_slot);
+    int ret = this->load_nodes(npath_str, "", load_slot, cls_mode);
     if (ret != 0) {
       VLOG(0) << "Fail to load nodes, path[" << npath << "]";
       return -1;
     }
   } else {
     for (size_t j = 0; j < ntypes.size(); j++) {
-      int ret = this->load_nodes(npath_str, ntypes[j], load_slot);
+      int ret = this->load_nodes(npath_str, ntypes[j], load_slot, cls_mode);
       if (ret != 0) {
         VLOG(0) << "Fail to load nodes, path[" << npath << "], ntypes["
                 << ntypes[j] << "]";
@@ -1814,7 +1816,8 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
     const std::string &path,
     const std::string &node_type,
     int idx,
-    bool load_slot) {
+    bool load_slot,
+    bool cls_mode) {
   std::ifstream file(path);
   std::string line;
   uint64_t local_count = 0;
@@ -1876,7 +1879,7 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
 }
 
 std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
-    const std::string &path, bool load_slot) {
+    const std::string &path, bool load_slot, bool cls_mode) {
   std::ifstream file(path);
   std::string line;
   uint64_t local_count = 0;
@@ -1934,7 +1937,12 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
         }
       }
     } else {
-      node_shards[idx][index]->add_feature_node(id, false);
+      // deal with cls mode.
+      if (!cls_mode) {
+        node_shards[idx][index]->add_feature_node(id, false);
+      } else {
+        continue;
+      }
     }
     local_valid_count++;
   }
@@ -1946,7 +1954,8 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
 // // TODO(danleifeng): opt load all node_types in once reading
 int32_t GraphTable::load_nodes(const std::string &path,
                                std::string node_type,
-                               bool load_slot) {
+                               bool load_slot,
+                               bool cls_mode) {
   auto paths = paddle::string::split_string<std::string>(path, ";");
   uint64_t count = 0;
   uint64_t valid_count = 0;
@@ -1959,7 +1968,7 @@ int32_t GraphTable::load_nodes(const std::string &path,
     for (size_t i = 0; i < paths.size(); i++) {
       tasks.push_back(load_node_edge_task_pool->enqueue(
           [&, i, this]() -> std::pair<uint64_t, uint64_t> {
-            return parse_node_file(paths[i], load_slot);
+            return parse_node_file(paths[i], load_slot, cls_mode);
           }));
     }
     for (size_t i = 0; i < tasks.size(); i++) {
@@ -1982,7 +1991,7 @@ int32_t GraphTable::load_nodes(const std::string &path,
     }
     for (auto path : paths) {
       VLOG(2) << "Begin GraphTable::load_nodes(), path[" << path << "]";
-      auto res = parse_node_file(path, node_type, idx, load_slot);
+      auto res = parse_node_file(path, node_type, idx, load_slot, cls_mode);
       count += res.first;
       valid_count += res.second;
     }

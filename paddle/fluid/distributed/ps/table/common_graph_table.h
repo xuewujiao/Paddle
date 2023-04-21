@@ -579,7 +579,8 @@ class GraphTable : public Table {
   int32_t parse_node_and_load(std::string ntype2files,
                               std::string graph_data_local_path,
                               int part_num,
-                              bool load_slot = true);
+                              bool load_slot = true,
+                              bool cls_mode = false);  
   std::string get_inverse_etype(std::string &etype);  // NOLINT
   int32_t parse_type_to_typepath(
       std::string &type2files,  // NOLINT
@@ -612,7 +613,8 @@ class GraphTable : public Table {
                              std::vector<std::vector<uint64_t>> *output);
   int32_t load_nodes(const std::string &path,
                      std::string node_type = std::string(),
-                     bool load_slot = true);
+                     bool load_slot = true,
+                     bool cls_mode = false);
   std::pair<uint64_t, uint64_t> parse_edge_file(const std::string &path,
                                                 int idx,
                                                 bool reverse,
@@ -620,9 +622,11 @@ class GraphTable : public Table {
   std::pair<uint64_t, uint64_t> parse_node_file(const std::string &path,
                                                 const std::string &node_type,
                                                 int idx,
-                                                bool load_slot = true);
+                                                bool load_slot = true,
+                                                bool cls_mode = false);
   std::pair<uint64_t, uint64_t> parse_node_file(const std::string &path,
-                                                bool load_slot = true);
+                                                bool load_slot = true,
+                                                bool cls_mode = false);
   int32_t add_graph_node(int idx,
                          std::vector<uint64_t> &id_list,      // NOLINT
                          std::vector<bool> &is_weight_list);  // NOLINT
