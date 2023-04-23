@@ -1613,7 +1613,7 @@ GraphDataGenerator::SampleNeighbors(int64_t *uniq_nodes,
                                     std::vector<int> &edges_split_num,
                                     int64_t *neighbor_len) {
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
-  auto sample_res = gpu_graph_ptr->graph_neighbor_sample_all_edge_type(
+  auto sample_res = gpu_graph_ptr->graph_neighbor_sample_sage(
       conf_.gpuid,
       edge_to_id_len_,
       reinterpret_cast<uint64_t *>(uniq_nodes),
@@ -2022,7 +2022,7 @@ uint64_t GraphDataGenerator::CopyUniqueNodes() {
   return 0;
 }
 
-bool GraphDataGenerator::GetPassEndForSage(int flag) {
+bool GraphDataGenerator::get_pass_end_for_sage(int flag) {
   float ret = 0.0;
   if (flag > 1) {
     flag = 1;
@@ -2077,7 +2077,7 @@ void GraphDataGenerator::DoWalkandSage() {
             if (res == -1) {
               if (ins_buf_pair_len_ == 0) {
                 if (is_multi_node_) {
-                  pass_end_ = 1;
+                  sage_pass_end_ = 1;
                   if (total_row_ != 0) {
                     buf_state_.Reset(total_row_);
                     VLOG(1) << "reset buf state to make batch num equal in multi node";
@@ -2094,9 +2094,12 @@ void GraphDataGenerator::DoWalkandSage() {
 
           // check whether reach sage pass end
           if (is_multi_node_) {
-            bool res = GetPassEndForSage(pass_end_);
+            bool res = get_pass_end_for_sage(sage_pass_end_);
             // no need to reset here, we reset pass_end_ in hogwild_worker.
-            if (res) { ins_pair_flag = false; }
+            if (res) { 
+              ins_pair_flag = false;
+              sage_pass_end_ = 0;
+            }
           }
 
           if (!ins_pair_flag) {

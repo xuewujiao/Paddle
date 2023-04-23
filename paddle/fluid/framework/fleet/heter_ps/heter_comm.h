@@ -610,10 +610,7 @@ class HeterComm {
     auto h_remote_part_offsets = res.h_remote_part_offsets.data();
 
     size_t total_fea_num = 0;
-    if (rdma_checker_->need_rdma_trans()) {
-      if (sage) {
-        VLOG(0) << gpu_id << ": enter send_vals_by_all2all_trans";
-      }
+    if (rdma_checker_->need_rdma_trans() && !sage) {
       total_fea_num =
           send_vals_by_all2all_trans(gpu_id,
                   rank_id_,
@@ -623,9 +620,7 @@ class HeterComm {
                   value_bytes,
                   stream);
     } else {
-      if (sage) {
-        VLOG(0) << gpu_id << ": enter send_data_by_all2all";
-      }
+      // sage is true, set default to run here.
       total_fea_num = send_data_by_all2all(gpu_id,
               node_size_,
               rank_id_,

@@ -2270,7 +2270,7 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_sage_all2all(
 
   // all2all mode begins, init resource, partition keys, pull vals by all2all.
   auto pull_size = gather_inter_keys_by_all2all(gpu_id, len, d_keys, stream);
-  VLOG(0) << "gather_inter_keys_by_all2all sage finish, pull_size=" << pull_size << ", len=" << len;
+  VLOG(2) << "gather_inter_keys_by_all2all sage finish, pull_size=" << pull_size << ", len=" << len;
 
   // do single-node multi-card sampling
   auto result = graph_neighbor_sample_all_edge_type(gpu_id,
@@ -2282,7 +2282,8 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_sage_all2all(
                                                     weighted,
                                                     return_weight,
                                                     true);
-  VLOG(0) << "graph_neighbor_sample_all_edge_type local finish"
+
+  VLOG(2) << "graph_neighbor_sample_all_edge_type local finish"
           << ", gpu_id=" << gpu_id
           << ", pull_size=" << pull_size;
 
@@ -2292,7 +2293,7 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_sage_all2all(
   final.initialize(sample_size, len, edge_type_len, return_weight,
                    gpu_id);
   
-  VLOG(0) << "Begin scatter_inter_vals_by_all2all_common for val";
+  VLOG(2) << "Begin scatter_inter_vals_by_all2all_common for val";
   // all2all mode finish, scatter sample values by all2all
   scatter_inter_vals_by_all2all_common(gpu_id,
                                        len,
@@ -2302,7 +2303,7 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_sage_all2all(
                                        reinterpret_cast<uint64_t*>(loc.d_merged_vals),  // tmp hbm
                                        stream,
                                        true);
-  VLOG(0) << "scatter_inter_vals_by_all2all sage val finish" << " gpu_id=" << gpu_id;
+  VLOG(2) << "scatter_inter_vals_by_all2all sage val finish" << " gpu_id=" << gpu_id;
 
   // all2all mode finish, scatter sample sizes of every node by all2all
   scatter_inter_vals_by_all2all_common(gpu_id,
@@ -2311,8 +2312,9 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_sage_all2all(
                                        reinterpret_cast<const int*>(result.actual_sample_size),  // in
                                        reinterpret_cast<int*>(final.actual_sample_size),  // out
                                        reinterpret_cast<int*>(loc.d_merged_vals),  // tmp hbm
-                                       stream);
-  VLOG(0) << "scatter_inter_vals_by_all2all sage actual_sample_size finish" << " gpu_id=" << gpu_id;
+                                       stream,
+                                       true);
+  VLOG(2) << "scatter_inter_vals_by_all2all sage actual_sample_size finish" << " gpu_id=" << gpu_id;
 
   if (return_weight) {
     scatter_inter_vals_by_all2all_common(gpu_id,
@@ -2321,12 +2323,10 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_sage_all2all(
                                          reinterpret_cast<const float*>(result.weight),  // in
                                          reinterpret_cast<float*>(final.weight),         // out
                                          reinterpret_cast<float*>(loc.d_merged_vals),    // tmp hbm
-                                         stream);
-    // VLOG(0) << "scatter_inter_vals_by_all2all sage weight finish" << " gpu_id=" << gpu_id;
+                                         stream,
+                                         true);
+    VLOG(2) << "scatter_inter_vals_by_all2all sage weight finish" << " gpu_id=" << gpu_id;
   }
-
-  // VLOG(0) << "Display final actual sample size";
-  // final.display();
 
   // Rearange neighbor result.
   NeighborSampleResultV2 final2;
@@ -2346,9 +2346,6 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_sage_all2all(
       edge_type_len,
       len * edge_type_len,
       return_weight);
-
-  // VLOG(0) << "Display final2 actual sample size";
-  // final2.display();
 
   return final2;
 }

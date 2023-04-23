@@ -1004,7 +1004,7 @@ class GraphDataGenerator {
   bool get_epoch_finish() { return epoch_finish_; }
   int get_pass_end() { return pass_end_; }
   void clear_gpu_mem();
-  bool GetPassEndForSage(int flag);
+  bool get_pass_end_for_sage(int flag);
   int multi_node_sync_sample(int flag, const ncclRedOp_t& op);
 
  protected:
@@ -1089,6 +1089,7 @@ class GraphDataGenerator {
   std::vector<int> samples_;
   bool epoch_finish_;
   int pass_end_ = 0;
+  int sage_pass_end_ = 0;
   std::vector<uint64_t> host_vec_;
   std::vector<uint64_t> h_device_keys_len_;
   uint64_t h_train_metapath_keys_len_;
