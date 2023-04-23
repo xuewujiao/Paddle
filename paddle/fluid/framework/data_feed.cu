@@ -1008,18 +1008,14 @@ int GraphDataGenerator::GenerateBatch() {
   return 1;
 }
 
-__global__ void GraphFillSampleKeysKernel(uint64_t *neighbors,
-                                          uint64_t *sample_keys,
-                                          int *prefix_sum,
+__global__ void GraphFillSampleKeysKernel(int *prefix_sum,
                                           int *sampleidx2row,
                                           int *tmp_sampleidx2row,
                                           int *actual_sample_size,
-                                          int cur_degree,
                                           int len) {
   CUDA_KERNEL_LOOP(idx, len) {
     for (int k = 0; k < actual_sample_size[idx]; k++) {
       size_t offset = prefix_sum[idx] + k;
-      sample_keys[offset] = neighbors[idx * cur_degree + k];
       tmp_sampleidx2row[offset] = sampleidx2row[idx] + k;
     }
   }
@@ -1063,12 +1059,10 @@ __global__ void GraphFillFirstStepKernel(int *prefix_sum,
                                          int walk_degree,
                                          int col_size,
                                          int *actual_sample_size,
-                                         uint64_t *neighbors,
-                                         uint64_t *sample_keys) {
+                                         uint64_t *neighbors) {
   CUDA_KERNEL_LOOP(idx, len) {
     for (int k = 0; k < actual_sample_size[idx]; k++) {
       size_t row = prefix_sum[idx] + k;
-      sample_keys[row] = neighbors[idx * walk_degree + k];
       sampleidx2row[row] = row;
 
       size_t offset = col_size * row;
@@ -1209,8 +1203,6 @@ void FillOneStep(uint64_t *d_start_ids,
                 int cur_degree,
                 int step,
                 const GraphDataGeneratorConfig& conf,
-                std::shared_ptr<phi::Allocation>& d_sample_keys_ptr,
-                std::shared_ptr<phi::Allocation>& d_prefix_sum_ptr,
                 std::vector<std::shared_ptr<phi::Allocation>>& d_sampleidx2rows,
                 int& cur_sampleidx2row,
                 const paddle::platform::Place& place,
@@ -1222,8 +1214,14 @@ void FillOneStep(uint64_t *d_start_ids,
   size_t temp_storage_bytes = 0;
   int *d_actual_sample_size = sample_res.actual_sample_size;
   uint64_t *d_neighbors = sample_res.val;
+
+  auto d_prefix_sum_ptr = memory::AllocShared(place,
+          (conf.once_max_sample_keynum + 1) * sizeof(int),
+          phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   int *d_prefix_sum = reinterpret_cast<int *>(d_prefix_sum_ptr->ptr());
-  uint64_t *d_sample_keys = reinterpret_cast<uint64_t *>(d_sample_keys_ptr->ptr());
+  cudaMemsetAsync(d_prefix_sum, 0, (conf.once_max_sample_keynum + 1) * sizeof(int),
+          stream);
+
   int *d_sampleidx2row =
       reinterpret_cast<int *>(d_sampleidx2rows[cur_sampleidx2row]->ptr());
   int *d_tmp_sampleidx2row =
@@ -1254,31 +1252,26 @@ void FillOneStep(uint64_t *d_start_ids,
                                CUDA_NUM_THREADS,
                                0,
                                stream>>>(d_prefix_sum,
-                                                 d_tmp_sampleidx2row,
-                                                 walk,
-                                                 walk_ntype,
-                                                 d_start_ids,
-                                                 edge_src_id,
-                                                 edge_dst_id,
-                                                 len,
-                                                 conf.walk_degree,
-                                                 conf.walk_len,
-                                                 d_actual_sample_size,
-                                                 d_neighbors,
-                                                 d_sample_keys);
-
+                                       d_tmp_sampleidx2row,
+                                       walk,
+                                       walk_ntype,
+                                       d_start_ids,
+                                       edge_src_id,
+                                       edge_dst_id,
+                                       len,
+                                       conf.walk_degree,
+                                       conf.walk_len,
+                                       d_actual_sample_size,
+                                       d_neighbors);
   } else {
     GraphFillSampleKeysKernel<<<GET_BLOCKS(len),
                                 CUDA_NUM_THREADS,
                                 0,
-                                stream>>>(d_neighbors,
-                                                  d_sample_keys,
-                                                  d_prefix_sum,
-                                                  d_sampleidx2row,
-                                                  d_tmp_sampleidx2row,
-                                                  d_actual_sample_size,
-                                                  cur_degree,
-                                                  len);
+                                stream>>>(d_prefix_sum,
+                                        d_sampleidx2row,
+                                        d_tmp_sampleidx2row,
+                                        d_actual_sample_size,
+                                        len);
 
     GraphDoWalkKernel<<<GET_BLOCKS(len), CUDA_NUM_THREADS, 0, stream>>>(
         d_neighbors,
@@ -1294,20 +1287,19 @@ void FillOneStep(uint64_t *d_start_ids,
         edge_dst_id);
   }
   if (conf.debug_mode) {
-    size_t once_max_sample_keynum = conf.walk_degree * conf.once_sample_startid_len;
     int *h_prefix_sum = new int[len + 1];
     int *h_actual_size = new int[len];
-    int *h_offset2idx = new int[once_max_sample_keynum];
+    int *h_offset2idx = new int[conf.once_max_sample_keynum];
     cudaMemcpy(h_offset2idx,
                d_tmp_sampleidx2row,
-               once_max_sample_keynum * sizeof(int),
+               conf.once_max_sample_keynum * sizeof(int),
                cudaMemcpyDeviceToHost);
 
     cudaMemcpy(h_prefix_sum,
                d_prefix_sum,
                (len + 1) * sizeof(int),
                cudaMemcpyDeviceToHost);
-    for (int xx = 0; xx < once_max_sample_keynum; xx++) {
+    for (int xx = 0; xx < conf.once_max_sample_keynum; xx++) {
       VLOG(2) << "h_offset2idx[" << xx << "]: " << h_offset2idx[xx];
     }
     for (int xx = 0; xx < len + 1; xx++) {
@@ -2231,11 +2223,6 @@ void GraphDataGenerator::DoWalkandSage() {
 
 void GraphDataGenerator::clear_gpu_mem() {
   platform::CUDADeviceGuard guard(conf_.gpuid);
-  d_sample_keys_.reset();
-  d_prefix_sum_.reset();
-  for (size_t i = 0; i < d_sampleidx2rows_.size(); i++) {
-    d_sampleidx2rows_[i].reset();
-  }
   delete table_;
 }
 
@@ -2314,24 +2301,14 @@ void GraphDataGenerator::ClearSampleState() {
 
 int GraphDataGenerator::FillWalkBuf() {
   platform::CUDADeviceGuard guard(conf_.gpuid);
-  size_t once_max_sample_keynum = conf_.walk_degree * conf_.once_sample_startid_len;
   ////////
   uint64_t *h_walk;
-  uint64_t *h_sample_keys;
-  int *h_offset2idx;
-  int *h_len_per_row;
-  uint64_t *h_prefix_sum;
   if (conf_.debug_mode) {
     h_walk = new uint64_t[buf_size_];
-    h_sample_keys = new uint64_t[once_max_sample_keynum];
-    h_offset2idx = new int[once_max_sample_keynum];
-    h_len_per_row = new int[once_max_sample_keynum];
-    h_prefix_sum = new uint64_t[once_max_sample_keynum + 1];
   }
   ///////
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   uint64_t *walk = reinterpret_cast<uint64_t *>(d_walk_->ptr());
-  uint64_t *d_sample_keys = reinterpret_cast<uint64_t *>(d_sample_keys_->ptr());
   cudaMemsetAsync(walk, 0, buf_size_ * sizeof(uint64_t), sample_stream_);
   uint8_t *walk_ntype = NULL;
   if (conf_.need_walk_ntype) {
@@ -2341,6 +2318,15 @@ int GraphDataGenerator::FillWalkBuf() {
   int sample_times = 0;
   int i = 0;
   total_row_ = 0;
+
+  std::vector<std::shared_ptr<phi::Allocation>> d_sampleidx2rows;
+  d_sampleidx2rows.push_back(memory::AllocShared(place_,
+              conf_.once_max_sample_keynum * sizeof(int),
+              phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_))));
+  d_sampleidx2rows.push_back(memory::AllocShared(place_,
+              conf_.once_max_sample_keynum * sizeof(int),
+              phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_))));
+  int cur_sampleidx2row = 0;
 
   // 获取全局采样状态
   auto &first_node_type = gpu_graph_ptr->first_node_type_;
@@ -2518,10 +2504,8 @@ int GraphDataGenerator::FillWalkBuf() {
                 conf_.walk_degree,
                 step,
                 conf_,
-                d_sample_keys_,
-                d_prefix_sum_,
-                d_sampleidx2rows_,
-                cur_sampleidx2row_,
+                d_sampleidx2rows,
+                cur_sampleidx2row,
                 place_,
                 sample_stream_);
     /////////
@@ -2593,10 +2577,8 @@ int GraphDataGenerator::FillWalkBuf() {
                   1,
                   step,
                   conf_,
-                  d_sample_keys_,
-                  d_prefix_sum_,
-                  d_sampleidx2rows_,
-                  cur_sampleidx2row_,
+                  d_sampleidx2rows,
+                  cur_sampleidx2row,
                   place_,
                   sample_stream_);
       if (conf_.debug_mode) {
@@ -2663,10 +2645,6 @@ int GraphDataGenerator::FillWalkBuf() {
     }
     delete[] h_random_row;
     delete[] h_walk;
-    delete[] h_sample_keys;
-    delete[] h_offset2idx;
-    delete[] h_len_per_row;
-    delete[] h_prefix_sum;
   }
 
   if (!conf_.sage_mode) {
@@ -2685,19 +2663,10 @@ int GraphDataGenerator::FillWalkBuf() {
 
 int GraphDataGenerator::FillWalkBufMultiPath() {
   platform::CUDADeviceGuard guard(conf_.gpuid);
-  size_t once_max_sample_keynum = conf_.walk_degree * conf_.once_sample_startid_len;
   ////////
   uint64_t *h_walk;
-  uint64_t *h_sample_keys;
-  int *h_offset2idx;
-  int *h_len_per_row;
-  uint64_t *h_prefix_sum;
   if (conf_.debug_mode) {
     h_walk = new uint64_t[buf_size_];
-    h_sample_keys = new uint64_t[once_max_sample_keynum];
-    h_offset2idx = new int[once_max_sample_keynum];
-    h_len_per_row = new int[once_max_sample_keynum];
-    h_prefix_sum = new uint64_t[once_max_sample_keynum + 1];
   }
   ///////
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
@@ -2706,11 +2675,19 @@ int GraphDataGenerator::FillWalkBufMultiPath() {
   if (conf_.need_walk_ntype) {
     walk_ntype = reinterpret_cast<uint8_t *>(d_walk_ntype_->ptr());
   }
-  uint64_t *d_sample_keys = reinterpret_cast<uint64_t *>(d_sample_keys_->ptr());
   cudaMemsetAsync(walk, 0, buf_size_ * sizeof(uint64_t), sample_stream_);
   int sample_times = 0;
   int i = 0;
   total_row_ = 0;
+
+  std::vector<std::shared_ptr<phi::Allocation>> d_sampleidx2rows;
+  d_sampleidx2rows.push_back(memory::AllocShared(place_,
+              conf_.once_max_sample_keynum * sizeof(int),
+              phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_))));
+  d_sampleidx2rows.push_back(memory::AllocShared(place_,
+              conf_.once_max_sample_keynum * sizeof(int),
+              phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_))));
+  int cur_sampleidx2row = 0;
 
   // 获取全局采样状态
   auto &first_node_type = gpu_graph_ptr->first_node_type_;
@@ -2802,10 +2779,8 @@ int GraphDataGenerator::FillWalkBufMultiPath() {
                 conf_.walk_degree,
                 step,
                 conf_,
-                d_sample_keys_,
-                d_prefix_sum_,
-                d_sampleidx2rows_,
-                cur_sampleidx2row_,
+                d_sampleidx2rows,
+                cur_sampleidx2row,
                 place_,
                 sample_stream_);
     /////////
@@ -2863,10 +2838,8 @@ int GraphDataGenerator::FillWalkBufMultiPath() {
                   1,
                   step,
                   conf_,
-                  d_sample_keys_,
-                  d_prefix_sum_,
-                  d_sampleidx2rows_,
-                  cur_sampleidx2row_,
+                  d_sampleidx2rows,
+                  cur_sampleidx2row,
                   place_,
                   sample_stream_);
       if (conf_.debug_mode) {
@@ -2925,10 +2898,6 @@ int GraphDataGenerator::FillWalkBufMultiPath() {
     }
     delete[] h_random_row;
     delete[] h_walk;
-    delete[] h_sample_keys;
-    delete[] h_offset2idx;
-    delete[] h_len_per_row;
-    delete[] h_prefix_sum;
   }
 
   if (!conf_.sage_mode) {
@@ -3016,16 +2985,7 @@ void GraphDataGenerator::AllocResource(
     VLOG(2) << "h_device_keys size: " << h_device_keys_len_.size();
   }
 
-  size_t once_max_sample_keynum = conf_.walk_degree * conf_.once_sample_startid_len;
-  d_prefix_sum_ = memory::AllocShared(
-      place_,
-      (once_max_sample_keynum + 1) * sizeof(int),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-  int *d_prefix_sum_ptr = reinterpret_cast<int *>(d_prefix_sum_->ptr());
-  cudaMemsetAsync(d_prefix_sum_ptr,
-                  0,
-                  (once_max_sample_keynum + 1) * sizeof(int),
-                  sample_stream_);
+
   infer_cursor_ = 0;
   jump_rows_ = 0;
   d_uniq_node_num_ = memory::AllocShared(
@@ -3053,21 +3013,6 @@ void GraphDataGenerator::AllocResource(
                                cudaMemcpyHostToDevice,
                                sample_stream_));
   }
-
-  d_sample_keys_ = memory::AllocShared(
-      place_,
-      once_max_sample_keynum * sizeof(uint64_t),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-
-  d_sampleidx2rows_.push_back(memory::AllocShared(
-      place_,
-      once_max_sample_keynum * sizeof(int),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_))));
-  d_sampleidx2rows_.push_back(memory::AllocShared(
-      place_,
-      once_max_sample_keynum * sizeof(int),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_))));
-  cur_sampleidx2row_ = 0;
 
   for (int i = -conf_.window; i < 0; i++) {
     conf_.window_step.push_back(i);
@@ -3250,6 +3195,8 @@ void GraphDataGenerator::SetConfig(
   if (!conf_.gpu_graph_training) {
     infer_node_type_ = graph_config.infer_node_type();
   }
+
+  conf_.once_max_sample_keynum = conf_.walk_degree * conf_.once_sample_startid_len;
 }
 #endif
 

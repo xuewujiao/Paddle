@@ -918,6 +918,7 @@ struct GraphDataGeneratorConfig {
   int node_type_num;
   int debug_mode;
   int excluded_train_pair_len;
+  size_t once_max_sample_keynum;
   int64_t reindex_table_size;
   uint64_t train_table_cap;
   uint64_t infer_table_cap;
@@ -1005,7 +1006,6 @@ class GraphDataGenerator {
   paddle::platform::Place place_;
   std::vector<phi::DenseTensor*> feed_vec_;
   std::vector<size_t> offset_;
-  std::shared_ptr<phi::Allocation> d_prefix_sum_;
   std::vector<std::shared_ptr<phi::Allocation>> d_device_keys_;
   std::shared_ptr<phi::Allocation> d_train_metapath_keys_;
 
@@ -1019,12 +1019,6 @@ class GraphDataGenerator {
   std::shared_ptr<phi::Allocation> d_slot_feature_num_map_;
   std::shared_ptr<phi::Allocation> d_actual_slot_id_map_;
   std::shared_ptr<phi::Allocation> d_fea_offset_map_;
-
-  std::vector<std::shared_ptr<phi::Allocation>> d_sampleidx2rows_;
-  int cur_sampleidx2row_;
-  // record the keys to call graph_neighbor_sample
-  std::shared_ptr<phi::Allocation> d_sample_keys_;
-  int sample_keys_len_;
 
   std::shared_ptr<phi::Allocation> d_pair_label_buf_;
   std::shared_ptr<phi::Allocation> d_ins_buf_;
