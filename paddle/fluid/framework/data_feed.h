@@ -921,6 +921,7 @@ struct GraphDataGeneratorConfig {
   int64_t reindex_table_size;
   uint64_t train_table_cap;
   uint64_t infer_table_cap;
+  bool cls_mode;
   std::vector<int> window_step;
   std::shared_ptr<phi::Allocation> d_excluded_train_pair;
   std::shared_ptr<phi::Allocation> d_pair_label_conf;

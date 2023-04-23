@@ -2155,7 +2155,7 @@ void GraphDataGenerator::DoWalkandSage() {
             uint64_t *final_sage_nodes_ptr =
                 reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
             InsertTable(final_sage_nodes_ptr, uniq_instance, d_uniq_node_num_, conf_,
-                    copy_unique_len_, place_, table_, host_vec_, sample_stream_);
+                        copy_unique_len_, place_, table_, host_vec_, sample_stream_);
           }
           final_sage_nodes_vec_.emplace_back(final_sage_nodes);
           inverse_vec_.emplace_back(inverse);
@@ -2249,9 +2249,9 @@ void GraphDataGenerator::DoSage() {
   auto &cursor = gpu_graph_ptr->cursor_[conf_.thread_id];
   total_row_ = 0;
 
-  VLOG(0) << thread_id_ << " device current cursor: " << cursor;
+  VLOG(0) << conf_.thread_id << " device current cursor: " << cursor;
   if (cursor < h_device_keys_len_.size()) {
-    VLOG(0) << thread_id_ << " device: global_node_type_start "
+    VLOG(0) << conf_.thread_id << " device: global_node_type_start "
             << global_node_type_start[cursor] 
             << " h_device_keys_len " << h_device_keys_len_[cursor];
     while (global_node_type_start[cursor] >= h_device_keys_len_[cursor]) {
@@ -2266,19 +2266,21 @@ void GraphDataGenerator::DoSage() {
   }
 
   infer_node_start_ = global_node_type_start[cursor];
-  cursor_ = cursor;
+  infer_cursor_ = cursor;
   // Begin Sage
   sage_batch_num_ = 0;
-  size_t device_key_size = h_device_keys_len_[cursor_];
+  size_t device_key_size = h_device_keys_len_[infer_cursor_];
   int total_instance = 0, uniq_instance = 0;
-  total_instance = (infer_node_start_ + batch_size_ <= device_key_size)
+  total_instance = (infer_node_start_ + conf_.batch_size <= device_key_size)
                     ? conf_.batch_size : device_key_size - infer_node_start_;
   if (total_instance > 0) {
+    // 先设置一个随机值
+    int batch_per_pass_ = 1000;
     for (int i = 0; i < batch_per_pass_; i++) {
       uint64_t *d_type_keys =
-          reinterpret_cast<uint64_t *>(d_device_keys_[cursor_]->ptr());
+          reinterpret_cast<uint64_t *>(d_device_keys_[infer_cursor_]->ptr());
       int *d_type_labels =
-          reinterpret_cast<int *>(d_device_labels_[cursor_]->ptr());
+          reinterpret_cast<int *>(d_device_labels_[infer_cursor_]->ptr());
       d_type_keys += infer_node_start_;
       d_type_labels += infer_node_start_;
       infer_node_start_ += total_instance;
@@ -2301,7 +2303,8 @@ void GraphDataGenerator::DoSage() {
       if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
         uint64_t *final_sage_nodes_ptr =
             reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
-        InsertTable(final_sage_nodes_ptr, uniq_instance, d_uniq_node_num_);
+        InsertTable(final_sage_nodes_ptr, uniq_instance, d_uniq_node_num_,
+                    conf_, copy_unique_len_, place_, table_, host_vec_, sample_stream_);
       }
       final_sage_nodes_vec_.emplace_back(final_sage_nodes);
       inverse_vec_.emplace_back(inverse);
@@ -2315,20 +2318,23 @@ void GraphDataGenerator::DoSage() {
                         ? conf_.batch_size : device_key_size - infer_node_start_;
       if (total_instance == 0) break;
     }
-    CopyUniqueNodes();
+    CopyUniqueNodes(table_, copy_unique_len_, place_, d_uniq_node_num_, host_vec_,
+                    sample_stream_);
   }
 
   VLOG(0) << "train sage_batch_num: " << sage_batch_num_;
-  global_node_type_start[cursor_] += total_row_;
+  global_node_type_start[infer_cursor_] += total_row_;
   debug_gpu_memory_info(device_id, "DoSage end");
 }
 
 void GraphDataGenerator::clear_gpu_mem() {
   platform::CUDADeviceGuard guard(conf_.gpuid);
-  d_sample_keys_.reset();
-  d_prefix_sum_.reset();
-  for (size_t i = 0; i < d_sampleidx2rows_.size(); i++) {
-    d_sampleidx2rows_[i].reset();
+  if (!conf_.cls_mode) {
+    d_sample_keys_.reset();
+    d_prefix_sum_.reset();
+    for (size_t i = 0; i < d_sampleidx2rows_.size(); i++) {
+      d_sampleidx2rows_[i].reset();
+    }
   }
   delete table_;
 }
@@ -3116,16 +3122,58 @@ void GraphDataGenerator::AllocResource(
     }
   }
 
-  size_t once_max_sample_keynum = conf_.walk_degree * conf_.once_sample_startid_len;
-  d_prefix_sum_ = memory::AllocShared(
-      place_,
-      (once_max_sample_keynum + 1) * sizeof(int),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-  int *d_prefix_sum_ptr = reinterpret_cast<int *>(d_prefix_sum_->ptr());
-  cudaMemsetAsync(d_prefix_sum_ptr,
-                  0,
-                  (once_max_sample_keynum + 1) * sizeof(int),
-                  sample_stream_);
+  if (!conf_.cls_mode) {
+    // deepwalk related
+    size_t once_max_sample_keynum = conf_.walk_degree * conf_.once_sample_startid_len;
+    d_prefix_sum_ = memory::AllocShared(
+        place_,
+        (once_max_sample_keynum + 1) * sizeof(int),
+        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+    int *d_prefix_sum_ptr = reinterpret_cast<int *>(d_prefix_sum_->ptr());
+    cudaMemsetAsync(d_prefix_sum_ptr,
+                    0,
+                    (once_max_sample_keynum + 1) * sizeof(int),
+                    sample_stream_);
+     d_walk_ = memory::AllocShared(
+        place_,
+        buf_size_ * sizeof(uint64_t),
+        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+    cudaMemsetAsync(
+        d_walk_->ptr(), 0, buf_size_ * sizeof(uint64_t), sample_stream_);
+
+    d_sample_keys_ = memory::AllocShared(
+        place_,
+        once_max_sample_keynum * sizeof(uint64_t),
+        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+
+    d_sampleidx2rows_.push_back(memory::AllocShared(
+        place_,
+        once_max_sample_keynum * sizeof(int),
+        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_))));
+    d_sampleidx2rows_.push_back(memory::AllocShared(
+        place_,
+        once_max_sample_keynum * sizeof(int),
+        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_))));
+    cur_sampleidx2row_ = 0;
+
+    for (int i = -conf_.window; i < 0; i++) {
+      conf_.window_step.push_back(i);
+    }
+    for (int i = 0; i < conf_.window; i++) {
+      conf_.window_step.push_back(i + 1);
+    }
+    buf_state_.Init(conf_.batch_size, conf_.walk_len, &conf_.window_step);
+    d_random_row_ = memory::AllocShared(
+        place_,
+        (conf_.once_sample_startid_len * conf_.walk_degree * repeat_time_) * sizeof(int),
+        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+
+    d_random_row_col_shift_ = memory::AllocShared(
+        place_,
+        (conf_.once_sample_startid_len * conf_.walk_degree * repeat_time_) * sizeof(int),
+        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+ }
+
   infer_cursor_ = 0;
   jump_rows_ = 0;
   d_uniq_node_num_ = memory::AllocShared(
@@ -3133,13 +3181,6 @@ void GraphDataGenerator::AllocResource(
       sizeof(uint64_t),
       phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
   cudaMemsetAsync(d_uniq_node_num_->ptr(), 0, sizeof(uint64_t), sample_stream_);
-
-  d_walk_ = memory::AllocShared(
-      place_,
-      buf_size_ * sizeof(uint64_t),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-  cudaMemsetAsync(
-      d_walk_->ptr(), 0, buf_size_ * sizeof(uint64_t), sample_stream_);
 
   conf_.excluded_train_pair_len = gpu_graph_ptr->excluded_train_pair_.size();
   if (conf_.excluded_train_pair_len > 0) {
@@ -3154,40 +3195,8 @@ void GraphDataGenerator::AllocResource(
                                sample_stream_));
   }
 
-  d_sample_keys_ = memory::AllocShared(
-      place_,
-      once_max_sample_keynum * sizeof(uint64_t),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-
-  d_sampleidx2rows_.push_back(memory::AllocShared(
-      place_,
-      once_max_sample_keynum * sizeof(int),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_))));
-  d_sampleidx2rows_.push_back(memory::AllocShared(
-      place_,
-      once_max_sample_keynum * sizeof(int),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_))));
-  cur_sampleidx2row_ = 0;
-
-  for (int i = -conf_.window; i < 0; i++) {
-    conf_.window_step.push_back(i);
-  }
-  for (int i = 0; i < conf_.window; i++) {
-    conf_.window_step.push_back(i + 1);
-  }
-  buf_state_.Init(conf_.batch_size, conf_.walk_len, &conf_.window_step);
-  d_random_row_ = memory::AllocShared(
-      place_,
-      (conf_.once_sample_startid_len * conf_.walk_degree * repeat_time_) * sizeof(int),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-
-  d_random_row_col_shift_ = memory::AllocShared(
-      place_,
-      (conf_.once_sample_startid_len * conf_.walk_degree * repeat_time_) * sizeof(int),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
 
   shuffle_seed_ = 0;
-
   ins_buf_pair_len_ = 0;
   d_ins_buf_ = memory::AllocShared(place_, (conf_.batch_size * 2 * 2) * sizeof(uint64_t),
           phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));

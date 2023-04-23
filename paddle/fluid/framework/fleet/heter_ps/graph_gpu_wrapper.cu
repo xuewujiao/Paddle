@@ -675,8 +675,7 @@ int GraphGpuWrapper::set_node_iter_from_file(
 int GraphGpuWrapper::set_cls_node_and_label_from_file(
     std::string ntype2files,
     std::string node_types_file_path,
-    int part_num,
-    bool training) {
+    int part_num) {
   // 1. load cpu node
   ((GpuPsGraphTable *)graph_table)->cpu_graph_table_->parse_node_and_load(
       ntype2files, node_types_file_path, part_num, false, true);
@@ -1157,7 +1156,7 @@ std::vector<std::vector<uint64_t>> &GraphGpuWrapper::get_graph_type_keys() {
       ->cpu_graph_table_->graph_type_keys_;
 }
 
-std::vector<std::vector<uint64_t>> &GraphGpuWrapper::get_graph_type_labels() {
+std::vector<std::vector<int>> &GraphGpuWrapper::get_graph_type_labels() {
   return reinterpret_cast<GpuPsGraphTable *>(graph_table)
       ->cpu_graph_table_->graph_type_labels_;
 }

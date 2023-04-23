@@ -69,7 +69,7 @@ class Node {
   virtual int get_feature_size() { return 0; }
   virtual size_t get_neighbor_size() { return 0; }
   virtual bool get_is_weighted() { return is_weighted; }
-  virtual int get_node_label() {}
+  virtual int get_node_label() { return 0; }
 
  protected:
   uint64_t id;
