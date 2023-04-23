@@ -2684,7 +2684,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_all2all(
     // fp16
     if (FLAGS_enable_all2all_use_fp16) {
       value_bytes = heter_comm_kernel_->compress_values(
-          fea_num,
+          pull_size,
           reinterpret_cast<const char *>(loc.d_merged_vals),
           reinterpret_cast<char *>(loc.d_merged_push_vals),
           pull_type_size_,
@@ -4074,13 +4074,12 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_vals_by_all2all_trans(
 
     const size_t &send_size = h_remote_part_offsets[nccl_node_size];
     // p2p copy
-
-    PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyPeerAsync(trans.d_merged_trans_vals, // void* dst
-                                                   trans_id,                  // int dstDevice
-                                                   d_in_vals,                 // const void* src
-                                                   gpu_id,                    // int srcDevice
-                                                   send_size * value_bytes,   // count
-                                                   stream));                  // stream
+    PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyPeerAsync(trans.d_merged_trans_vals,
+                                                   trans_id,
+                                                   d_in_vals,
+                                                   gpu_id,
+                                                   send_size * value_bytes,
+                                                   stream));
     PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
 
     // wait node data ok
@@ -4098,7 +4097,7 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_vals_by_all2all_trans(
                             stream));
     PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
   } else {
-    my_cache.sem_wait->wait();  
+    my_cache.sem_wait->wait();
     int trans_id = get_transfer_devid(gpu_id);
     auto &trans = storage_[trans_id];
 
@@ -4131,7 +4130,6 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_vals_by_all2all_trans(
     PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
     trans.sem_wait->post();
   }
-
   return total_fea_num;
 }
 template <typename KeyType,
