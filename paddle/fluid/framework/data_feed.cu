@@ -2433,17 +2433,17 @@ int GraphDataGenerator::FillWalkBuf() {
         // end sampling current epoch
         cursor = 0;
         epoch_finish_ = true;
-        VLOG(0) << "sample epoch finish!";
+        VLOG(2) << "sample epoch finish!";
         break;
       } else if (sample_command == EVENT_WALKBUF_FULL) {
         // end sampling current pass 
-        VLOG(0) << "sample pass finish!";
+        VLOG(2) << "sample pass finish!";
         break;
       } else if (sample_command == EVENT_CONTINUE_SAMPLE) {
         // continue sampling
       } else {
         // shouldn't come here
-        VLOG(0) << "should not come here, sample_command:" << sample_command;
+        VLOG(2) << "should not come here, sample_command:" << sample_command;
         assert(false);
       }
     }
