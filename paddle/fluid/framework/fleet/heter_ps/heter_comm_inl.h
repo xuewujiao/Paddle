@@ -4068,32 +4068,27 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_vals_by_all2all_trans(
   auto h_remote_part_offsets = my_cache.shard_res.h_remote_part_offsets.data();
 
   size_t total_fea_num = 0;
-  if (!rdma_checker_->is_device_support_rdma(gpu_id)) {  // 4-7
-    VLOG(0) << gpu_id << ": send_vals_by_all2all_trans, not rdma";
+  if (!rdma_checker_->is_device_support_rdma(gpu_id)) {
     int trans_id = get_transfer_devid(gpu_id);
     auto &trans = storage_[trans_id];
 
     const size_t &send_size = h_remote_part_offsets[nccl_node_size];
     // p2p copy
 
-    VLOG(0) << gpu_id << ": begin cudaMemcpyPeerAsync";
     PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyPeerAsync(trans.d_merged_trans_vals, // void* dst
                                                    trans_id,                  // int dstDevice
                                                    d_in_vals,                 // const void* src
                                                    gpu_id,                    // int srcDevice
                                                    send_size * value_bytes,   // count
                                                    stream));                  // stream
-    VLOG(0) << gpu_id << ": sync stream";
     PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
 
     // wait node data ok
-    VLOG(0) << gpu_id << ": wait node data ok";
     trans.sem_wait->post();
     my_cache.sem_wait->wait();
 
     const size_t &recv_size = h_local_part_offsets[nccl_node_size];
     // p2p copy
-    VLOG(0) << gpu_id << ": begin p2p copy again";
     PADDLE_ENFORCE_GPU_SUCCESS(
         cudaMemcpyPeerAsync(d_out_vals,
                             gpu_id,
@@ -4102,15 +4097,12 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_vals_by_all2all_trans(
                             recv_size * value_bytes,
                             stream));
     PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
-  } else {  // 0-3
-    VLOG(0) << gpu_id << ": send_vals_by_all2all_trans, with rdma";
-    // 以0号卡和4号卡为例，4号卡需要0号卡作为中转卡，所以0号卡会在这里等待4号卡的内容。
+  } else {
     my_cache.sem_wait->wait();  
     int trans_id = get_transfer_devid(gpu_id);
     auto &trans = storage_[trans_id];
 
     // send local device
-    VLOG(0) << gpu_id << ": begin to send_data_by_all2all";
     total_fea_num =
         send_data_by_all2all(gpu_id,
                              nccl_node_size,
@@ -4124,7 +4116,6 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_vals_by_all2all_trans(
                              reinterpret_cast<char *>(d_out_vals),
                              stream);
     // send trans device
-    VLOG(0) << gpu_id << ": begin to send_data_by_all2all again";
     total_fea_num += send_data_by_all2all(
         gpu_id,
         nccl_node_size,
@@ -4141,7 +4132,6 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_vals_by_all2all_trans(
     trans.sem_wait->post();
   }
 
-  VLOG(0) << gpu_id << ": finish send_vals_by_all2all_trans";
   return total_fea_num;
 }
 template <typename KeyType,

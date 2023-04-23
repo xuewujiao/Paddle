@@ -958,7 +958,7 @@ class GraphDataGenerator {
   void ResetPathNum() { total_row_ = 0; }
   int GetGraphBatchsize() {return conf_.batch_size;};
   void SetNewBatchsize(int batch_num) {
-    if (!conf_.gpu_graph_training && !conf_.sage_mode) {
+    if (!conf_.gpu_graph_training) {
       conf_.batch_size = (total_row_ + batch_num - 1) / batch_num;
     } else {
       return;
