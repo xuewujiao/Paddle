@@ -386,7 +386,6 @@ struct NeighborSampleResultV2 {
             _sample_size * _key_size * _edge_to_id_len * sizeof(float),
             phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
       }
-      // cudaStreamSynchronize(stream);
     } else {
       val_mem = memory::AllocShared(
           place, _sample_size * _key_size * _edge_to_id_len * sizeof(uint64_t));
