@@ -3050,6 +3050,8 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_data_by_all2all(
       stream));
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
   CHECK_EQ(send_size, h_recv_part_sizes[nccl_rank_id]);
+  int calc_fea_num = 0;
+  calc_fea_num += send_size;
 
   auto nccl_stream = resource_->comm_stream(gpu_id, 0);
   size_t total_fea_num = 0;
@@ -3081,6 +3083,7 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_data_by_all2all(
           comm,
           nccl_stream));
       total_fea_num += recv_size;
+      calc_fea_num += recv_size;
     }
   }
   PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclGroupEnd());
@@ -3244,6 +3247,149 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::
       value_bytes,
       stream);
   CUDA_CHECK(cudaStreamSynchronize(stream));
+}
+
+template <typename KeyType,
+          typename ValType,
+          typename GradType,
+          typename GPUAccessor>
+void HeterComm<KeyType, ValType, GradType, GPUAccessor>::
+recalc_local_and_remote_size(const int& gpu_id,
+                             const size_t& pull_size,
+                             const size_t& node_num,
+                             const uint32_t* d_tmp_size_list,
+                             const uint32_t* d_inter_size_list,
+                             const cudaStream_t &stream) {
+  auto &cache = storage_[gpu_id];
+  auto &res = cache.shard_res;
+  auto h_local_part_sizes = res.h_local_part_sizes.data();
+  auto h_local_part_offsets = res.h_local_part_offsets.data();
+  auto h_remote_part_sizes = res.h_remote_part_sizes.data();
+  auto h_remote_part_offsets = res.h_remote_part_offsets.data();
+
+  std::vector<uint32_t> h_before_scatter_size_list(pull_size, 0);
+  std::vector<uint32_t> h_end_scatter_size_list(node_num, 0);
+  CUDA_CHECK(cudaMemcpyAsync(
+            reinterpret_cast<char *>(h_before_scatter_size_list.data()),
+            d_tmp_size_list,
+            sizeof(uint32_t) * pull_size,
+            cudaMemcpyDeviceToHost,
+            stream));
+  CUDA_CHECK(cudaMemcpyAsync(
+            reinterpret_cast<char *>(h_end_scatter_size_list.data()),
+            d_inter_size_list,
+            sizeof(uint32_t) * node_num,
+            cudaMemcpyDeviceToHost,
+            stream));
+  std::vector<size_t> vari_local_part_sizes(node_size_, 0);
+  std::vector<size_t> vari_local_part_offsets(node_size_ + 1, 0);
+  std::vector<size_t> vari_remote_part_sizes(node_size_, 0);
+  std::vector<size_t> vari_remote_part_offsets(node_size_ + 1, 0);
+
+  //local use end scatter(len is node num), reote use before scatter(len is pull size)
+  //recompute offsets and parts
+  VLOG(2) << "begin recalc local and remote size and offets";
+  for (int i = 0; i < node_size_; i++) {
+    size_t local_size = 0;
+    size_t remote_size = 0;
+    for (int j = h_local_part_offsets[i]; j < h_local_part_offsets[i + 1]; j++) {
+      local_size += h_end_scatter_size_list[j];
+    }
+    vari_local_part_sizes[i] = local_size;
+    vari_local_part_offsets[i + 1] =
+      vari_local_part_offsets[i] + vari_local_part_sizes[i];
+    VLOG(2) << "gpu id: "<< gpu_id << ", before calc, local size:" << h_local_part_sizes[i] << ", local offset: "  << h_local_part_offsets[i + 1] << ", end calc, local part size:" << vari_local_part_sizes[i] << ", local offsets: " << vari_local_part_offsets[i + 1];
+
+    for (int k = h_remote_part_offsets[i]; k < h_remote_part_offsets[i + 1]; k++) {
+      remote_size += h_before_scatter_size_list[k];
+    }
+    vari_remote_part_sizes[i] = remote_size;
+    vari_remote_part_offsets[i + 1] =
+      vari_remote_part_offsets[i] + vari_remote_part_sizes[i];
+    VLOG(2) << "gpu id: "<< gpu_id << ", before cal, remote size:" << h_remote_part_sizes[i] << ", remote offset: " <<                h_remote_part_offsets[i + 1] << ", end calc, remote part size: " << vari_remote_part_sizes[i] << ", remote offsets: " << vari_remote_part_offsets[i + 1];
+  }
+  VLOG(2) << "end recalc remote size and offsets";
+  //send 前把当前gpuid 的size 和 offset 替换成 vari size 和offset
+  res.h_local_part_sizes = std::move(vari_local_part_sizes);
+  res.h_local_part_offsets = std::move(vari_local_part_offsets);
+  res.h_remote_part_sizes = std::move(vari_remote_part_sizes);
+  res.h_remote_part_offsets = std::move(vari_remote_part_offsets);
+}
+
+template <typename KeyType,
+           typename ValType,
+           typename GradType,
+           typename GPUAccessor>
+template <typename T>
+void HeterComm<KeyType, ValType, GradType, GPUAccessor>::
+send_vari_vals_by_all2all(const int& gpu_id,
+                          const size_t& pull_size,
+                          const size_t& node_num,
+                          const size_t& value_bytes,
+                          uint32_t* d_tmp_size_list,
+                          uint32_t* d_inter_size_list,
+                          const T* d_in_vals,
+                          T* d_tmp_vals,
+                          const cudaStream_t& stream) {
+
+  auto &cache = storage_[gpu_id];
+  auto &res = cache.shard_res;
+
+  size_t total_fea_num = 0;
+  if (rdma_checker_->need_rdma_trans()) {
+    //use this branch
+    total_fea_num =
+        send_vari_vals_by_all2all_trans(gpu_id,
+                                        rank_id_,
+                                        node_size_,
+                                        pull_size,
+                                        node_num,
+                                        d_tmp_size_list,
+                                        d_inter_size_list,
+                                        reinterpret_cast<const char*>(d_in_vals),
+                                        reinterpret_cast<char *>(d_tmp_vals),
+                                        value_bytes,
+                                        stream);
+  } else {
+    std::vector<size_t> h_local_part_sizes_vec(res.h_local_part_sizes);
+    std::vector<size_t> h_local_part_offsets_vec(res.h_local_part_offsets);
+    std::vector<size_t> h_remote_part_sizes_vec(res.h_remote_part_sizes);
+    std::vector<size_t> h_remote_part_offsets_vec(res.h_remote_part_offsets);
+
+    recalc_local_and_remote_size(gpu_id, pull_size, node_num, d_tmp_size_list, d_inter_size_list, stream);
+
+    auto h_local_part_sizes = res.h_local_part_sizes.data();
+    auto h_local_part_offsets = res.h_local_part_offsets.data();
+    auto h_remote_part_sizes = res.h_remote_part_sizes.data();
+    auto h_remote_part_offsets = res.h_remote_part_offsets.data();
+
+    // send local device
+    total_fea_num = send_data_by_all2all(gpu_id,
+                                         node_size_,
+                                         rank_id_,
+                                         value_bytes,
+                                         h_remote_part_sizes,
+                                         h_remote_part_offsets,
+                                         h_local_part_sizes,
+                                         h_local_part_offsets,
+                                         reinterpret_cast<const char*>(d_in_vals),
+                                         reinterpret_cast<char *>(d_tmp_vals),
+                                         stream);
+
+    VLOG(2) << "set origin offsets back";
+    res.h_local_part_sizes = std::move(h_local_part_sizes_vec);
+    res.h_local_part_offsets = std::move(h_local_part_offsets_vec);
+    res.h_remote_part_sizes = std::move(h_remote_part_sizes_vec);
+    res.h_remote_part_offsets = std::move(h_remote_part_offsets_vec);
+    for (size_t k = 0; k < res.h_local_part_sizes.size(); k++) {
+      VLOG(2) << "end set back, " << k << " th, local size: " << res.h_local_part_sizes[k]
+        << ", offsets: " << res.h_local_part_offsets[k + 1];
+      VLOG(2) << "end set back, " << k << " th, local offset: " << res.h_remote_part_sizes[k]
+        << ", offsets: " << res.h_remote_part_offsets[k + 1];
+    }
+  }
+  PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
+  VLOG(0) << "after vari all2all send, total fea num:" << total_fea_num;
 }
 
 template <typename KeyType,
@@ -4047,6 +4193,126 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_keys_by_all2all_trans(
   }
   return total_fea_num;
 }
+
+
+
+template <typename KeyType,
+          typename ValType,
+          typename GradType,
+          typename GPUAccessor>
+size_t
+HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_vari_vals_by_all2all_trans(
+    const int &gpu_id,
+    const int &nccl_rank_id,
+    const int &nccl_node_size,
+    const size_t &pull_size,
+    const size_t &node_num,
+    const uint32_t* d_tmp_size_list,
+    const uint32_t* d_inter_size_list,
+    const char *d_in_vals,
+    char *d_out_vals,
+    const size_t &value_bytes,
+    const cudaStream_t &stream) {
+  auto &my_cache = storage_[gpu_id];
+  auto &res = my_cache.shard_res;
+
+  std::vector<size_t> h_local_part_sizes_vec(res.h_local_part_sizes);
+  std::vector<size_t> h_local_part_offsets_vec(res.h_local_part_offsets);
+  std::vector<size_t> h_remote_part_sizes_vec(res.h_remote_part_sizes);
+  std::vector<size_t> h_remote_part_offsets_vec(res.h_remote_part_offsets);
+
+  recalc_local_and_remote_size(gpu_id, pull_size, node_num, d_tmp_size_list, d_inter_size_list, stream);
+
+  auto h_local_part_sizes = res.h_local_part_sizes.data();
+  auto h_local_part_offsets = res.h_local_part_offsets.data();
+  auto h_remote_part_sizes = res.h_remote_part_sizes.data();
+  auto h_remote_part_offsets = res.h_remote_part_offsets.data();
+
+  size_t total_fea_num = 0;
+  if (!rdma_checker_->is_device_support_rdma(gpu_id)) {
+    int trans_id = get_transfer_devid(gpu_id);
+    auto &trans = storage_[trans_id];
+
+    //const size_t &send_size = h_remote_part_offsets[nccl_node_size];
+    const size_t &send_size = h_remote_part_offsets[nccl_node_size];
+    // p2p copy
+    PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyPeerAsync(trans.d_merged_trans_vals,
+                                                   trans_id,
+                                                   d_in_vals,
+                                                   gpu_id,
+                                                   send_size * value_bytes,
+                                                   stream));
+    PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
+
+    // wait node data ok
+    trans.sem_wait->post();
+    my_cache.sem_wait->wait();
+
+    //const size_t &recv_size = h_local_part_offsets[nccl_node_size];
+    const size_t &recv_size = h_local_part_offsets[nccl_node_size];
+    // p2p copy
+    PADDLE_ENFORCE_GPU_SUCCESS(
+        cudaMemcpyPeerAsync(d_out_vals,
+                            gpu_id,
+                            trans.d_merged_push_trans_vals,
+                            trans_id,
+                            recv_size * value_bytes,
+                            stream));
+    PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
+  } else {
+    my_cache.sem_wait->wait();
+    int trans_id = get_transfer_devid(gpu_id);
+    auto &trans = storage_[trans_id];
+
+    // send local device
+    total_fea_num =
+        send_data_by_all2all(gpu_id,
+                             nccl_node_size,
+                             nccl_rank_id,
+                             value_bytes,
+                             h_remote_part_sizes,
+                             h_remote_part_offsets,
+                             h_local_part_sizes,
+                             h_local_part_offsets,
+                             reinterpret_cast<const char *>(d_in_vals),
+                             reinterpret_cast<char *>(d_out_vals),
+                             stream);
+    VLOG(2) << "gpu id:" << gpu_id << ", send local num: " << total_fea_num;
+
+    // send trans device
+    total_fea_num += send_data_by_all2all(
+        gpu_id,
+        nccl_node_size,
+        nccl_rank_id,
+        value_bytes,
+        trans.shard_res.h_remote_part_sizes.data(),
+        trans.shard_res.h_remote_part_offsets.data(),
+        trans.shard_res.h_local_part_sizes.data(),
+        trans.shard_res.h_local_part_offsets.data(),
+        reinterpret_cast<const char *>(my_cache.d_merged_trans_vals),
+        reinterpret_cast<char *>(my_cache.d_merged_push_trans_vals),
+        stream);
+    VLOG(2) << "gpu id:" << gpu_id << ", send trans num: " << total_fea_num;
+    PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
+    trans.sem_wait->post();
+  }
+  // set back after all2all send
+  VLOG(2) << "set origin offsets back";
+  res.h_local_part_sizes = std::move(h_local_part_sizes_vec);
+  res.h_local_part_offsets = std::move(h_local_part_offsets_vec);
+  res.h_remote_part_sizes = std::move(h_remote_part_sizes_vec);
+  res.h_remote_part_offsets = std::move(h_remote_part_offsets_vec);
+  for (size_t k = 0; k < res.h_local_part_sizes.size(); k++) {
+    VLOG(2) << "end set back, " << k << " th, local size: " << res.h_local_part_sizes[k]
+      << ", offsets: " << res.h_local_part_offsets[k + 1];
+    VLOG(2) << "end set back, " << k << " th, local offset: " << res.h_remote_part_sizes[k]
+      << ", offsets: " << res.h_remote_part_offsets[k + 1];
+  }
+  VLOG(2) << "end set origin offset back";
+
+  return total_fea_num;
+}
+
 template <typename KeyType,
           typename ValType,
           typename GradType,
@@ -4153,8 +4419,8 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
     auto &trans = storage_[trans_id];
 
     // wait node alloc hbm
-    //    trans.sem_wait->post();
-    //    my_cache.sem_wait->wait();
+    // trans.sem_wait->post();
+    // my_cache.sem_wait->wait();
     const size_t &recv_total_size =
         my_cache.shard_res.h_remote_part_offsets[nccl_node_size];
     size_t need_len = std::max(fea_size, recv_total_size);

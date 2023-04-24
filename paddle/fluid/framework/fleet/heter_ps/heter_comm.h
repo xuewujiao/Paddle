@@ -587,6 +587,23 @@ class HeterComm {
                                       void* d_tmp_vals,
                                       const cudaStream_t& stream);
   template<typename T>
+  void send_vari_vals_by_all2all(const int& gpu_id,
+                                 const size_t& pull_size,
+                                 const size_t& node_num,
+                                 const size_t& value_bytes,
+                                 uint32_t* d_tmp_size_list,
+                                 uint32_t* d_inter_size_list,
+                                 const T* d_in_vals,
+                                 T* d_tmp_vals,
+                                 const cudaStream_t& stream);
+  void recalc_local_and_remote_size(const int& gpu_id,
+                                    const size_t& pull_size,
+                                    const size_t& node_num,
+                                    const uint32_t* d_tmp_size_list,
+                                    const uint32_t* d_inter_size_list,
+                                    const cudaStream_t &stream);
+
+  template<typename T>
   void scatter_inter_vals_by_all2all_common(
           const int& gpu_id,
           const size_t& len,
@@ -597,8 +614,10 @@ class HeterComm {
           const cudaStream_t& stream) {
     auto &cache = storage_[gpu_id];
     auto &res = cache.shard_res;
+
     auto h_local_part_sizes = res.h_local_part_sizes.data();
     auto h_local_part_offsets = res.h_local_part_offsets.data();
+
     auto h_remote_part_sizes = res.h_remote_part_sizes.data();
     auto h_remote_part_offsets = res.h_remote_part_offsets.data();
 
@@ -705,6 +724,17 @@ class HeterComm {
                                     char* d_out_vals,
                                     const size_t& value_bytes,
                                     const cudaStream_t& stream);
+ size_t send_vari_vals_by_all2all_trans(const int &gpu_id,
+                                        const int &nccl_rank_id,
+                                        const int &nccl_node_size,
+                                        const size_t &pull_size,
+                                        const size_t &node_num,
+                                        const uint32_t* d_tmp_size_list,
+                                        const uint32_t* d_size_list,
+                                        const char *d_in_vals,
+                                        char *d_out_vals,
+                                        const size_t &value_bytes,
+                                        const cudaStream_t &stream);
   size_t send_gradient_by_all2all_trans(const int& gpu_id,
                                         const int& rank_id,
                                         const int& node_size,

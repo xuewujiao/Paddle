@@ -916,6 +916,8 @@ class PSGPUWrapper {
   int GetNCCLRankId(const int &device_id) {
     return (rank_id_ * device_num_ + device_id);
   }
+  // infer mode
+  bool GetInferMode(void) { return infer_mode_;  }
 
  private:
   static std::shared_ptr<PSGPUWrapper> s_instance_;

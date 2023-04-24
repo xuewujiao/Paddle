@@ -1341,16 +1341,12 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num) {
     }
   }
 
-  uint32_t *d_feature_size_list_ptr =
-      reinterpret_cast<uint32_t *>(d_feature_size_list_buf_->ptr());
-  uint32_t *d_feature_size_prefixsum_ptr =
-      reinterpret_cast<uint32_t *>(d_feature_size_prefixsum_buf_->ptr());
   int fea_num =
       gpu_graph_ptr->get_feature_info_of_nodes(conf_.gpuid,
                                                d_walk,
                                                key_num,
-                                               d_feature_size_list_ptr,
-                                               d_feature_size_prefixsum_ptr,
+                                               d_feature_size_list_buf_,
+                                               d_feature_size_prefixsum_buf_,
                                                d_feature_list,
                                                d_slot_list);
   int64_t *slot_tensor_ptr_[conf_.slot_num];
@@ -1382,6 +1378,13 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num) {
   uint64_t *d_feature_list_ptr =
       reinterpret_cast<uint64_t *>(d_feature_list->ptr());
   uint8_t *d_slot_list_ptr = reinterpret_cast<uint8_t *>(d_slot_list->ptr());
+  uint32_t *d_feature_size_list_ptr =
+       reinterpret_cast<uint32_t *>(d_feature_size_list_buf_->ptr());
+  uint32_t *d_feature_size_prefixsum_ptr =
+       reinterpret_cast<uint32_t *>(d_feature_size_prefixsum_buf_->ptr());
+  VLOG(0) << "end trans feature list and slot list";
+
+  CUDA_CHECK(cudaStreamSynchronize(train_stream_));
 
   std::shared_ptr<phi::Allocation> d_each_ins_slot_num_inner_prefix =
       memory::AllocShared(place_, (conf_.slot_num * key_num) * sizeof(uint32_t));
@@ -2437,7 +2440,7 @@ int GraphDataGenerator::FillWalkBuf() {
         VLOG(0) << "sample epoch finish!";
         break;
       } else if (sample_command == EVENT_WALKBUF_FULL) {
-        // end sampling current pass 
+        // end sampling current pass
         VLOG(0) << "sample pass finish!";
         break;
       } else if (sample_command == EVENT_CONTINUE_SAMPLE) {
@@ -3182,6 +3185,8 @@ void GraphDataGenerator::AllocResource(
 }
 
 void GraphDataGenerator::AllocTrainResource(int thread_id) {
+/**
+<<<<<<< Updated upstream
   if (conf_.slot_num > 0) {
     platform::CUDADeviceGuard guard(conf_.gpuid);
     if (!conf_.sage_mode) {
@@ -3189,10 +3194,24 @@ void GraphDataGenerator::AllocTrainResource(int thread_id) {
           memory::AllocShared(place_, (conf_.batch_size * 2) * sizeof(uint32_t));
       d_feature_size_prefixsum_buf_ =
           memory::AllocShared(place_, (conf_.batch_size * 2 + 1) * sizeof(uint32_t));
+=======
+**/
+  if (conf_.slot_num > 0) {
+    platform::CUDADeviceGuard guard(conf_.gpuid);
+    d_feature_size_list_buf_ = NULL;
+    d_feature_size_prefixsum_buf_ = NULL;
+/**
+    if (!sage_mode_) {
+      //d_feature_size_list_buf_ =
+      //    memory::AllocShared(place_, (batch_size_ * 2) * sizeof(uint32_t));
+      //d_feature_size_prefixsum_buf_ =
+      //    memory::AllocShared(place_, (batch_size_ * 2 + 1) * sizeof(uint32_t));
+>>>>>>> Stashed changes
     } else {
       d_feature_size_list_buf_ = NULL;
       d_feature_size_prefixsum_buf_ = NULL;
     }
+**/
   }
 }
 
