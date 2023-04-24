@@ -987,6 +987,7 @@ class GraphDataGenerator {
   void clear_gpu_mem();
   bool get_pass_end_for_sage(int flag);
   int multi_node_sync_sample(int flag, const ncclRedOp_t& op);
+  int dynamic_adjust_batch_num_for_sage();
 
  protected:
   HashTable<uint64_t, uint64_t>* table_;
