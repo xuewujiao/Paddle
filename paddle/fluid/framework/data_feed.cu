@@ -1382,7 +1382,7 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num) {
        reinterpret_cast<uint32_t *>(d_feature_size_list_buf_->ptr());
   uint32_t *d_feature_size_prefixsum_ptr =
        reinterpret_cast<uint32_t *>(d_feature_size_prefixsum_buf_->ptr());
-  VLOG(0) << "end trans feature list and slot list";
+  VLOG(2) << "end trans feature list and slot list";
 
   CUDA_CHECK(cudaStreamSynchronize(train_stream_));
 
