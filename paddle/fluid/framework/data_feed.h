@@ -960,6 +960,9 @@ class GraphDataGenerator {
       return;
     }
   }
+  bool GetSageMode() {
+    return conf_.sage_mode;
+  }
   void ResetEpochFinish() { epoch_finish_ = false; }
   void reset_pass_end() { pass_end_ = 0; }
   void ClearSampleState();
@@ -1172,6 +1175,13 @@ class DataFeed {
   virtual void SetNewBatchsize(int batch_num) {
 #if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
     gpu_graph_data_generator_.SetNewBatchsize(batch_num);
+#endif
+  }
+  virtual bool GetSageMode() {
+#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
+    return gpu_graph_data_generator_.GetSageMode();
+#else
+    return 0;
 #endif
   }
   virtual int GetGraphPathNum() {

@@ -1946,7 +1946,8 @@ void SlotRecordDataset::PrepareTrain() {
 void SlotRecordDataset::DynamicAdjustBatchNum() {
   VLOG(3) << "dynamic adjust batch num of graph in multi node";
 #if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
-  if (gpu_graph_mode_) {
+  bool sage_mode = readers_[i]->GetSageMode();
+  if (gpu_graph_mode_ && !sage_mode) {
     int thread_max_batch_num = 0;
     for (size_t i = 0; i < readers_.size(); i++) {
       int batch_size = readers_[i]->GetCurBatchSize();
