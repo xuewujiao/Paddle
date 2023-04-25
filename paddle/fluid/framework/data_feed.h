@@ -1077,7 +1077,6 @@ class GraphDataGenerator {
   std::string infer_node_type_;
   bool is_multi_node_;
   phi::DenseTensor multi_node_sync_stat_;
-  bool cls_mode_;
 };
 
 class DataFeed {

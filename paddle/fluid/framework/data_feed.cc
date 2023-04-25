@@ -2711,6 +2711,12 @@ int SlotRecordInMemoryDataFeed::Next() {
 #endif
 }
 
+#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
+void SlotRecordInMemoryDataFeed::PrepareGraphData() {
+  gpu_graph_data_generator_.PrepareGraphData();
+}
+#endif
+
 void SlotRecordInMemoryDataFeed::DumpWalkPath(std::string dump_path,
                                               size_t dump_rate) {
   VLOG(3) << "INTO SlotRecordInMemoryDataFeed::DumpWalkPath";

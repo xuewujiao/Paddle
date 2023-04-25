@@ -687,8 +687,12 @@ int GraphDataGenerator::FillGraphIdShowClkTensor(int uniq_instance,
   index_tensor_ptr_ = feed_vec_[index_offset]->mutable_data<int>(
       {total_instance}, this->place_);
   if (conf_.get_degree) {
-    degree_tensor_ptr_ = feed_vec_[index_offset + 1]->mutable_data<int>(
+    degree_tensor_ptr_ = feed_vec_[++index_offset]->mutable_data<int>(
         {uniq_instance * edge_to_id_len_}, this->place_);
+  }
+  if (conf_.cls_mode) {
+    node_label_ptr_ = feed_vec_[++index_offset]->mutable_data<int>(
+        {total_instance}, this->place_);
   }
 
   int len_samples = samples_.size();
@@ -774,6 +778,13 @@ int GraphDataGenerator::FillGraphIdShowClkTensor(int uniq_instance,
     cudaMemcpyAsync(degree_tensor_ptr_,
                     node_degree_vec_[index]->ptr(),
                     sizeof(int) * uniq_instance * edge_to_id_len_,
+                    cudaMemcpyDeviceToDevice,
+                    train_stream_);
+  }
+  if (conf_.cls_mode) {
+    cudaMemcpyAsync(node_label_ptr_,
+                    node_label_vec_[index]->ptr(),
+                    sizeof(int) * total_instance,
                     cudaMemcpyDeviceToDevice,
                     train_stream_);
   }
@@ -941,8 +952,8 @@ int GraphDataGenerator::GenerateBatch() {
     if (!conf_.sage_mode) {
       while (ins_buf_pair_len_ < conf_.batch_size) {
         res = FillInsBuf(d_walk_, d_walk_ntype_, conf_, d_random_row_,
-                        d_random_row_col_shift_, buf_state_, d_ins_buf_, d_pair_label_buf_,
-                        d_pair_num_, ins_buf_pair_len_, train_stream_);
+                         d_random_row_col_shift_, buf_state_, d_ins_buf_, d_pair_label_buf_,
+                         d_pair_num_, ins_buf_pair_len_, train_stream_);
         if (res == -1) {
           if (ins_buf_pair_len_ == 0) {
             if (is_multi_node_) {
@@ -2075,8 +2086,8 @@ uint64_t CopyUniqueNodes(HashTable<uint64_t, uint64_t>* table,
 }
 
 void GraphDataGenerator::PrepareGraphData() {
-  VLOG(0) << "in PrepareGraphData: " << cls_mode_;
-  if (!cls_mode_) {
+  VLOG(0) << "in PrepareGraphData: " << conf_.cls_mode;
+  if (!conf_.cls_mode) {
     DoWalkandSage();
   } else {
     DoSage();
@@ -2265,6 +2276,9 @@ void GraphDataGenerator::DoSage() {
     }
   }
 
+  VLOG(0) << conf_.thread_id << " before train, cursor: " << cursor
+                             << " h_deivce_keys_len: " << h_device_keys_len_[cursor];
+
   infer_node_start_ = global_node_type_start[cursor];
   infer_cursor_ = cursor;
   // Begin Sage
@@ -2273,6 +2287,7 @@ void GraphDataGenerator::DoSage() {
   int total_instance = 0, uniq_instance = 0;
   total_instance = (infer_node_start_ + conf_.batch_size <= device_key_size)
                     ? conf_.batch_size : device_key_size - infer_node_start_;
+
   if (total_instance > 0) {
     // 先设置一个随机值
     int batch_per_pass_ = 1000;
@@ -2322,7 +2337,7 @@ void GraphDataGenerator::DoSage() {
                     sample_stream_);
   }
 
-  VLOG(0) << "train sage_batch_num: " << sage_batch_num_;
+  VLOG(0) << "device " << conf_.gpuid << ", train sage_batch_num: " << sage_batch_num_;
   global_node_type_start[infer_cursor_] += total_row_;
   debug_gpu_memory_info(device_id, "DoSage end");
 }
@@ -2403,12 +2418,21 @@ int GraphDataGenerator::FillInferBuf() {
 
 void GraphDataGenerator::ClearSampleState() {
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
-  auto &finish_node_type = gpu_graph_ptr->finish_node_type_[conf_.gpuid];
-  auto &node_type_start = gpu_graph_ptr->node_type_start_[conf_.gpuid];
-  finish_node_type.clear();
-  for (auto iter = node_type_start.begin(); iter != node_type_start.end();
-       iter++) {
-    iter->second = 0;
+  if (!conf_.cls_mode) {
+    auto &finish_node_type = gpu_graph_ptr->finish_node_type_[conf_.gpuid];
+    auto &node_type_start = gpu_graph_ptr->node_type_start_[conf_.gpuid];
+    finish_node_type.clear();
+    for (auto iter = node_type_start.begin(); iter != node_type_start.end();
+         iter++) {
+      iter->second = 0;
+    }
+  } else {
+    auto &cls_node_type_start =
+        gpu_graph_ptr->global_infer_node_type_start_[conf_.gpuid];
+    for (auto iter = cls_node_type_start.begin(); iter != cls_node_type_start.end();
+         iter++) {
+      iter->second = 0;
+    }
   }
 }
 
