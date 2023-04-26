@@ -1075,7 +1075,6 @@ class GraphDataGenerator {
   std::set<int> infer_node_type_index_set_;
   std::string infer_node_type_;
   bool is_multi_node_;
-  phi::DenseTensor sync_stat_;
   phi::DenseTensor multi_node_sync_stat_;
 };
 

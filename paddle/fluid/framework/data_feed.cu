@@ -3175,16 +3175,6 @@ void GraphDataGenerator::AllocResource(
   }
 #endif
 
-  if (is_multi_node_) {
-    float *stat_ptr = sync_stat_.mutable_data<float>(place_, sizeof(float) * 3);
-    float flags[] = {0.0, 1.0, 1.0};
-    CUDA_CHECK(cudaMemcpyAsync(stat_ptr,
-                               &flags,
-                               sizeof(float) * 3,
-                               cudaMemcpyHostToDevice,
-                               sample_stream_));
-    CUDA_CHECK(cudaStreamSynchronize(sample_stream_));
-  }
   // infer_node_type_start_ = std::vector<int>(h_device_keys_.size(), 0);
   // for (size_t i = 0; i < h_device_keys_.size(); i++) {
   //   for (size_t j = 0; j < h_device_keys_[i]->size(); j++) {
