@@ -2120,6 +2120,7 @@ void GraphDataGenerator::DoWalkandSage() {
       if (train_flag) {
         int total_instance = 0, uniq_instance = 0;
         bool ins_pair_flag = true;
+        int sage_pass_end = 0;
         uint64_t *ins_buf, *ins_cursor;
         while (ins_pair_flag) {
           int res = 0;
@@ -2131,7 +2132,7 @@ void GraphDataGenerator::DoWalkandSage() {
             if (res == -1) {
               if (ins_buf_pair_len_ == 0) {
                 if (is_multi_node_) {
-                  sage_pass_end_ = 1;
+                  sage_pass_end = 1;
                   if (total_row_ != 0) {
                     buf_state_.Reset(total_row_);
                     VLOG(1) << "reset buf state to make batch num equal in multi node";
@@ -2148,11 +2149,10 @@ void GraphDataGenerator::DoWalkandSage() {
 
           // check whether reach sage pass end
           if (is_multi_node_) {
-            bool res = get_pass_end_for_sage(sage_pass_end_);
-            // no need to reset here, we reset pass_end_ in hogwild_worker.
+            // bool res = get_pass_end_for_sage(sage_pass_end_);
+            int res = multi_node_sync_sample(sage_pass_end, ncclProd);
             if (res) { 
               ins_pair_flag = false;
-              sage_pass_end_ = 0;
             }
           }
 

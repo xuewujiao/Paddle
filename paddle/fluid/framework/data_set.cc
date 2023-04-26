@@ -1946,10 +1946,11 @@ void SlotRecordDataset::PrepareTrain() {
 void SlotRecordDataset::DynamicAdjustBatchNum() {
   VLOG(3) << "dynamic adjust batch num of graph in multi node";
 #if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
-  bool sage_mode = readers_[i]->GetSageMode();
-  if (gpu_graph_mode_ && !sage_mode) {
+  if (gpu_graph_mode_) {
+    bool sage_mode = 0;
     int thread_max_batch_num = 0;
     for (size_t i = 0; i < readers_.size(); i++) {
+      sage_mode = readers_[i]->GetSageMode();
       int batch_size = readers_[i]->GetCurBatchSize();
       int64_t ins_num = readers_[i]->GetGraphPathNum();
       int batch_num = (ins_num + batch_size - 1) / batch_size;
@@ -1961,7 +1962,7 @@ void SlotRecordDataset::DynamicAdjustBatchNum() {
     }
 #ifdef PADDLE_WITH_GLOO
     auto gloo_wrapper = paddle::framework::GlooWrapper::GetInstance();
-    if (gloo_wrapper->Size() > 1) {
+    if (gloo_wrapper->Size() > 1 && !sage_mode) {
       if (!gloo_wrapper->IsInitialized()) {
         VLOG(0) << "GLOO is not inited";
         gloo_wrapper->Init();

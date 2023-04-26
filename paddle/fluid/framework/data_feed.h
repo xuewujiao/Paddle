@@ -1065,7 +1065,6 @@ class GraphDataGenerator {
   std::vector<int> samples_;
   bool epoch_finish_;
   int pass_end_ = 0;
-  int sage_pass_end_ = 0;
   std::vector<uint64_t> host_vec_;
   std::vector<uint64_t> h_device_keys_len_;
   uint64_t h_train_metapath_keys_len_;
