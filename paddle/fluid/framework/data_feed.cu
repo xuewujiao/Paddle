@@ -2138,34 +2138,6 @@ uint64_t CopyUniqueNodes(
   return 0;
 }
 
-bool GraphDataGenerator::get_pass_end_for_sage(int flag) {
-  float ret = 0.0;
-  if (flag > 1) {
-    flag = 1;
-  } else if (flag < 0) {
-    flag = 0;
-  }
-
-  float *stat_ptr = sync_stat_.data<float>();
-  auto comm =
-      platform::NCCLCommContext::Instance().Get(0, place_.GetDeviceId());
-  PADDLE_ENFORCE_GPU_SUCCESS(
-      platform::dynload::ncclAllReduce(&stat_ptr[flag],
-                                       &stat_ptr[2],
-                                       1,
-                                       ncclFloat32,
-                                       ncclProd,
-                                       comm->comm(),
-                                       sample_stream_));
-  CUDA_CHECK(cudaMemcpyAsync(&ret,
-                             &stat_ptr[2],
-                             sizeof(float),
-                             cudaMemcpyDeviceToHost,
-                             sample_stream_));
-  CUDA_CHECK(cudaStreamSynchronize(sample_stream_));
-  return (ret > 0.0);
-}
-
 void GraphDataGenerator::DoWalkandSage() {
   int device_id = place_.GetDeviceId();
   debug_gpu_memory_info(device_id, "DoWalkandSage start");
@@ -2220,7 +2192,6 @@ void GraphDataGenerator::DoWalkandSage() {
 
           // check whether reach sage pass end
           if (is_multi_node_) {
-            // bool res = get_pass_end_for_sage(sage_pass_end_);
             int res = multi_node_sync_sample(sage_pass_end, ncclProd);
             if (res) { 
               ins_pair_flag = false;
@@ -2599,22 +2570,17 @@ int GraphDataGenerator::FillWalkBuf() {
         // end sampling current epoch
         cursor = 0;
         epoch_finish_ = true;
-        VLOG(2) << "sample epoch finish!";
+        VLOG(0) << "sample epoch finish!";
         break;
       } else if (sample_command == EVENT_WALKBUF_FULL) {
-<<<<<<< HEAD
-        // end sampling current pass 
-        VLOG(2) << "sample pass finish!";
-=======
         // end sampling current pass
         VLOG(0) << "sample pass finish!";
->>>>>>> e7478b7cd575c44ad17d020df8ea1c6ba65544f4
         break;
       } else if (sample_command == EVENT_CONTINUE_SAMPLE) {
         // continue sampling
       } else {
         // shouldn't come here
-        VLOG(2) << "should not come here, sample_command:" << sample_command;
+        VLOG(0) << "should not come here, sample_command:" << sample_command;
         assert(false);
       }
     }

@@ -605,6 +605,7 @@ class HeterComm {
 
     size_t total_fea_num = 0;
     if (rdma_checker_->need_rdma_trans() && !sage) {
+      // Sage mode can not run this branch currently, otherwise the process will hang here.
       total_fea_num =
           send_vals_by_all2all_trans(gpu_id,
                   rank_id_,
