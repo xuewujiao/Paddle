@@ -77,10 +77,6 @@ class GpuPsGraphTable
     for (int i = 0; i < gpu_num; i++) {
       device_mutex_[i] = new std::mutex();
     }
-//#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
-//    auto ps_wrapper = paddle::framework::PSGPUWrapper::GetInstance();
-//    infer_mode_ = ps_wrapper->GetInferMode();
-//#endif
   }
   ~GpuPsGraphTable() {
     for (size_t i = 0; i < device_mutex_.size(); ++i) {
@@ -123,7 +119,26 @@ class GpuPsGraphTable
                                                 bool cpu_query_switch,
                                                 bool compress,
                                                 bool weighted);
+  NeighborSampleResultV2 graph_neighbor_sample_sage(
+      int gpu_id,
+      int edge_type_len,
+      uint64_t* key,
+      int sample_size,
+      int len,
+      std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,
+      bool weighted,
+      bool return_weight);
   NeighborSampleResultV2 graph_neighbor_sample_all_edge_type(
+      int gpu_id,
+      int edge_type_len,
+      uint64_t *key,
+      int sample_size,
+      int len,
+      std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,
+      bool weighted,
+      bool return_weight,
+      bool for_all2all = false);
+  NeighborSampleResultV2 graph_neighbor_sample_sage_all2all(
       int gpu_id,
       int edge_type_len,
       uint64_t *key,
@@ -170,13 +185,6 @@ class GpuPsGraphTable
                            int slot_num,
                            int *d_slot_feature_num_map,
                            int fea_num_per_node);
-  int get_feature_of_nodes_normal(int gpu_id,
-                                  uint64_t *d_walk,
-                                  uint64_t *d_offset,
-                                  int size,
-                                  int slot_num,
-                                  int *d_slot_feature_num_map,
-                                  int fea_num_per_node);
   int get_feature_info_of_nodes(
       int gpu_id,
       uint64_t *d_nodes,

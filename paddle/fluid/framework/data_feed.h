@@ -893,11 +893,12 @@ struct BufState {
 };
 
 /// Related behaviors and events during sampling
-const int EVENT_FINISH_EPOCH = 0;       // End of sampling single epoch
-const int EVENT_CONTINUE_SAMPLE = 1;    // Continue sampling
-const int EVENT_WALKBUF_FULL = 2;       // d_walk is full, end current pass sampling
-const int EVENT_NOT_SWTICH = 0;         // Continue sampling on the current metapath.
-const int EVENT_SWTICH_METAPATH = 1;    // Switch to the next metapath to perform sampling
+const int EVENT_FINISH_EPOCH = 0;     // End of sampling single epoch
+const int EVENT_CONTINUE_SAMPLE = 1;  // Continue sampling
+const int EVENT_WALKBUF_FULL = 2;  // d_walk is full, end current pass sampling
+const int EVENT_NOT_SWTICH = 0;    // Continue sampling on the current metapath.
+const int EVENT_SWTICH_METAPATH =
+    1;  // Switch to the next metapath to perform sampling
 
 struct GraphDataGeneratorConfig {
   bool need_walk_ntype;
@@ -940,8 +941,7 @@ class GraphDataGenerator {
   int FillInferBuf();
   void DoWalkandSage();
   int FillSlotFeature(uint64_t* d_walk);
-  int FillIdShowClkTensor(int total_instance,
-                          bool gpu_graph_training);
+  int FillIdShowClkTensor(int total_instance, bool gpu_graph_training);
   int FillGraphIdShowClkTensor(int uniq_instance,
                                int total_instance,
                                int index);
@@ -952,13 +952,16 @@ class GraphDataGenerator {
   int FillSlotFeature(uint64_t* d_walk, size_t key_num);
   int GetPathNum() { return total_row_; }
   void ResetPathNum() { total_row_ = 0; }
-  int GetGraphBatchsize() {return conf_.batch_size;};
+  int GetGraphBatchsize() { return conf_.batch_size; };
   void SetNewBatchsize(int batch_num) {
-    if (!conf_.gpu_graph_training && !conf_.sage_mode) {
+    if (!conf_.gpu_graph_training) {
       conf_.batch_size = (total_row_ + batch_num - 1) / batch_num;
     } else {
       return;
     }
+  }
+  bool GetSageMode() {
+    return conf_.sage_mode;
   }
   void ResetEpochFinish() { epoch_finish_ = false; }
   void reset_pass_end() { pass_end_ = 0; }
@@ -986,6 +989,7 @@ class GraphDataGenerator {
   int get_pass_end() { return pass_end_; }
   void clear_gpu_mem();
   int multi_node_sync_sample(int flag, const ncclRedOp_t& op);
+  int dynamic_adjust_batch_num_for_sage();
 
  protected:
   HashTable<uint64_t, uint64_t>* table_;
@@ -1170,6 +1174,13 @@ class DataFeed {
     gpu_graph_data_generator_.SetNewBatchsize(batch_num);
 #endif
   }
+  virtual bool GetSageMode() {
+#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
+    return gpu_graph_data_generator_.GetSageMode();
+#else
+    return 0;
+#endif
+  }
   virtual int GetGraphPathNum() {
 #if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
     return gpu_graph_data_generator_.GetPathNum();
@@ -1193,9 +1204,7 @@ class DataFeed {
     return gpu_graph_data_generator_.get_pass_end();
   }
 
-  virtual void reset_pass_end() {
-    gpu_graph_data_generator_.reset_pass_end();
-  }
+  virtual void reset_pass_end() { gpu_graph_data_generator_.reset_pass_end(); }
 
   virtual void ResetPathNum() { gpu_graph_data_generator_.ResetPathNum(); }
 
