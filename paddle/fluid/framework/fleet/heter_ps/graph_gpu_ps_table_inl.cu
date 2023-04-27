@@ -2913,9 +2913,11 @@ int GpuPsGraphTable::get_feature_info_of_nodes_all2all(
    int total_gpu = resource_->total_device();
    auto stream = resource_->local_stream(gpu_id, 0);
    auto &loc = storage_[gpu_id];
+   auto &res = loc.shard_res;
 
    size_t pull_size = 0;
-   loc.alloc(node_num, sizeof(uint64_t) /*key_bytes*/);
+   //loc.alloc(node_num, sizeof(uint64_t) /*key_bytes*/);
+   loc.alloc(node_num, sizeof(uint32_t) /*key_bytes*/);
    pull_size = gather_inter_keys_by_all2all(gpu_id,
                                              node_num,
                                              d_nodes,
@@ -3020,6 +3022,8 @@ int GpuPsGraphTable::get_feature_info_of_nodes_all2all(
                       phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
    uint8_t* slot_list_ptr = reinterpret_cast<uint8_t*>(slot_list->ptr());
 
+   //calc new offset
+   recalc_local_and_remote_size(gpu_id, pull_size, node_num, d_tmp_size_list_ptr, inter_size_list_ptr, stream);
 
    VLOG(2) << "begin send feature list";
    std::shared_ptr<phi::Allocation> inter_feature_list =
@@ -3028,15 +3032,16 @@ int GpuPsGraphTable::get_feature_info_of_nodes_all2all(
                      phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
    uint64_t *inter_feature_list_ptr =
        reinterpret_cast<uint64_t*>(inter_feature_list->ptr());
-   send_vari_vals_by_all2all(gpu_id,
-                             pull_size,
-                             node_num,
-                             sizeof(uint64_t),
-                             reinterpret_cast<uint32_t*>(d_tmp_size_list_ptr),
-                             reinterpret_cast<uint32_t*>(inter_size_list_ptr),
-                             reinterpret_cast<const uint64_t*>(d_tmp_feature_list_ptr),  //in
-                             reinterpret_cast<uint64_t*>(inter_feature_list_ptr),       //out
-                             stream);
+
+   scatter_inter_vals_by_all2all_common(gpu_id,
+                                        node_num,
+                                        sizeof(uint64_t),
+                                        reinterpret_cast<const uint64_t*>(d_tmp_feature_list_ptr),
+                                        reinterpret_cast<uint64_t*>(feature_list_ptr),
+                                        reinterpret_cast<uint64_t*>(inter_feature_list_ptr),
+                                        stream,
+                                        false,
+                                        true);
    VLOG(2) << "end send feature list";
 
    VLOG(2) << "begin send slot list";
@@ -3046,16 +3051,16 @@ int GpuPsGraphTable::get_feature_info_of_nodes_all2all(
                          phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
    uint8_t *inter_slot_list_ptr =
            reinterpret_cast<uint8_t*>(inter_slot_list->ptr());
-   send_vari_vals_by_all2all(gpu_id,
-                             pull_size,
-                             node_num,
-                             sizeof(uint8_t),
-                             reinterpret_cast<uint32_t*>(d_tmp_size_list_ptr),
-                             reinterpret_cast<uint32_t*>(inter_size_list_ptr),
-                             reinterpret_cast<const uint8_t*>(d_tmp_slot_list_ptr),  //in
-                             reinterpret_cast<uint8_t*>(inter_slot_list_ptr),   //out
-                             stream);
 
+   scatter_inter_vals_by_all2all_common(gpu_id,
+                                        node_num,
+                                        sizeof(uint8_t),
+                                        reinterpret_cast<const uint8_t*>(d_tmp_slot_list_ptr),
+                                        reinterpret_cast<uint8_t*>(slot_list_ptr),
+                                        reinterpret_cast<uint8_t*>(inter_slot_list_ptr),
+                                        stream,
+                                        false,
+                                        true);
    VLOG(2) << "end send slot list";
 
    auto inter_size_list_prefix_sum =
