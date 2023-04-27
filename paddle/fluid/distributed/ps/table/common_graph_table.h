@@ -78,6 +78,24 @@ class GraphShard {
     }
     return bucket_num;
   }
+  size_t get_all_id_and_label(std::vector<std::vector<uint64_t>> *shard_keys,
+                              std::vector<std::vector<int>> *shard_labels,
+                              int slice_num) {
+    int bucket_num = bucket.size();
+    shard_keys->resize(slice_num);
+    shard_labels->resize(slice_num);
+    for (int i = 0; i < slice_num; i++) {
+      (*shard_keys)[i].reserve(bucket_num / slice_num);
+      (*shard_labels)[i].reserve(bucket_num / slice_num);
+    }
+    for (int i = 0; i < bucket_num; i++) {
+      uint64_t k = bucket[i]->get_id();
+      (*shard_keys)[k % slice_num].emplace_back(k);
+      int label = bucket[i]->get_node_label();
+      (*shard_labels)[k % slice_num].emplace_back(label);
+    }
+    return bucket_num;
+  }
   size_t get_all_neighbor_id(std::vector<std::vector<uint64_t>> *total_res,
                              int slice_num) {
     std::vector<uint64_t> keys;
@@ -579,7 +597,8 @@ class GraphTable : public Table {
   int32_t parse_node_and_load(std::string ntype2files,
                               std::string graph_data_local_path,
                               int part_num,
-                              bool load_slot = true);
+                              bool load_slot = true,
+                              bool cls_mode = false);  
   std::string get_inverse_etype(std::string &etype);  // NOLINT
   int32_t parse_type_to_typepath(
       std::string &type2files,  // NOLINT
@@ -600,6 +619,11 @@ class GraphTable : public Table {
                  int idx,
                  int slice_num,
                  std::vector<std::vector<uint64_t>> *output);
+  int get_all_id_and_label(GraphTableType table_type,
+                           int idx,
+                           int slice_num,
+                           std::vector<std::vector<uint64_t>> *keys,
+                           std::vector<std::vector<int>> *labels);
   int get_all_neighbor_id(GraphTableType table_type,
                           int id,
                           int slice_num,
@@ -612,7 +636,8 @@ class GraphTable : public Table {
                              std::vector<std::vector<uint64_t>> *output);
   int32_t load_nodes(const std::string &path,
                      std::string node_type = std::string(),
-                     bool load_slot = true);
+                     bool load_slot = true,
+                     bool cls_mode = false);
   std::pair<uint64_t, uint64_t> parse_edge_file(const std::string &path,
                                                 int idx,
                                                 bool reverse,
@@ -620,9 +645,11 @@ class GraphTable : public Table {
   std::pair<uint64_t, uint64_t> parse_node_file(const std::string &path,
                                                 const std::string &node_type,
                                                 int idx,
-                                                bool load_slot = true);
+                                                bool load_slot = true,
+                                                bool cls_mode = false);
   std::pair<uint64_t, uint64_t> parse_node_file(const std::string &path,
-                                                bool load_slot = true);
+                                                bool load_slot = true,
+                                                bool cls_mode = false);
   int32_t add_graph_node(int idx,
                          std::vector<uint64_t> &id_list,      // NOLINT
                          std::vector<bool> &is_weight_list);  // NOLINT
@@ -756,7 +783,7 @@ class GraphTable : public Table {
 
   void build_graph_total_keys();
   void build_graph_type_keys();
-  void build_node_iter_type_keys();
+  void build_node_iter_type_keys(bool cls_mode = false);
   bool is_key_for_self_rank(const uint64_t &id);
   void graph_partition(bool is_edge);
   void dbh_graph_edge_partition();
@@ -764,6 +791,7 @@ class GraphTable : public Table {
 
   std::vector<uint64_t> graph_total_keys_;
   std::vector<std::vector<uint64_t>> graph_type_keys_;
+  std::vector<std::vector<int>> graph_type_labels_;
   std::unordered_map<int, int> type_to_index_;
   robin_hood::unordered_set<uint64_t> unique_all_edge_keys_;
 

@@ -101,6 +101,9 @@ class GraphGpuWrapper {
                               int part_num,
                               bool training);
   int set_node_iter_from_graph(bool training);
+  int set_cls_node_and_label_from_file(std::string ntype2files,
+                                       std::string nodes_file_path,
+                                       int part_num);
   int32_t load_next_partition(int idx);
   int32_t get_partition_num(int idx);
   void load_node_weight(int type_id, int idx, std::string path);
@@ -193,8 +196,13 @@ class GraphGpuWrapper {
   void init_type_keys(
       std::vector<std::vector<std::shared_ptr<phi::Allocation>>>& keys,
       std::vector<std::vector<uint64_t>>& lens);
+  void init_type_keys_and_labels(
+      std::vector<std::vector<std::shared_ptr<phi::Allocation>>>& keys,
+      std::vector<std::vector<std::shared_ptr<phi::Allocation>>>& labels,
+      std::vector<std::vector<uint64_t>>& lens);
   std::vector<uint64_t>& get_graph_total_keys();
   std::vector<std::vector<uint64_t>>& get_graph_type_keys();
+  std::vector<std::vector<int>>& get_graph_type_labels();
   std::unordered_map<int, int>& get_graph_type_to_index();
   std::string& get_node_type_size(std::string first_node_type);
   std::string& get_edge_type_size();
@@ -232,6 +240,8 @@ class GraphGpuWrapper {
   std::vector<std::vector<uint64_t>> h_graph_all_type_keys_len_;
   std::vector<std::vector<std::shared_ptr<phi::Allocation>>>
       d_node_iter_graph_all_type_keys_;
+  std::vector<std::vector<std::shared_ptr<phi::Allocation>>>
+      d_node_iter_graph_all_type_labels_;
   std::vector<std::vector<uint64_t>> h_node_iter_graph_all_type_keys_len_;
   std::vector<std::shared_ptr<phi::Allocation>> d_node_iter_graph_metapath_keys_;
   std::vector<size_t> h_node_iter_graph_metapath_keys_len_;

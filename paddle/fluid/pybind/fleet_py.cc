@@ -430,7 +430,10 @@ void BindGraphGpuWrapper(py::module* m) {
           py::overload_cast<std::string, std::string, int, bool>(
               &GraphGpuWrapper::set_node_iter_from_file))
       .def("set_node_iter_from_graph",
-          py::overload_cast<bool>(&GraphGpuWrapper::set_node_iter_from_graph));
+          py::overload_cast<bool>(&GraphGpuWrapper::set_node_iter_from_graph))
+      .def("set_cls_node_and_label_from_file",
+          py::overload_cast<std::string, std::string, int>(
+              &GraphGpuWrapper::set_cls_node_and_label_from_file));
 }
 #endif
 

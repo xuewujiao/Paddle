@@ -487,7 +487,7 @@ void DatasetImpl<T>::LoadIntoMemory() {
 
     for (int64_t i = 0; i < thread_num_; ++i) {
       wait_futures.emplace_back(
-                pool[i]->Run([this, i]() { readers_[i]->DoWalkandSage(); }));
+                pool[i]->Run([this, i]() { readers_[i]->PrepareGraphData(); }));
     }
     for (auto& th : wait_futures) {
       th.get();
