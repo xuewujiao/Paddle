@@ -3382,7 +3382,7 @@ send_vari_vals_by_all2all(const int& gpu_id,
             << ", offsets: " << res.h_remote_part_offsets[k + 1];
   }
 
-  VLOG(0) << "after vari all2all send, total fea num:" << total_fea_num;
+  VLOG(2) << "after vari all2all send, total fea num:" << total_fea_num;
 }
 
 
