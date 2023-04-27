@@ -2271,9 +2271,11 @@ void GraphDataGenerator::DoSage() {
         if (conf_.gpu_graph_training) {
           epoch_finish_ = true;  // work only for train
         }
-        return;
+        break;
       }
     }
+  } else {
+    epoch_finish_ = true;  // work only for train
   }
 
   VLOG(0) << conf_.thread_id << " before train, cursor: " << cursor
@@ -2433,6 +2435,8 @@ void GraphDataGenerator::ClearSampleState() {
          iter++) {
       iter->second = 0;
     }
+    auto &cursor = gpu_graph_ptr->cursor_[conf_.gpuid];
+    cursor = 0;
   }
 }
 
