@@ -18,6 +18,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/convert_utils.h"
 #include "paddle/fluid/framework/data_type.h"
 #include "paddle/fluid/framework/device_worker.h"
+#include "paddle/fluid/framework/new_executor/interpreter/dependency_builder.h"
 #include "paddle/fluid/operators/controlflow/conditional_block_op_helper.h"
 #include "paddle/fluid/platform/cpu_helper.h"
 #include "paddle/fluid/platform/lodtensor_printer.h"
@@ -35,6 +36,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/program_utils.h"
 
 DECLARE_bool(enable_exit_when_partial_worker);
+DECLARE_int32(enable_adjust_op_order);
 PADDLE_DEFINE_EXPORTED_bool(
     gpugraph_force_device_batch_num_equal,
     false,
@@ -106,16 +108,24 @@ void HogwildWorker::BuildShardingDepends(const ProgramDesc &program) {
     if (ring_id >= 0 && ring_id != ring_id_) {
       ring_id_ = ring_id;
     }
+    std::string new_name;
     for (auto &o : op_desc->Inputs()) {
       for (auto &name : o.second) {
-        auto var = block.FindVar(name);
+        // amp
+        size_t pos = name.find(".cast_fp16");
+        if (pos != std::string::npos) {
+          new_name = name.substr(0, pos);
+        } else {
+          new_name = name;
+        }
+        auto var = block.FindVar(new_name);
         if (!var->Persistable() || !var->IsParameter()) {
           continue;
         }
-        if (params2rootid_.find(name) != params2rootid_.end()) {
+        if (params2rootid_.find(new_name) != params2rootid_.end()) {
           continue;
         }
-        params2rootid_.insert(std::make_pair(name, root_id));
+        params2rootid_.insert(std::make_pair(new_name, root_id));
       }
     }
   }
@@ -246,11 +256,9 @@ void HogwildWorker::CreateThreadOperators(const ProgramDesc &program) {
   auto &block = program.Block(0);
   op_names_.clear();
   auto all_desc = block.AllOps();
+  std::set<size_t> remove_ids;
+  size_t op_index = 0;
   for (auto &op_desc : all_desc) {
-    // skip remove ops
-    if (remove_ops_.find(op_desc) != remove_ops_.end()) {
-      continue;
-    }
     // skip feed fetch op
     if (op_desc->Type() == "feed" || op_desc->Type() == "fetch") {
       for (auto &o : op_desc->Inputs()) {
@@ -270,8 +278,51 @@ void HogwildWorker::CreateThreadOperators(const ProgramDesc &program) {
     if (need_skip) {
       continue;
     }
+    // skip remove ops
+    if (remove_ops_.find(op_desc) != remove_ops_.end()) {
+      if (FLAGS_enable_adjust_op_order) {
+        remove_ids.insert(op_index);
+      } else {
+        continue;
+      }
+    }
+
     op_names_.push_back(op_desc->Type());
     ops_.emplace_back(OpRegistry::CreateOp(*op_desc));
+    op_index++;
+  }
+  if (FLAGS_enable_adjust_op_order) {
+    std::vector<size_t> new_order;
+    size_t start_index = 0;
+    for (auto &op : ops_) {
+      int op_role = op->Attr<int>("op_role");
+      if ((op_role == static_cast<int>(OpRole::kForward)) ||
+          (op_role == (static_cast<int>(OpRole::kForward) |
+                       static_cast<int>(OpRole::kLoss))) ||
+          (op_role == static_cast<int>(OpRole::kLRSched))) {
+        start_index++;
+      } else {
+        break;
+      }
+    }
+
+    if (start_index < ops_.size()) {
+      interpreter::DependencyBuilderSimplify depend_builder;
+      // depend_builder.Build(ops_, start_index, sharding_mode_);  hbm not safe
+      // shoud run in debug model need to fix
+      depend_builder.Build(ops_, start_index, false);
+      new_order = depend_builder.get_new_exexutor_order();
+      std::vector<std::unique_ptr<OperatorBase>> new_ops;
+      std::vector<size_t> final_order;
+      for (auto index : new_order) {
+        if (remove_ids.count(index) == 0) {
+          new_ops.push_back(std::move(ops_[index]));
+          final_order.push_back(index);
+        }
+      }
+      new_order = final_order;
+      ops_ = std::move(new_ops);
+    }
   }
   operators::PrepareSafeEagerDeletionOnConditionalOpAndConditionalGradOp(
       program, 0, ops_);
@@ -723,14 +774,17 @@ void HogwildWorker::TrainFiles() {
         break;
       }
     } else if (train_mode && is_multi_node) {
-      int pass_end = device_reader_->get_pass_end();
-      bool res = GetPassEnd(pass_end);
-      VLOG(2) << "reader pass end: " << pass_end
-              << ", hogwild worker pass end: " << res;
-      if (res) {
-        device_reader_->reset_pass_end();
-        VLOG(1) << "get all pass end, train pass will exit";
-        break;
+      bool sage_mode = device_reader_->GetSageMode();
+      if (!sage_mode) {
+        int pass_end = device_reader_->get_pass_end();
+        bool res = GetPassEnd(pass_end);
+        VLOG(2) << "reader pass end: " << pass_end
+                << ", hogwild worker pass end: " << res;
+        if (res) {
+          device_reader_->reset_pass_end();
+          VLOG(1) << "get all pass end, train pass will exit";
+         break;
+        }
       }
     } else {
       if (FLAGS_enable_exit_when_partial_worker && train_mode) {
