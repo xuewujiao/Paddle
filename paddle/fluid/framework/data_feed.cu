@@ -31,14 +31,15 @@ limitations under the License. */
 #include "paddle/fluid/framework/fleet/heter_ps/hashtable.h"
 #include "paddle/fluid/framework/fleet/ps_gpu_wrapper.h"
 #include "paddle/fluid/framework/io/fs.h"
-#include "paddle/fluid/platform/collective_helper.h"
 #include "paddle/phi/kernels/gpu/graph_reindex_funcs.h"
 #include "paddle/phi/kernels/graph_reindex_kernel.h"
+#include "paddle/fluid/platform/collective_helper.h"
 
 DECLARE_bool(enable_opt_get_features);
 DECLARE_bool(graph_metapath_split_opt);
 DECLARE_int32(gpugraph_storage_mode);
 DECLARE_double(gpugraph_hbm_table_load_factor);
+DECLARE_bool(enable_graph_multi_node_sampling);
 
 namespace paddle {
 namespace framework {
@@ -1379,30 +1380,24 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num) {
   std::shared_ptr<phi::Allocation> d_feature_list;
   std::shared_ptr<phi::Allocation> d_slot_list;
 
-  if (conf_.sage_mode) {
-    size_t temp_storage_bytes = (key_num + 1) * sizeof(uint32_t);
-    if (d_feature_size_list_buf_ == NULL ||
-        d_feature_size_list_buf_->size() < temp_storage_bytes) {
+  size_t temp_bytes = (key_num + 1) * sizeof(uint32_t);
+  if (d_feature_size_list_buf_ == NULL ||
+    d_feature_size_list_buf_->size() < temp_bytes) {
       d_feature_size_list_buf_ =
-          memory::AllocShared(this->place_, temp_storage_bytes);
-    }
-    if (d_feature_size_prefixsum_buf_ == NULL ||
-        d_feature_size_prefixsum_buf_->size() < temp_storage_bytes) {
+          memory::AllocShared(this->place_, temp_bytes);
+  }
+  if (d_feature_size_prefixsum_buf_ == NULL ||
+    d_feature_size_prefixsum_buf_->size() < temp_bytes) {
       d_feature_size_prefixsum_buf_ =
-          memory::AllocShared(this->place_, temp_storage_bytes);
-    }
+          memory::AllocShared(this->place_, temp_bytes);
   }
 
-  uint32_t *d_feature_size_list_ptr =
-      reinterpret_cast<uint32_t *>(d_feature_size_list_buf_->ptr());
-  uint32_t *d_feature_size_prefixsum_ptr =
-      reinterpret_cast<uint32_t *>(d_feature_size_prefixsum_buf_->ptr());
   int fea_num =
       gpu_graph_ptr->get_feature_info_of_nodes(conf_.gpuid,
                                                d_walk,
                                                key_num,
-                                               d_feature_size_list_ptr,
-                                               d_feature_size_prefixsum_ptr,
+                                               d_feature_size_list_buf_,
+                                               d_feature_size_prefixsum_buf_,
                                                d_feature_list,
                                                d_slot_list);
   int64_t *slot_tensor_ptr_[conf_.slot_num];
@@ -1436,6 +1431,13 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num) {
   uint64_t *d_feature_list_ptr =
       reinterpret_cast<uint64_t *>(d_feature_list->ptr());
   uint8_t *d_slot_list_ptr = reinterpret_cast<uint8_t *>(d_slot_list->ptr());
+  uint32_t *d_feature_size_list_ptr =
+       reinterpret_cast<uint32_t *>(d_feature_size_list_buf_->ptr());
+  uint32_t *d_feature_size_prefixsum_ptr =
+       reinterpret_cast<uint32_t *>(d_feature_size_prefixsum_buf_->ptr());
+  VLOG(2) << "end trans feature list and slot list";
+
+  CUDA_CHECK(cudaStreamSynchronize(train_stream_));
 
   std::shared_ptr<phi::Allocation> d_each_ins_slot_num_inner_prefix =
       memory::AllocShared(place_,
@@ -1710,7 +1712,7 @@ GraphDataGenerator::SampleNeighbors(int64_t *uniq_nodes,
                                     std::vector<int> &edges_split_num,
                                     int64_t *neighbor_len) {
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
-  auto sample_res = gpu_graph_ptr->graph_neighbor_sample_all_edge_type(
+  auto sample_res = gpu_graph_ptr->graph_neighbor_sample_sage(
       conf_.gpuid,
       edge_to_id_len_,
       reinterpret_cast<uint64_t *>(uniq_nodes),
@@ -1972,7 +1974,7 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
     int len,
     int *final_len,
     std::shared_ptr<phi::Allocation> &inverse) {
-  VLOG(2) << "Get Unique Nodes";
+  VLOG(2) << conf_.gpuid << " Get Unique Nodes";
 
   auto uniq_nodes = memory::Alloc(
       place_,
@@ -1989,7 +1991,7 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
                              sample_stream_);
   int len_samples = samples_.size();
 
-  VLOG(2) << "Sample Neighbors and Reindex";
+  VLOG(2) << conf_.gpuid << " Sample Neighbors and Reindex";
   std::vector<int> edges_split_num;
   std::vector<std::shared_ptr<phi::Allocation>> final_nodes_vec;
   std::vector<std::shared_ptr<phi::Allocation>> graph_edges;
@@ -2156,6 +2158,7 @@ void GraphDataGenerator::DoWalkandSage() {
       if (train_flag) {
         int total_instance = 0, uniq_instance = 0;
         bool ins_pair_flag = true;
+        int sage_pass_end = 0;
         uint64_t *ins_buf, *ins_cursor;
         while (ins_pair_flag) {
           int res = 0;
@@ -2173,9 +2176,27 @@ void GraphDataGenerator::DoWalkandSage() {
                              sample_stream_);
             if (res == -1) {
               if (ins_buf_pair_len_ == 0) {
-                ins_pair_flag = false;
+                if (is_multi_node_) {
+                  sage_pass_end = 1;
+                  if (total_row_ != 0) {
+                    buf_state_.Reset(total_row_);
+                    VLOG(1) << "reset buf state to make batch num equal in multi node";
+                  }
+                } else {
+                  ins_pair_flag = false;
+                  break;
+                }
+              } else {
+                break;
               }
-              break;
+            }
+          }
+
+          // check whether reach sage pass end
+          if (is_multi_node_) {
+            int res = multi_node_sync_sample(sage_pass_end, ncclProd);
+            if (res) {
+              ins_pair_flag = false;
             }
           }
 
@@ -2257,6 +2278,12 @@ void GraphDataGenerator::DoWalkandSage() {
     if (conf_.sage_mode) {
       sage_batch_num_ = 0;
       if (infer_flag) {
+        // Set new batch size for multi_node
+        if (is_multi_node_) {
+          int new_batch_size = dynamic_adjust_batch_num_for_sage();
+          conf_.batch_size = new_batch_size;
+        }
+
         int total_instance = 0, uniq_instance = 0;
         total_instance =
             (infer_node_start_ + conf_.batch_size <= infer_node_end_)
@@ -2480,10 +2507,10 @@ int GraphDataGenerator::FillWalkBuf() {
   while (1) {
     if (i > remain_size) {
       // scenarios 1: d_walk is full
-      if (!is_multi_node_) {
-        break;
-      } else {
+      if (FLAGS_enable_graph_multi_node_sampling) {
         sample_flag = EVENT_WALKBUF_FULL;
+      } else {
+        break;
       }
     }
 
@@ -2507,28 +2534,30 @@ int GraphDataGenerator::FillWalkBuf() {
       finish_node_type.insert(node_type);
       if (finish_node_type.size() == node_type_start.size()) {
         // scenarios 2: epoch finish
-        if (!is_multi_node_) {
+        if (FLAGS_enable_graph_multi_node_sampling) {
+          sample_flag = EVENT_FINISH_EPOCH;
+        } else {
           cursor = 0;
           epoch_finish_ = true;
           break;
-        } else {
-          sample_flag = EVENT_FINISH_EPOCH;
         }
       }
 
       // scenarios 3: switch metapath
-      if (!is_multi_node_) {
+      if (FLAGS_enable_graph_multi_node_sampling) {
+        if (sample_flag == EVENT_CONTINUE_SAMPLE) {
+          // Switching only occurs when multi machine sampling continues
+          switch_flag = EVENT_SWTICH_METAPATH;
+        }
+      } else {
         cursor += 1;
         continue;
-      } else if (sample_flag == EVENT_CONTINUE_SAMPLE) {
-        // Switching only occurs when multi machine sampling continues
-        switch_flag = EVENT_SWTICH_METAPATH;
       }
     }
 
     // Perform synchronous information exchange between multiple machines
     // to decide whether to continue sampling
-    if (is_multi_node_) {
+    if (FLAGS_enable_graph_multi_node_sampling) {
       switch_command = multi_node_sync_sample(switch_flag, ncclProd);
       VLOG(2) << "gpuid:" << conf_.gpuid << " multi node sample sync"
               << " switch_flag:" << switch_flag << "," << switch_command;
@@ -2581,13 +2610,7 @@ int GraphDataGenerator::FillWalkBuf() {
     jump_rows_ = sample_res.total_sample_size;
     total_samples += sample_res.total_sample_size;
 
-    if (!is_multi_node_) {
-      if (jump_rows_ == 0) {
-        node_type_start[node_type] = tmp_len + start;
-        cursor += 1;
-        continue;
-      }
-    } else {
+    if (FLAGS_enable_graph_multi_node_sampling) {
       int flag = jump_rows_ > 0 ? 1 : 0;
       int command = multi_node_sync_sample(flag, ncclMax);
       VLOG(2) << "gpuid:" << conf_.gpuid << " multi node step sync"
@@ -2597,6 +2620,10 @@ int GraphDataGenerator::FillWalkBuf() {
         cursor += 1;
         continue;
       }
+    } else if (jump_rows_ == 0) {
+      node_type_start[node_type] = tmp_len + start;
+      cursor += 1;
+      continue;
     }
 
     if (!conf_.sage_mode) {
@@ -2661,13 +2688,7 @@ int GraphDataGenerator::FillWalkBuf() {
     step++;
     size_t path_len = path.size();
     for (; step < conf_.walk_len; step++) {
-      if (!is_multi_node_) {
-        // Finish multi-step sampling in single node
-        if (sample_res.total_sample_size == 0) {
-          VLOG(2) << "sample finish, step=" << step;
-          break;
-        }
-      } else {
+      if (FLAGS_enable_graph_multi_node_sampling) {
         // Step synchronization for multi-step sampling in multi node
         int flag = sample_res.total_sample_size > 0 ? 1 : 0;
         int command = multi_node_sync_sample(flag, ncclMax);
@@ -2675,6 +2696,12 @@ int GraphDataGenerator::FillWalkBuf() {
                 << " step:" << step << " step_sample:" << flag << ","
                 << command;
         if (command <= 0) {
+          break;
+        }
+      } else {
+        // Finish multi-step sampling in single node
+        if (sample_res.total_sample_size == 0) {
+          VLOG(2) << "sample finish, step=" << step;
           break;
         }
       }
@@ -2685,7 +2712,6 @@ int GraphDataGenerator::FillWalkBuf() {
         sample_keys_ptr = reinterpret_cast<uint64_t *>(sample_key_mem->ptr());
       }
       int edge_type_id = path[(step - 1) % path_len];
-      VLOG(2) << "sample edge type: " << edge_type_id << " step: " << step;
       q.initialize(conf_.gpuid,
                    edge_type_id,
                    (uint64_t)sample_keys_ptr,
@@ -3149,6 +3175,7 @@ void GraphDataGenerator::AllocResource(
     is_multi_node_ = true;
   }
 #endif
+
   // infer_node_type_start_ = std::vector<int>(h_device_keys_.size(), 0);
   // for (size_t i = 0; i < h_device_keys_.size(); i++) {
   //   for (size_t j = 0; j < h_device_keys_[i]->size(); j++) {
@@ -3373,15 +3400,8 @@ void GraphDataGenerator::AllocResource(
 void GraphDataGenerator::AllocTrainResource(int thread_id) {
   if (conf_.slot_num > 0) {
     platform::CUDADeviceGuard guard(conf_.gpuid);
-    if (!conf_.sage_mode) {
-      d_feature_size_list_buf_ = memory::AllocShared(
-          place_, (conf_.batch_size * 2) * sizeof(uint32_t));
-      d_feature_size_prefixsum_buf_ = memory::AllocShared(
-          place_, (conf_.batch_size * 2 + 1) * sizeof(uint32_t));
-    } else {
-      d_feature_size_list_buf_ = NULL;
-      d_feature_size_prefixsum_buf_ = NULL;
-    }
+    d_feature_size_list_buf_ = NULL;
+    d_feature_size_prefixsum_buf_ = NULL;
   }
 }
 
@@ -3504,6 +3524,41 @@ int GraphDataGenerator::multi_node_sync_sample(int flag,
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
 #endif
   return ret;
+}
+
+int GraphDataGenerator::dynamic_adjust_batch_num_for_sage() {
+  int batch_num = (total_row_ + conf_.batch_size - 1) / conf_.batch_size;
+  auto send_buff = memory::Alloc(place_, 2 * sizeof(int),
+                                 phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+  int* send_buff_ptr = reinterpret_cast<int*>(send_buff->ptr());
+  cudaMemcpyAsync(send_buff_ptr,
+                  &batch_num,
+                  sizeof(int),
+                  cudaMemcpyHostToDevice,
+                  sample_stream_);
+  cudaStreamSynchronize(sample_stream_);
+  auto comm =
+      platform::NCCLCommContext::Instance().Get(0, place_.GetDeviceId());
+  PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllReduce(&send_buff_ptr[0],
+                                                              &send_buff_ptr[1],
+                                                              1,
+                                                              ncclInt,
+                                                              ncclMax,
+                                                              comm->comm(),
+                                                              sample_stream_));
+  int thread_max_batch_num = 0;
+  cudaMemcpyAsync(&thread_max_batch_num,
+                  &send_buff_ptr[1],
+                  sizeof(int),
+                  cudaMemcpyDeviceToHost,
+                  sample_stream_);
+  cudaStreamSynchronize(sample_stream_);
+
+  int new_batch_size = (total_row_ + thread_max_batch_num - 1) / thread_max_batch_num;
+  VLOG(2) << conf_.gpuid << " dynamic adjust sage batch num "
+                         << " max_batch_num: " << thread_max_batch_num
+                         << " new_batch_size:  " << new_batch_size;
+  return new_batch_size;
 }
 
 }  // namespace framework

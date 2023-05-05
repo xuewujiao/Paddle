@@ -94,22 +94,9 @@ struct GpuPsCommGraph {
     neighbor_size = 0;
   }
   void display_on_cpu(int edge_idx=-1) const {
-    /*
-    VLOG(0) << "neighbor_size = " << neighbor_size;
-    VLOG(0) << "node_size = " << node_size;
-    for (int64_t i = 0; i < neighbor_size; i++) {
-      VLOG(0) << "neighbor " << i << " " << neighbor_list[i];
-      if (weight_list != nullptr) {
-        VLOG(0) << "neighbor weight " << i << " " << (float)weight_list[i];
-      }
-    }
-    */
     for (int64_t i = 0; i < node_size; i++) {
       auto id = node_list[i];
       auto val = node_info_list[i];
-      if (id % 10000 != 1) continue;
-      //VLOG(0) << "node id " << id << "," << val.neighbor_offset << ":"
-       //       << val.neighbor_size;
       std::string neighbor_str;
       for (size_t j = 0; j < val.neighbor_size; ++j) {
         if (j > 0) neighbor_str += ";";
@@ -265,12 +252,6 @@ struct NeighborSampleResult {
     int start = 0;
     for (int i = 0; i < key_size; i++) {
       auto key = sample_keys[i];
-#if 0
-      if (key % 10000 != 1) {
-        start += ac_size[i];  // r
-        continue;
-      }
-#endif
       std::string neighbor;
       for (int j = 0; j < ac_size[i]; j++) {
         if (neighbor.size() > 0) neighbor += ";";  // r
@@ -356,6 +337,7 @@ struct NeighborSampleResultV2 {
   uint64_t *val;
   int *actual_sample_size;
   float *weight;
+  int sample_size, key_size, edge_to_id_len;
   std::shared_ptr<memory::Allocation> val_mem, actual_sample_size_mem, weight_mem;
   cudaStream_t stream = 0;
 
@@ -365,6 +347,9 @@ struct NeighborSampleResultV2 {
                   int _edge_to_id_len,
                   bool _return_weight,
                   int dev_id) {
+    sample_size = _sample_size;
+    key_size = _key_size;
+    edge_to_id_len = _edge_to_id_len;
     platform::CUDADeviceGuard guard(dev_id);
     platform::CUDAPlace place = platform::CUDAPlace(dev_id);
     if (stream != 0) {
@@ -400,6 +385,20 @@ struct NeighborSampleResultV2 {
     } else {
       weight = nullptr;
     }
+  }
+  void display() {
+    int *ac_size = new int[key_size * edge_to_id_len];
+    cudaMemcpy(ac_size,
+               actual_sample_size,
+               key_size * edge_to_id_len * sizeof(int),
+               cudaMemcpyDeviceToHost); // 0, 0, 0...
+    std::string print_ac;
+    for (int i = 0; i < key_size * edge_to_id_len; i++) {
+      print_ac += std::to_string(ac_size[i]);
+      print_ac += ";";
+    }
+    VLOG(0) << "actual_sample_size for all keys are: " << print_ac;
+    delete[] ac_size;
   }
   NeighborSampleResultV2() {}
   ~NeighborSampleResultV2() {}
