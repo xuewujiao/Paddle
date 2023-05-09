@@ -1719,7 +1719,8 @@ GraphDataGenerator::SampleNeighbors(int64_t *uniq_nodes,
       len,
       edge_type_graph_,
       conf_.weighted_sample,
-      conf_.return_weight);
+      conf_.return_weight,
+      conf_.gpu_graph_training);
 
   int *all_sample_count_ptr =
       reinterpret_cast<int *>(sample_res.actual_sample_size_mem->ptr());

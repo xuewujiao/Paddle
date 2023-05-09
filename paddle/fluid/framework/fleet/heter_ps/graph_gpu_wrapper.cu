@@ -874,11 +874,12 @@ NeighborSampleResultV2 GraphGpuWrapper::graph_neighbor_sample_sage(
     int len,
     std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,
     bool weighted,
-    bool return_weight) {
+    bool return_weight,
+    bool training) {
   return reinterpret_cast<GpuPsGraphTable *>(graph_table)
       ->graph_neighbor_sample_sage(
           gpu_id, edge_type_len, key, sample_size, len, edge_type_graphs,
-          weighted, return_weight);
+          weighted, return_weight, training);
 }
 
 std::vector<std::shared_ptr<phi::Allocation>>

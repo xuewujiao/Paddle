@@ -2221,8 +2221,9 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_sage(
     int len,
     std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,
     bool weighted,
-    bool return_weight) {
-  if (multi_node_ && FLAGS_enable_graph_multi_node_sampling) {
+    bool return_weight,
+    bool training) {
+  if (multi_node_ && FLAGS_enable_graph_multi_node_sampling && training) {
     // multi node mode
     auto result = graph_neighbor_sample_sage_all2all(
         gpu_id,
