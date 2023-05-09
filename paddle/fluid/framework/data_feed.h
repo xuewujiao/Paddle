@@ -919,10 +919,13 @@ struct GraphDataGeneratorConfig {
   int node_type_num;
   int debug_mode;
   int excluded_train_pair_len;
+  int edge_to_id_len;
+  size_t once_max_sample_keynum;
   int64_t reindex_table_size;
   uint64_t train_table_cap;
   uint64_t infer_table_cap;
   std::vector<int> window_step;
+  std::vector<int> samples;
   std::shared_ptr<phi::Allocation> d_excluded_train_pair;
   std::shared_ptr<phi::Allocation> d_pair_label_conf;
 };
@@ -972,17 +975,6 @@ class GraphDataGenerator {
     // h_device_keys_.push_back(device_keys);
   }
 
-  std::vector<std::shared_ptr<phi::Allocation>> SampleNeighbors(
-      int64_t* uniq_nodes,
-      int len,
-      int sample_size,
-      std::vector<int>& edges_split_num,  // NOLINT
-      int64_t* neighbor_len);
-  std::shared_ptr<phi::Allocation> GenerateSampleGraph(
-      uint64_t* node_ids,
-      int len,
-      int* uniq_len,
-      std::shared_ptr<phi::Allocation>& inverse);  // NOLINT
   std::shared_ptr<phi::Allocation> GetNodeDegree(uint64_t* node_ids, int len);
   std::vector<uint64_t>& GetHostVec() { return host_vec_; }
   bool get_epoch_finish() { return epoch_finish_; }
@@ -996,7 +988,6 @@ class GraphDataGenerator {
   GraphDataGeneratorConfig conf_;
   size_t infer_cursor_;
   size_t jump_rows_;
-  int edge_to_id_len_;
   int64_t* id_tensor_ptr_;
   int* index_tensor_ptr_;
   int64_t* show_tensor_ptr_;
@@ -1009,7 +1000,6 @@ class GraphDataGenerator {
   paddle::platform::Place place_;
   std::vector<phi::DenseTensor*> feed_vec_;
   std::vector<size_t> offset_;
-  std::shared_ptr<phi::Allocation> d_prefix_sum_;
   std::vector<std::shared_ptr<phi::Allocation>> d_device_keys_;
   std::shared_ptr<phi::Allocation> d_train_metapath_keys_;
 
@@ -1023,12 +1013,6 @@ class GraphDataGenerator {
   std::shared_ptr<phi::Allocation> d_slot_feature_num_map_;
   std::shared_ptr<phi::Allocation> d_actual_slot_id_map_;
   std::shared_ptr<phi::Allocation> d_fea_offset_map_;
-
-  std::vector<std::shared_ptr<phi::Allocation>> d_sampleidx2rows_;
-  int cur_sampleidx2row_;
-  // record the keys to call graph_neighbor_sample
-  std::shared_ptr<phi::Allocation> d_sample_keys_;
-  int sample_keys_len_;
 
   std::shared_ptr<phi::Allocation> d_pair_label_buf_;
   std::shared_ptr<phi::Allocation> d_ins_buf_;
@@ -1061,7 +1045,6 @@ class GraphDataGenerator {
   std::vector<int> h_slot_feature_num_map_;
   int fea_num_per_node_;
   int shuffle_seed_;
-  std::vector<int> samples_;
   bool epoch_finish_;
   int pass_end_ = 0;
   std::vector<uint64_t> host_vec_;
