@@ -2102,7 +2102,8 @@ std::vector<std::shared_ptr<phi::Allocation>> SampleNeighbors(
       len,
       *edge_type_graph_ptr,
       conf.weighted_sample,
-      conf.return_weight);
+      conf.return_weight,
+      conf.gpu_graph_training);
 
   int *all_sample_count_ptr =
       reinterpret_cast<int *>(sample_res.actual_sample_size_mem->ptr());
@@ -3597,6 +3598,7 @@ void GraphDataGenerator::clear_gpu_mem() {
 }
 
 int GraphDataGenerator::FillInferBuf() {
+  VLOG(0) << conf_.gpuid << ": Enter FillInferBuf";
   platform::CUDADeviceGuard guard(conf_.gpuid);
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   auto &global_infer_node_type_start =
@@ -3604,6 +3606,7 @@ int GraphDataGenerator::FillInferBuf() {
   auto &infer_cursor = gpu_graph_ptr->infer_cursor_[conf_.thread_id];
   total_row_ = 0;
   if (infer_cursor < h_device_keys_len_.size()) {
+    VLOG(0) << conf_.gpuid << " : infer_cusor < h_devices_keys_len";
     while (global_infer_node_type_start[infer_cursor] >=
            h_device_keys_len_[infer_cursor]) {
       infer_cursor++;
@@ -3611,6 +3614,7 @@ int GraphDataGenerator::FillInferBuf() {
         return 0;
       }
     }
+    VLOG(0) << conf_.gpuid << " : infer_node_type_index_set not empty";
     if (!infer_node_type_index_set_.empty()) {
       while (infer_cursor < h_device_keys_len_.size()) {
         if (infer_node_type_index_set_.find(infer_cursor) ==
@@ -3624,10 +3628,12 @@ int GraphDataGenerator::FillInferBuf() {
         }
       }
       if (infer_cursor >= h_device_keys_len_.size()) {
+        VLOG(0) << conf_.gpuid << ": Finish FillInferBuf type 1";
         return 0;
       }
     }
 
+    VLOG(0) << conf_.gpuid << " : get total_row_";
     size_t device_key_size = h_device_keys_len_[infer_cursor];
     total_row_ =
         (global_infer_node_type_start[infer_cursor] + conf_.buf_size <=
@@ -3646,7 +3652,8 @@ int GraphDataGenerator::FillInferBuf() {
                       sample_stream_);
       cudaStreamSynchronize(sample_stream_);
     }
-    VLOG(1) << "cursor: " << infer_cursor
+    VLOG(1) << "gpuid: " << conf_.gpuid
+            << " cursor: " << infer_cursor
             << " start: " << global_infer_node_type_start[infer_cursor]
             << " num: " << total_row_;
     infer_node_start_ = global_infer_node_type_start[infer_cursor];
@@ -3655,6 +3662,8 @@ int GraphDataGenerator::FillInferBuf() {
     infer_cursor_ = infer_cursor;
     return 1;
   }
+
+  VLOG(0) << conf_.gpuid << ": Finish FillInferBuf type 2";
   return 0;
 }
 
