@@ -980,6 +980,7 @@ class GraphDataGenerator {
   int get_pass_end() { return pass_end_; }
   void clear_gpu_mem();
   int dynamic_adjust_batch_num_for_sage();
+  int dynamic_adjust_total_row_for_sage();
 
  protected:
   HashTable<uint64_t, uint64_t>* table_;
