@@ -139,8 +139,7 @@ class GpuPsGraphTable
       int len,
       std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,
       bool weighted,
-      bool return_weight,
-      bool training);
+      bool return_weight);
   NeighborSampleResultV2 graph_neighbor_sample_all_edge_type(
       int gpu_id,
       int edge_type_len,

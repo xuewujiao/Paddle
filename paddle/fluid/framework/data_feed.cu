@@ -2150,8 +2150,7 @@ std::vector<std::shared_ptr<phi::Allocation>> SampleNeighbors(
       len,
       *edge_type_graph_ptr,
       conf.weighted_sample,
-      conf.return_weight,
-      conf.gpu_graph_training);
+      conf.return_weight);
 
   int *all_sample_count_ptr =
       reinterpret_cast<int *>(sample_res.actual_sample_size_mem->ptr());
@@ -3565,7 +3564,7 @@ int GraphDataGenerator::FillInferBuf() {
 
     size_t device_key_size = h_device_keys_len_[0][infer_cursor];
     if (conf_.is_multi_node) {
-      int get_type_end = dynamic_adjust_total_row_for_sage();
+      int get_type_end = dynamic_adjust_total_row();
       if (get_type_end) {
         total_row_[0] = device_key_size - global_infer_node_type_start[infer_cursor];
       } else {
@@ -3601,7 +3600,6 @@ int GraphDataGenerator::FillInferBuf() {
     infer_cursor_ = infer_cursor;
     return 1;
   }
-
   return 0;
 }
 
@@ -4055,7 +4053,7 @@ int GraphDataGenerator::dynamic_adjust_batch_num_for_sage() {
   return new_batch_size;
 }
 
-int GraphDataGenerator::dynamic_adjust_total_row_for_sage() {
+int GraphDataGenerator::dynamic_adjust_total_row() {
   platform::CUDADeviceGuard guard(conf_.gpuid);
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   auto &global_infer_node_type_start =

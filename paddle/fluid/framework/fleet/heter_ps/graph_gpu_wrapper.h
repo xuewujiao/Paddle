@@ -153,8 +153,7 @@ class GraphGpuWrapper {
       int len,
       std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,
       bool weighted,
-      bool return_weight,
-      bool training);
+      bool return_weight);
   void get_node_degree(int gpu_id,
                        int edge_idx,
                        uint64_t* key,
