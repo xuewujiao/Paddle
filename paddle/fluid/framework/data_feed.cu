@@ -3563,7 +3563,7 @@ int GraphDataGenerator::FillInferBuf() {
       }
     }
 
-    size_t device_key_size = h_device_keys_len_[infer_cursor];
+    size_t device_key_size = h_device_keys_len_[0][infer_cursor];
     if (conf_.is_multi_node) {
       int get_type_end = dynamic_adjust_total_row_for_sage();
       if (get_type_end) {
@@ -4061,7 +4061,7 @@ int GraphDataGenerator::dynamic_adjust_total_row_for_sage() {
   auto &global_infer_node_type_start =
       gpu_graph_ptr->global_infer_node_type_start_[conf_.gpuid];
   auto &infer_cursor = gpu_graph_ptr->infer_cursor_[conf_.thread_id];
-  size_t device_key_size = h_device_keys_len_[infer_cursor];
+  size_t device_key_size = h_device_keys_len_[0][infer_cursor];
   int reach_end = global_infer_node_type_start[infer_cursor] + conf_.buf_size >= 
                    device_key_size;
   auto send_buff = memory::Alloc(
