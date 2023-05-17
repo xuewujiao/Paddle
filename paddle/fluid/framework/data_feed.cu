@@ -3566,7 +3566,7 @@ int GraphDataGenerator::FillInferBuf() {
     if (conf_.is_multi_node) {
       int local_reach_end = global_infer_node_type_start[infer_cursor] + conf_.buf_size >= 
                             device_key_size;
-      int global_reach_end = dynamic_adjust_total_row(local_reach_end);
+      int global_reach_end = dynamic_adjust_total_row_for_infer(local_reach_end);
       if (global_reach_end) {
         total_row_[0] = device_key_size - global_infer_node_type_start[infer_cursor];
       } else {
@@ -4058,7 +4058,7 @@ int GraphDataGenerator::dynamic_adjust_batch_num_for_sage() {
   return new_batch_size;
 }
 
-int GraphDataGenerator::dynamic_adjust_total_row(int local_reach_end) {
+int GraphDataGenerator::dynamic_adjust_total_row_for_infer(int local_reach_end) {
   auto send_buff = memory::Alloc(
       place_,
       2 * sizeof(int),
