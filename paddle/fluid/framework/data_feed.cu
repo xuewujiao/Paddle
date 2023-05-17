@@ -3564,10 +3564,15 @@ int GraphDataGenerator::FillInferBuf() {
 
     size_t device_key_size = h_device_keys_len_[0][infer_cursor];
     if (conf_.is_multi_node) {
-      int get_type_end = dynamic_adjust_total_row();
-      if (get_type_end) {
+      int local_reach_end = global_infer_node_type_start[infer_cursor] + conf_.buf_size >= 
+                            device_key_size;
+      int global_reach_end = dynamic_adjust_total_row(local_reach_end);
+      if (global_reach_end) {
         total_row_[0] = device_key_size - global_infer_node_type_start[infer_cursor];
       } else {
+        if (local_reach_end) {
+          conf_.buf_size /= 2;
+        }
         total_row_[0] = conf_.buf_size;
       }
     } else {
@@ -4053,22 +4058,14 @@ int GraphDataGenerator::dynamic_adjust_batch_num_for_sage() {
   return new_batch_size;
 }
 
-int GraphDataGenerator::dynamic_adjust_total_row() {
-  platform::CUDADeviceGuard guard(conf_.gpuid);
-  auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
-  auto &global_infer_node_type_start =
-      gpu_graph_ptr->global_infer_node_type_start_[conf_.gpuid];
-  auto &infer_cursor = gpu_graph_ptr->infer_cursor_[conf_.thread_id];
-  size_t device_key_size = h_device_keys_len_[0][infer_cursor];
-  int reach_end = global_infer_node_type_start[infer_cursor] + conf_.buf_size >= 
-                   device_key_size;
+int GraphDataGenerator::dynamic_adjust_total_row(int local_reach_end) {
   auto send_buff = memory::Alloc(
       place_,
       2 * sizeof(int),
       phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
   int *send_buff_ptr = reinterpret_cast<int *>(send_buff->ptr());
   cudaMemcpyAsync(send_buff_ptr,
-                  &reach_end,
+                  &local_reach_end,
                   sizeof(int),
                   cudaMemcpyHostToDevice,
                   sample_stream_);
@@ -4079,17 +4076,17 @@ int GraphDataGenerator::dynamic_adjust_total_row() {
                                                               &send_buff_ptr[1],
                                                               1,
                                                               ncclInt,
-                                                              ncclMax,
+                                                              ncclProd,
                                                               comm->comm(),
                                                               sample_stream_));
-  int get_all_reach_end = 0;
-  cudaMemcpyAsync(&get_all_reach_end,
+  int global_reach_end = 0;
+  cudaMemcpyAsync(&global_reach_end,
                   &send_buff_ptr[1],
                   sizeof(int),
                   cudaMemcpyDeviceToHost,
                   sample_stream_);
   cudaStreamSynchronize(sample_stream_);
-  return get_all_reach_end;
+  return global_reach_end;
 }
 
 }  // namespace framework

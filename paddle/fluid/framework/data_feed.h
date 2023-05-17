@@ -981,7 +981,7 @@ class GraphDataGenerator {
   int get_pass_end() { return pass_end_; }
   void clear_gpu_mem();
   int dynamic_adjust_batch_num_for_sage();
-  int dynamic_adjust_total_row();
+  int dynamic_adjust_total_row(int local_reach_end);
 
  protected:
   void DoSageForInfer();
