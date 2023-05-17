@@ -3567,13 +3567,15 @@ int GraphDataGenerator::FillInferBuf() {
       int local_reach_end = global_infer_node_type_start[infer_cursor] + conf_.buf_size >= 
                             device_key_size;
       int global_reach_end = dynamic_adjust_total_row_for_infer(local_reach_end);
+      int remain = device_key_size - global_infer_node_type_start[infer_cursor];
       if (global_reach_end) {
-        total_row_[0] = device_key_size - global_infer_node_type_start[infer_cursor];
+        total_row_[0] = remain;
       } else {
         if (local_reach_end) {
-          conf_.buf_size /= 2;
+          total_row_[0] = remain / 2;
+        } else {
+          total_row_[0] = conf_.buf_size;
         }
-        total_row_[0] = conf_.buf_size;
       }
     } else {
       total_row_[0] =
