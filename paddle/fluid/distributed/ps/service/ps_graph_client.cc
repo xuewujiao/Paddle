@@ -233,7 +233,7 @@ void PsGraphClient::request_handler(const simple::RpcMessageHead &head,
           }
           shard_mutex.unlock();
 
-          VLOG(3) << "end pull remote table id=" << table_id
+          VLOG(0) << "end pull remote table id=" << table_id
                   << ", pass id=" << GET_PASS_ID(id)
                   << ", shard_id=" << shard_id << ", keys count=" << num
                   << ", span=" << timeline.ElapsedSec();
