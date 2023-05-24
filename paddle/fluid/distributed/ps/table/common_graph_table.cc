@@ -1478,11 +1478,9 @@ int32_t GraphTable::parse_edge_and_load(
   }
   for (size_t i = 0; i < tasks.size(); i++) tasks[i].get();
 
-  VLOG(0) << "all edge_counts_:" << edge_counts_.load();
-  graph_partition(true);
-  // if (node_num_ > 1) {
-  //   graph_partition(true);
-  // }
+  if (node_num_ > 1) {
+    graph_partition(true);
+  }
   return 0;
 }
 void GraphTable::graph_partition(bool is_edge) {
@@ -1647,8 +1645,6 @@ void GraphTable::dbh_graph_edge_partition() {
   // 统计原来的全图，边和节点的数量
   VLOG(0) << "begin to calculate edge and node shards";
   std::vector<std::future<std::pair<size_t, size_t>>> cal_tasks;
-  // meta_path:
-  // "cuid2clk-clk2cuid;cuid2conv-conv2cuid;cuid2fcclk-fcclk2cuid;cuid2fcconv-fcconv2cuid;clk2cuid-cuid2clk;conv2cuid-cuid2clk;fcclk2cuid-cuid2clk;fcconv2cuid-cuid2clk;clk2cuid-cuid2conv;conv2cuid-cuid2conv;fcclk2cuid-cuid2conv;fcconv2cuid-cuid2conv;clk2entity-entity2clk;conv2entity-entity2conv;clk2entity-entity2conv;conv2entity-entity2clk"
   for (size_t idx = 0; idx < edge_shards.size(); idx++) {
     cal_tasks.push_back(_shards_task_pool[idx % task_pool_size_]->enqueue(
         [&, idx, this]() -> std::pair<size_t, size_t> {
@@ -1816,8 +1812,6 @@ void GraphTable::hard_graph_edge_partition() {
   // 统计原来的全图，边和节点的数量
   VLOG(0) << "begin to calculate edge and node shards";
   std::vector<std::future<std::pair<size_t, size_t>>> cal_tasks;
-  // meta_path:
-  // "cuid2clk-clk2cuid;cuid2conv-conv2cuid;cuid2fcclk-fcclk2cuid;cuid2fcconv-fcconv2cuid;clk2cuid-cuid2clk;conv2cuid-cuid2clk;fcclk2cuid-cuid2clk;fcconv2cuid-cuid2clk;clk2cuid-cuid2conv;conv2cuid-cuid2conv;fcclk2cuid-cuid2conv;fcconv2cuid-cuid2conv;clk2entity-entity2clk;conv2entity-entity2conv;clk2entity-entity2conv;conv2entity-entity2clk"
   for (size_t idx = 0; idx < edge_shards.size(); idx++) {
     cal_tasks.push_back(_shards_task_pool[idx % task_pool_size_]->enqueue(
         [&, idx, this]() -> std::pair<size_t, size_t> {
@@ -2137,8 +2131,6 @@ void GraphTable::fennel_graph_edge_partition() {
   // 统计原来的全图，边和节点的数量
   VLOG(0) << "begin to calculate edge and node shards";
   std::vector<std::future<std::pair<size_t, size_t>>> cal_tasks;
-  // meta_path:
-  // "cuid2clk-clk2cuid;cuid2conv-conv2cuid;cuid2fcclk-fcclk2cuid;cuid2fcconv-fcconv2cuid;clk2cuid-cuid2clk;conv2cuid-cuid2clk;fcclk2cuid-cuid2clk;fcconv2cuid-cuid2clk;clk2cuid-cuid2conv;conv2cuid-cuid2conv;fcclk2cuid-cuid2conv;fcconv2cuid-cuid2conv;clk2entity-entity2clk;conv2entity-entity2conv;clk2entity-entity2conv;conv2entity-entity2clk"
   for (size_t idx = 0; idx < edge_shards.size(); idx++) {
     cal_tasks.push_back(_shards_task_pool[idx % task_pool_size_]->enqueue(
         [&, idx, node_mutex, this]() -> std::pair<size_t, size_t> {
@@ -2333,10 +2325,9 @@ int32_t GraphTable::parse_node_and_load(std::string ntype2files,
     }
   }
 
-  graph_partition(false);
-  // if (node_num_ > 1) {
-  //   graph_partition(false);
-  // }
+  if (node_num_ > 1) {
+    graph_partition(false);
+  }
 
   return 0;
 }
@@ -3272,7 +3263,7 @@ int GraphTable::parse_feature(int idx,
       return 0;
     }
   } else {
-    if (float_feat_id_map.size() > static_cast<size_t>idx) {
+    if (float_feat_id_map.size() > static_cast<size_t>(idx)) {
       auto float_it = float_feat_id_map[idx].find(name);
       if (float_it != float_feat_id_map[idx].end()) {
         int32_t id = float_it->second;
