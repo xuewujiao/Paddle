@@ -31,9 +31,9 @@ limitations under the License. */
 #include "paddle/fluid/framework/fleet/heter_ps/hashtable.h"
 #include "paddle/fluid/framework/fleet/ps_gpu_wrapper.h"
 #include "paddle/fluid/framework/io/fs.h"
+#include "paddle/fluid/platform/collective_helper.h"
 #include "paddle/phi/kernels/gpu/graph_reindex_funcs.h"
 #include "paddle/phi/kernels/graph_reindex_kernel.h"
-#include "paddle/fluid/platform/collective_helper.h"
 
 DECLARE_bool(enable_opt_get_features);
 DECLARE_bool(graph_metapath_split_opt);
@@ -343,7 +343,7 @@ __global__ void FillSlotValueOffsetKernel(const int ins_num,
 struct RandInt {
   int low, high;
 
-  __host__ __device__ RandInt(int low, int high) : low(low), high(high){};
+  __host__ __device__ RandInt(int low, int high) : low(low), high(high) {}
 
   __host__ __device__ int operator()(const unsigned int n) const {
     thrust::default_random_engine rng;
@@ -635,191 +635,190 @@ __global__ void FillActualNeighbors(int64_t *vals,
 
 int GraphDataGenerator::FillIdShowClkTensor(int total_instance,
                                             bool gpu_graph_training) {
-  id_tensor_ptr_ =
-      feed_vec_[0]->mutable_data<int64_t>({total_instance, 1}, this->place_);
   show_tensor_ptr_ =
-      feed_vec_[1]->mutable_data<int64_t>({total_instance}, this->place_);
-  clk_tensor_ptr_ =
-      feed_vec_[2]->mutable_data<int64_t>({total_instance}, this->place_);
-  if (gpu_graph_training) {
-    uint64_t *ins_cursor, *ins_buf;
-    ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_->ptr());
-    ins_cursor = ins_buf + ins_buf_pair_len_ * 2 - total_instance;
-    cudaMemcpyAsync(id_tensor_ptr_,
-                    ins_cursor,
-                    sizeof(uint64_t) * total_instance,
-                    cudaMemcpyDeviceToDevice,
-                    train_stream_);
-
-    if (conf_.enable_pair_label) {
-      pair_label_ptr_ = feed_vec_[3]->mutable_data<int32_t>(
-          {total_instance / 2}, this->place_);
-      int32_t *pair_label_buf =
-          reinterpret_cast<int32_t *>(d_pair_label_buf_->ptr());
-      int32_t *pair_label_cursor =
-          pair_label_buf + ins_buf_pair_len_ - total_instance / 2;
-      cudaMemcpyAsync(pair_label_ptr_,
-                      pair_label_cursor,
-                      sizeof(int32_t) * total_instance / 2,
-                      cudaMemcpyDeviceToDevice,
-                      train_stream_);
-    }
-  } else {
-    // infer
-    uint64_t *d_type_keys =
-        reinterpret_cast<uint64_t *>(d_device_keys_[infer_cursor_]->ptr());
-    d_type_keys += infer_node_start_;
-    infer_node_start_ += total_instance / 2;
-    CopyDuplicateKeys<<<GET_BLOCKS(total_instance / 2),
-                        CUDA_NUM_THREADS,
-                        0,
-                        train_stream_>>>(
-        id_tensor_ptr_, d_type_keys, total_instance / 2);
-  }
-
+      feed_vec_[0]->mutable_data<int64_t>({total_instance}, this->place_);
   GraphFillCVMKernel<<<GET_BLOCKS(total_instance),
                        CUDA_NUM_THREADS,
                        0,
                        train_stream_>>>(show_tensor_ptr_, total_instance);
+  clk_tensor_ptr_ =
+      feed_vec_[1]->mutable_data<int64_t>({total_instance}, this->place_);
   GraphFillCVMKernel<<<GET_BLOCKS(total_instance),
                        CUDA_NUM_THREADS,
                        0,
                        train_stream_>>>(clk_tensor_ptr_, total_instance);
+
+  for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
+          ++tensor_pair_idx) {
+    int feed_vec_idx = 2 + tensor_pair_idx * conf_.tensor_num_of_one_pair;
+    id_tensor_ptr_ = feed_vec_[feed_vec_idx++]->mutable_data<int64_t>(
+                {total_instance, 1}, this->place_);
+    if (gpu_graph_training) {
+      uint64_t *ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_[tensor_pair_idx]->ptr());
+      uint64_t *ins_cursor = ins_buf + ins_buf_pair_len_[tensor_pair_idx] * 2 - total_instance;
+      cudaMemcpyAsync(id_tensor_ptr_,
+                      ins_cursor,
+                      sizeof(uint64_t) * total_instance,
+                      cudaMemcpyDeviceToDevice,
+                      train_stream_);
+    
+      if (conf_.enable_pair_label) {
+        pair_label_ptr_ = feed_vec_[feed_vec_idx++]->mutable_data<int32_t>(
+                    {total_instance / 2}, this->place_);
+        int32_t *pair_label_buf =
+            reinterpret_cast<int32_t *>(d_pair_label_buf_[tensor_pair_idx]->ptr());
+        int32_t *pair_label_cursor =
+            pair_label_buf + ins_buf_pair_len_[tensor_pair_idx] - total_instance / 2;
+        cudaMemcpyAsync(pair_label_ptr_,
+                        pair_label_cursor,
+                        sizeof(int32_t) * total_instance / 2,
+                        cudaMemcpyDeviceToDevice,
+                        train_stream_);
+      }
+    } else { // infer
+      uint64_t *d_type_keys = reinterpret_cast<uint64_t*>(
+              d_device_keys_[tensor_pair_idx][infer_cursor_[tensor_pair_idx]]->ptr());
+      d_type_keys += infer_node_start_[tensor_pair_idx];
+      infer_node_start_[tensor_pair_idx] += total_instance / 2;
+      CopyDuplicateKeys<<<GET_BLOCKS(total_instance / 2),
+                          CUDA_NUM_THREADS,
+                          0,
+                          train_stream_>>>(
+          id_tensor_ptr_, d_type_keys, total_instance / 2);
+    }
+  } // end for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
+
   return 0;
 }
 
 int GraphDataGenerator::FillGraphIdShowClkTensor(int uniq_instance,
                                                  int total_instance,
                                                  int index) {
-  id_tensor_ptr_ =
-      feed_vec_[0]->mutable_data<int64_t>({uniq_instance, 1}, this->place_);
   show_tensor_ptr_ =
-      feed_vec_[1]->mutable_data<int64_t>({uniq_instance}, this->place_);
-  clk_tensor_ptr_ =
-      feed_vec_[2]->mutable_data<int64_t>({uniq_instance}, this->place_);
-  int index_offset = 0;
-  if (conf_.enable_pair_label) {
-    pair_label_ptr_ =
-        feed_vec_[3]->mutable_data<int32_t>({total_instance / 2}, this->place_);
-    int32_t *pair_label_buf =
-        reinterpret_cast<int32_t *>(d_pair_label_buf_->ptr());
-    int32_t *pair_label_cursor =
-        pair_label_buf + ins_buf_pair_len_ - total_instance / 2;
-    cudaMemcpyAsync(pair_label_ptr_,
-                    pair_label_vec_[index]->ptr(),
-                    sizeof(int32_t) * total_instance / 2,
-                    cudaMemcpyDeviceToDevice,
-                    train_stream_);
-  }
-  if (!conf_.return_weight) {
-    index_offset =
-        id_offset_of_feed_vec_ + conf_.slot_num * 2 + 5 * samples_.size();
-  } else {
-    index_offset = id_offset_of_feed_vec_ + conf_.slot_num * 2 +
-                   6 * samples_.size();  // add edge weights
-  }
-  index_tensor_ptr_ = feed_vec_[index_offset]->mutable_data<int>(
-      {total_instance}, this->place_);
-  if (conf_.get_degree) {
-    degree_tensor_ptr_ = feed_vec_[index_offset + 1]->mutable_data<int>(
-        {uniq_instance * edge_to_id_len_}, this->place_);
-  }
-
-  int len_samples = samples_.size();
-  int *num_nodes_tensor_ptr_[len_samples];
-  int *next_num_nodes_tensor_ptr_[len_samples];
-  int64_t *edges_src_tensor_ptr_[len_samples];
-  int64_t *edges_dst_tensor_ptr_[len_samples];
-  int *edges_split_tensor_ptr_[len_samples];
-  float *edges_weight_tensor_ptr_[len_samples];
-
-  std::vector<std::vector<int>> edges_split_num_for_graph =
-      edges_split_num_vec_[index];
-  std::vector<std::shared_ptr<phi::Allocation>> graph_edges =
-      graph_edges_vec_[index];
-  int graph_edges_index = 0;
-  for (int i = 0; i < len_samples; i++) {
-    int offset = conf_.return_weight
-                     ? (id_offset_of_feed_vec_ + 2 * conf_.slot_num + 6 * i)
-                     : (id_offset_of_feed_vec_ + 2 * conf_.slot_num + 5 * i);
-    std::vector<int> edges_split_num = edges_split_num_for_graph[i];
-
-    int neighbor_len = edges_split_num[edge_to_id_len_ + 2];
-    num_nodes_tensor_ptr_[i] =
-        feed_vec_[offset]->mutable_data<int>({1}, this->place_);
-    next_num_nodes_tensor_ptr_[i] =
-        feed_vec_[offset + 1]->mutable_data<int>({1}, this->place_);
-    edges_src_tensor_ptr_[i] = feed_vec_[offset + 2]->mutable_data<int64_t>(
-        {neighbor_len, 1}, this->place_);
-    edges_dst_tensor_ptr_[i] = feed_vec_[offset + 3]->mutable_data<int64_t>(
-        {neighbor_len, 1}, this->place_);
-    edges_split_tensor_ptr_[i] = feed_vec_[offset + 4]->mutable_data<int>(
-        {edge_to_id_len_}, this->place_);
-    if (conf_.return_weight) {
-      edges_weight_tensor_ptr_[i] = feed_vec_[offset + 5]->mutable_data<float>(
-          {neighbor_len, 1}, this->place_);
-    }
-
-    // [edges_split_num, next_num_nodes, num_nodes, neighbor_len]
-    cudaMemcpyAsync(next_num_nodes_tensor_ptr_[i],
-                    edges_split_num.data() + edge_to_id_len_,
-                    sizeof(int),
-                    cudaMemcpyHostToDevice,
-                    train_stream_);
-    cudaMemcpyAsync(num_nodes_tensor_ptr_[i],
-                    edges_split_num.data() + edge_to_id_len_ + 1,
-                    sizeof(int),
-                    cudaMemcpyHostToDevice,
-                    train_stream_);
-    cudaMemcpyAsync(edges_split_tensor_ptr_[i],
-                    edges_split_num.data(),
-                    sizeof(int) * edge_to_id_len_,
-                    cudaMemcpyHostToDevice,
-                    train_stream_);
-    cudaMemcpyAsync(edges_src_tensor_ptr_[i],
-                    graph_edges[graph_edges_index++]->ptr(),
-                    sizeof(int64_t) * neighbor_len,
-                    cudaMemcpyDeviceToDevice,
-                    train_stream_);
-    cudaMemcpyAsync(edges_dst_tensor_ptr_[i],
-                    graph_edges[graph_edges_index++]->ptr(),
-                    sizeof(int64_t) * neighbor_len,
-                    cudaMemcpyDeviceToDevice,
-                    train_stream_);
-    if (conf_.return_weight) {
-      cudaMemcpyAsync(edges_weight_tensor_ptr_[i],
-                      graph_edges[graph_edges_index++]->ptr(),
-                      sizeof(float) * neighbor_len,
-                      cudaMemcpyDeviceToDevice,
-                      train_stream_);
-    }
-  }
-
-  cudaMemcpyAsync(id_tensor_ptr_,
-                  final_sage_nodes_vec_[index]->ptr(),
-                  sizeof(int64_t) * uniq_instance,
-                  cudaMemcpyDeviceToDevice,
-                  train_stream_);
-  cudaMemcpyAsync(index_tensor_ptr_,
-                  inverse_vec_[index]->ptr(),
-                  sizeof(int) * total_instance,
-                  cudaMemcpyDeviceToDevice,
-                  train_stream_);
-  if (conf_.get_degree) {
-    cudaMemcpyAsync(degree_tensor_ptr_,
-                    node_degree_vec_[index]->ptr(),
-                    sizeof(int) * uniq_instance * edge_to_id_len_,
-                    cudaMemcpyDeviceToDevice,
-                    train_stream_);
-  }
+      feed_vec_[0]->mutable_data<int64_t>({uniq_instance}, this->place_);
   GraphFillCVMKernel<<<GET_BLOCKS(uniq_instance),
                        CUDA_NUM_THREADS,
                        0,
                        train_stream_>>>(show_tensor_ptr_, uniq_instance);
+  clk_tensor_ptr_ =
+      feed_vec_[1]->mutable_data<int64_t>({uniq_instance}, this->place_);
   GraphFillCVMKernel<<<GET_BLOCKS(uniq_instance),
                        CUDA_NUM_THREADS,
                        0,
                        train_stream_>>>(clk_tensor_ptr_, uniq_instance);
+
+  for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
+          ++tensor_pair_idx) {
+    int feed_vec_idx = 2 + tensor_pair_idx * conf_.tensor_num_of_one_pair;
+    id_tensor_ptr_ = feed_vec_[feed_vec_idx++]->mutable_data<int64_t>(
+            {uniq_instance, 1}, this->place_);
+    cudaMemcpyAsync(id_tensor_ptr_,
+                    final_sage_nodes_vec_[index]->ptr(),
+                    sizeof(int64_t) * uniq_instance,
+                    cudaMemcpyDeviceToDevice,
+                    train_stream_);
+
+    if (conf_.enable_pair_label) {
+      pair_label_ptr_ = feed_vec_[feed_vec_idx++]->mutable_data<int32_t>(
+              {total_instance / 2}, this->place_);
+      int32_t *pair_label_buf =
+          reinterpret_cast<int32_t *>(d_pair_label_buf_[tensor_pair_idx]->ptr());
+      int32_t *pair_label_cursor =
+          pair_label_buf + ins_buf_pair_len_[tensor_pair_idx] - total_instance / 2;
+      cudaMemcpyAsync(pair_label_ptr_,
+                      pair_label_vec_[index]->ptr(),
+                      sizeof(int32_t) * total_instance / 2,
+                      cudaMemcpyDeviceToDevice,
+                      train_stream_);
+    }
+
+    feed_vec_idx += conf_.slot_num * 2;
+
+    int len_samples = conf_.samples.size();
+    int *num_nodes_tensor_ptr_[len_samples];
+    int *next_num_nodes_tensor_ptr_[len_samples];
+    int64_t *edges_src_tensor_ptr_[len_samples];
+    int64_t *edges_dst_tensor_ptr_[len_samples];
+    int *edges_split_tensor_ptr_[len_samples];
+    float *edges_weight_tensor_ptr_[len_samples];
+    std::vector<std::vector<int>> edges_split_num_for_graph =
+        edges_split_num_vec_[index];
+    std::vector<std::shared_ptr<phi::Allocation>> graph_edges =
+        graph_edges_vec_[index];
+    int graph_edges_index = 0;
+    for (int i = 0; i < len_samples; i++) {
+      std::vector<int> edges_split_num = edges_split_num_for_graph[i];
+    
+      int neighbor_len = edges_split_num[conf_.edge_to_id_len + 2];
+      num_nodes_tensor_ptr_[i] =
+          feed_vec_[feed_vec_idx++]->mutable_data<int>({1}, this->place_);
+      next_num_nodes_tensor_ptr_[i] =
+          feed_vec_[feed_vec_idx++]->mutable_data<int>({1}, this->place_);
+      edges_src_tensor_ptr_[i] = feed_vec_[feed_vec_idx++]->mutable_data<int64_t>(
+          {neighbor_len, 1}, this->place_);
+      edges_dst_tensor_ptr_[i] = feed_vec_[feed_vec_idx++]->mutable_data<int64_t>(
+          {neighbor_len, 1}, this->place_);
+      edges_split_tensor_ptr_[i] = feed_vec_[feed_vec_idx++]->mutable_data<int>(
+          {conf_.edge_to_id_len}, this->place_);
+      if (conf_.return_weight) {
+        edges_weight_tensor_ptr_[i] = feed_vec_[feed_vec_idx++]->mutable_data<float>(
+            {neighbor_len, 1}, this->place_);
+      }
+    
+      // [edges_split_num, next_num_nodes, num_nodes, neighbor_len]
+      cudaMemcpyAsync(next_num_nodes_tensor_ptr_[i],
+                      edges_split_num.data() + conf_.edge_to_id_len,
+                      sizeof(int),
+                      cudaMemcpyHostToDevice,
+                      train_stream_);
+      cudaMemcpyAsync(num_nodes_tensor_ptr_[i],
+                      edges_split_num.data() + conf_.edge_to_id_len + 1,
+                      sizeof(int),
+                      cudaMemcpyHostToDevice,
+                      train_stream_);
+      cudaMemcpyAsync(edges_split_tensor_ptr_[i],
+                      edges_split_num.data(),
+                      sizeof(int) * conf_.edge_to_id_len,
+                      cudaMemcpyHostToDevice,
+                      train_stream_);
+      cudaMemcpyAsync(edges_src_tensor_ptr_[i],
+                      graph_edges[graph_edges_index++]->ptr(),
+                      sizeof(int64_t) * neighbor_len,
+                      cudaMemcpyDeviceToDevice,
+                      train_stream_);
+      cudaMemcpyAsync(edges_dst_tensor_ptr_[i],
+                      graph_edges[graph_edges_index++]->ptr(),
+                      sizeof(int64_t) * neighbor_len,
+                      cudaMemcpyDeviceToDevice,
+                      train_stream_);
+      if (conf_.return_weight) {
+        cudaMemcpyAsync(edges_weight_tensor_ptr_[i],
+                        graph_edges[graph_edges_index++]->ptr(),
+                        sizeof(float) * neighbor_len,
+                        cudaMemcpyDeviceToDevice,
+                        train_stream_);
+      }
+    } // end for (int i = 0; i < len_samples; i++) {
+
+    index_tensor_ptr_ = feed_vec_[feed_vec_idx++]->mutable_data<int>(
+        {total_instance}, this->place_);
+    cudaMemcpyAsync(index_tensor_ptr_,
+                    inverse_vec_[index]->ptr(),
+                    sizeof(int) * total_instance,
+                    cudaMemcpyDeviceToDevice,
+                    train_stream_);
+
+    if (conf_.get_degree) {
+      degree_tensor_ptr_ = feed_vec_[feed_vec_idx++]->mutable_data<int>(
+          {uniq_instance * conf_.edge_to_id_len}, this->place_);
+      cudaMemcpyAsync(degree_tensor_ptr_,
+                      node_degree_vec_[index]->ptr(),
+                      sizeof(int) * uniq_instance * conf_.edge_to_id_len,
+                      cudaMemcpyDeviceToDevice,
+                      train_stream_);
+    }
+  } // end for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
+
   return 0;
 }
 
@@ -827,23 +826,40 @@ int GraphDataGenerator::FillGraphSlotFeature(
     int total_instance,
     bool gpu_graph_training,
     std::shared_ptr<phi::Allocation> final_sage_nodes) {
+  int ret = 0;
   uint64_t *ins_cursor, *ins_buf;
-  if (gpu_graph_training) {
-    ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_->ptr());
-    ins_cursor = ins_buf + ins_buf_pair_len_ * 2 - total_instance;
-  } else {
-    id_tensor_ptr_ =
-        feed_vec_[0]->mutable_data<int64_t>({total_instance, 1}, this->place_);
-    ins_cursor = reinterpret_cast<uint64_t *>(id_tensor_ptr_);
+
+  for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
+          ++tensor_pair_idx) {
+    int feed_vec_idx = 2 + tensor_pair_idx * conf_.tensor_num_of_one_pair;
+    if (gpu_graph_training) {
+      ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_[tensor_pair_idx]->ptr());
+      ins_cursor = ins_buf + ins_buf_pair_len_[tensor_pair_idx] * 2 - total_instance;
+    } else {
+      id_tensor_ptr_ =
+          feed_vec_[feed_vec_idx]->mutable_data<int64_t>({total_instance, 1}, this->place_);
+      ins_cursor = reinterpret_cast<uint64_t *>(id_tensor_ptr_);
+    }
+    if (!conf_.sage_mode) {
+      if (uint_slot_num_ > 0) {
+        ret += FillSlotFeature(ins_cursor, total_instance, tensor_pair_idx);
+      }
+      if (float_slot_num_ > 0) {
+        ret += FillFloatFeature(ins_cursor, total_instance, tensor_pair_idx);
+      }
+    } else {
+      uint64_t *sage_nodes_ptr =
+          reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
+      if (uint_slot_num_ > 0) {
+        ret += FillSlotFeature(sage_nodes_ptr, total_instance, tensor_pair_idx);
+      }
+      if (float_slot_num_ > 0) {
+        ret += FillFloatFeature(sage_nodes_ptr, total_instance, tensor_pair_idx);
+      }
+    }
   }
 
-  if (!conf_.sage_mode) {
-    return FillSlotFeature(ins_cursor, total_instance);
-  } else {
-    uint64_t *sage_nodes_ptr =
-        reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
-    return FillSlotFeature(sage_nodes_ptr, total_instance);
-  }
+  return ret;
 }
 
 int MakeInsPair(const std::shared_ptr<phi::Allocation> &d_walk,        // input
@@ -851,36 +867,33 @@ int MakeInsPair(const std::shared_ptr<phi::Allocation> &d_walk,        // input
                 const GraphDataGeneratorConfig &conf,
                 const std::shared_ptr<phi::Allocation> &d_random_row,
                 const std::shared_ptr<phi::Allocation> &d_random_row_col_shift,
-                BufState &buf_state,
-                std::shared_ptr<phi::Allocation> &d_ins_buf,         // output
-                std::shared_ptr<phi::Allocation> &d_pair_label_buf,  // output
-                std::shared_ptr<phi::Allocation> &d_pair_num_ptr,    // output
-                int &ins_buf_pair_len,
+                BufState *buf_state,
+                uint64_t *ins_buf,        // output
+                int32_t *pair_label_buf,  // output
+                int *d_pair_num,          // output
+                int *ins_buf_pair_len_ptr,
                 cudaStream_t stream) {
   uint64_t *walk = reinterpret_cast<uint64_t *>(d_walk->ptr());
   uint8_t *walk_ntype = NULL;
-  uint8_t *excluded_train_pair = NULL;
   if (conf.need_walk_ntype) {
     walk_ntype = reinterpret_cast<uint8_t *>(d_walk_ntype->ptr());
   }
+  uint8_t *excluded_train_pair = NULL;
   if (conf.excluded_train_pair_len > 0) {
     excluded_train_pair =
         reinterpret_cast<uint8_t *>(conf.d_excluded_train_pair->ptr());
   }
-  uint64_t *ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf->ptr());
-  int32_t *pair_label_buf = NULL;
   int32_t *pair_label_conf = NULL;
   if (conf.enable_pair_label) {
-    pair_label_buf = reinterpret_cast<int32_t *>(d_pair_label_buf->ptr());
     pair_label_conf =
         reinterpret_cast<int32_t *>(conf.d_pair_label_conf->ptr());
   }
   int *random_row = reinterpret_cast<int *>(d_random_row->ptr());
   int *random_row_col_shift =
       reinterpret_cast<int *>(d_random_row_col_shift->ptr());
-  int *d_pair_num = reinterpret_cast<int *>(d_pair_num_ptr->ptr());
   cudaMemsetAsync(d_pair_num, 0, sizeof(int), stream);
-  int len = buf_state.len;
+  int len = buf_state->len;
+  int &ins_buf_pair_len = *ins_buf_pair_len_ptr;
 
   // make pair
   GraphFillIdKernel<<<GET_BLOCKS(len), CUDA_NUM_THREADS, 0, stream>>>(
@@ -889,10 +902,10 @@ int MakeInsPair(const std::shared_ptr<phi::Allocation> &d_walk,        // input
       d_pair_num,
       walk,
       walk_ntype,
-      random_row + buf_state.cursor,
-      random_row_col_shift + buf_state.cursor,
-      buf_state.central_word,
-      conf.window_step[buf_state.step],
+      random_row + buf_state->cursor,
+      random_row_col_shift + buf_state->cursor,
+      buf_state->central_word,
+      conf.window_step[buf_state->step],
       len,
       conf.walk_len,
       excluded_train_pair,
@@ -926,19 +939,20 @@ int FillInsBuf(const std::shared_ptr<phi::Allocation> &d_walk,        // input
                const GraphDataGeneratorConfig &conf,
                const std::shared_ptr<phi::Allocation> &d_random_row,
                const std::shared_ptr<phi::Allocation> &d_random_row_col_shift,
-               BufState &buf_state,
-               std::shared_ptr<phi::Allocation> &d_ins_buf,         // output
-               std::shared_ptr<phi::Allocation> &d_pair_label_buf,  // output
-               std::shared_ptr<phi::Allocation> &d_pair_num,        // output
-               int &ins_buf_pair_len,
+               BufState *buf_state,
+               uint64_t *ins_buf,        // output
+               int32_t *pair_label_buf,  // output
+               int *pair_num_ptr,        // output
+               int *ins_buf_pair_len_ptr,
                cudaStream_t stream) {
+  int &ins_buf_pair_len = *ins_buf_pair_len_ptr;
   if (ins_buf_pair_len >= conf.batch_size) {
     return conf.batch_size;
   }
-  int total_instance = AcquireInstance(&buf_state);
+  int total_instance = AcquireInstance(buf_state);
 
   VLOG(2) << "total_ins: " << total_instance;
-  buf_state.Debug();
+  buf_state->Debug();
 
   if (total_instance == 0) {
     return -1;
@@ -949,25 +963,27 @@ int FillInsBuf(const std::shared_ptr<phi::Allocation> &d_walk,        // input
                      d_random_row,
                      d_random_row_col_shift,
                      buf_state,
-                     d_ins_buf,
-                     d_pair_label_buf,
-                     d_pair_num,
-                     ins_buf_pair_len,
+                     ins_buf,
+                     pair_label_buf,
+                     pair_num_ptr,
+                     ins_buf_pair_len_ptr,
                      stream);
 }
 
 int GraphDataGenerator::GenerateBatch() {
-  int total_instance = 0;
+  int total_instance = conf_.batch_size;
   platform::CUDADeviceGuard guard(conf_.gpuid);
   int res = 0;
   if (!conf_.gpu_graph_training) {
     // infer
     if (!conf_.sage_mode) {
-      total_instance = (infer_node_start_ + conf_.batch_size <= infer_node_end_)
-                           ? conf_.batch_size
-                           : infer_node_end_ - infer_node_start_;
-      VLOG(2) << "in graph_data generator:batch_size = " << conf_.batch_size
-              << " instance = " << total_instance;
+      for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
+              ++tensor_pair_idx) {
+        int size = infer_node_end_[tensor_pair_idx] - infer_node_start_[tensor_pair_idx];
+        if (size < total_instance) {
+          total_instance = size;
+        }
+      }
       total_instance *= 2;
       if (total_instance == 0) {
         return 0;
@@ -981,45 +997,54 @@ int GraphDataGenerator::GenerateBatch() {
                                total_instance_vec_[sage_batch_count_],
                                sage_batch_count_);
     }
-  } else {
-    // train
+  } else { // train
     if (!conf_.sage_mode) {
-      while (ins_buf_pair_len_ < conf_.batch_size) {
-        res = FillInsBuf(d_walk_,
-                         d_walk_ntype_,
-                         conf_,
-                         d_random_row_,
-                         d_random_row_col_shift_,
-                         buf_state_,
-                         d_ins_buf_,
-                         d_pair_label_buf_,
-                         d_pair_num_,
-                         ins_buf_pair_len_,
-                         train_stream_);
-        if (res == -1) {
-          if (ins_buf_pair_len_ == 0) {
-            if (is_multi_node_) {
-              pass_end_ = 1;
-              if (total_row_ != 0) {
-                buf_state_.Reset(total_row_);
-                VLOG(1)
-                    << "reset buf state to make batch num equal in multi node";
+      for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
+              ++tensor_pair_idx) {
+        while (ins_buf_pair_len_[tensor_pair_idx] < conf_.batch_size) {
+          int32_t *pair_label_buf = NULL;
+          if (conf_.enable_pair_label) {
+            pair_label_buf =
+                reinterpret_cast<int32_t *>(d_pair_label_buf_[tensor_pair_idx]->ptr());
+          }
+          res = FillInsBuf(d_walk_[tensor_pair_idx],
+                           d_walk_ntype_[tensor_pair_idx],
+                           conf_,
+                           d_random_row_[tensor_pair_idx],
+                           d_random_row_col_shift_[tensor_pair_idx],
+                           &buf_state_[tensor_pair_idx],
+                           reinterpret_cast<uint64_t *>(d_ins_buf_[tensor_pair_idx]->ptr()),
+                           pair_label_buf,
+                           reinterpret_cast<int *>(d_pair_num_[tensor_pair_idx]->ptr()),
+                           &ins_buf_pair_len_[tensor_pair_idx],
+                           train_stream_);
+          if (res == -1) {
+            if (ins_buf_pair_len_[tensor_pair_idx] == 0) {
+              if (conf_.is_multi_node) {
+                pass_end_ = 1;
+                if (total_row_[tensor_pair_idx] != 0) {
+                  buf_state_[tensor_pair_idx].Reset(total_row_[tensor_pair_idx]);
+                  VLOG(1)
+                      << "reset buf state to make batch num equal in multi node";
+                }
+              } else {
+                return 0;
               }
             } else {
-              return 0;
+              break;
             }
-          } else {
-            break;
           }
-        }
-      }
-      total_instance = ins_buf_pair_len_ < conf_.batch_size ? ins_buf_pair_len_
+        } // end while (ins_buf_pair_len_ < conf_.batch_size)
+      } // end for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
+
+      int min_ins_buf_pair_len = *std::min_element(ins_buf_pair_len_.begin(), ins_buf_pair_len_.end());
+      total_instance = min_ins_buf_pair_len < conf_.batch_size ? min_ins_buf_pair_len
                                                             : conf_.batch_size;
       total_instance *= 2;
       VLOG(2) << "total_instance: " << total_instance
-              << ", ins_buf_pair_len = " << ins_buf_pair_len_;
+              << ", ins_buf_pair_len = " << min_ins_buf_pair_len;
       FillIdShowClkTensor(total_instance, conf_.gpu_graph_training);
-    } else {
+    } else { // sage
       if (sage_batch_count_ == sage_batch_num_) {
         return 0;
       }
@@ -1047,33 +1072,39 @@ int GraphDataGenerator::GenerateBatch() {
     sage_batch_count_ += 1;
   }
   LoD lod{offset_};
-  feed_vec_[0]->set_lod(lod);
-  if (conf_.slot_num > 0) {
-    for (int i = 0; i < conf_.slot_num; ++i) {
-      feed_vec_[id_offset_of_feed_vec_ + 2 * i]->set_lod(lod);
+  for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
+          ++tensor_pair_idx) {
+    int feed_vec_idx = 2 + tensor_pair_idx * conf_.tensor_num_of_one_pair;
+    feed_vec_[feed_vec_idx++]->set_lod(lod);
+    if (conf_.enable_pair_label) {
+      feed_vec_idx++;
+    }
+    //adapt for float feature 
+    if (conf_.slot_num > 0) {
+      for (int i = 0; i < conf_.slot_num; ++i) {
+        if ((*feed_info_)[feed_vec_idx + 2 * i].type[0] == 'u') {
+          feed_vec_[feed_vec_idx + 2 * i]->set_lod(lod);
+        }
+      }
     }
   }
 
   cudaStreamSynchronize(train_stream_);
   if (!conf_.gpu_graph_training) return 1;
   if (!conf_.sage_mode) {
-    ins_buf_pair_len_ -= total_instance / 2;
+    ins_buf_pair_len_[0] -= total_instance / 2;
   }
   return 1;
 }
 
-__global__ void GraphFillSampleKeysKernel(uint64_t *neighbors,
-                                          uint64_t *sample_keys,
-                                          int *prefix_sum,
+__global__ void GraphFillSampleKeysKernel(int *prefix_sum,
                                           int *sampleidx2row,
                                           int *tmp_sampleidx2row,
                                           int *actual_sample_size,
-                                          int cur_degree,
                                           int len) {
   CUDA_KERNEL_LOOP(idx, len) {
     for (int k = 0; k < actual_sample_size[idx]; k++) {
       size_t offset = prefix_sum[idx] + k;
-      sample_keys[offset] = neighbors[idx * cur_degree + k];
       tmp_sampleidx2row[offset] = sampleidx2row[idx] + k;
     }
   }
@@ -1117,12 +1148,10 @@ __global__ void GraphFillFirstStepKernel(int *prefix_sum,
                                          int walk_degree,
                                          int col_size,
                                          int *actual_sample_size,
-                                         uint64_t *neighbors,
-                                         uint64_t *sample_keys) {
+                                         uint64_t *neighbors) {
   CUDA_KERNEL_LOOP(idx, len) {
     for (int k = 0; k < actual_sample_size[idx]; k++) {
       size_t row = prefix_sum[idx] + k;
-      sample_keys[row] = neighbors[idx * walk_degree + k];
       sampleidx2row[row] = row;
 
       size_t offset = col_size * row;
@@ -1159,6 +1188,29 @@ __global__ void get_each_ins_info(uint8_t *slot_list,
   }
 }
 
+__global__ void get_each_ins_float_info(uint8_t *slot_list,
+                                        uint32_t *slot_size_list,
+                                        uint32_t *slot_size_prefix,
+                                        uint32_t *each_ins_slot_num,
+                                        uint32_t *each_ins_slot_num_inner_prefix,
+                                        size_t key_num,
+                                        int slot_num) { // offset of float slot
+  const size_t i = blockIdx.x * blockDim.y + threadIdx.y;
+  if (i < key_num) {
+    uint32_t slot_index = slot_size_prefix[i];
+    size_t each_ins_slot_index = i * slot_num;
+    for (int j = 0; j < slot_size_list[i]; j++) {
+      each_ins_slot_num[each_ins_slot_index + slot_list[slot_index + j]] += 1;
+    }
+    each_ins_slot_num_inner_prefix[each_ins_slot_index] = 0;
+    for (int j = 1; j < slot_num; j++) {
+      each_ins_slot_num_inner_prefix[each_ins_slot_index + j] =
+          each_ins_slot_num[each_ins_slot_index + j - 1] +
+          each_ins_slot_num_inner_prefix[each_ins_slot_index + j - 1];
+    }
+  }
+}
+
 __global__ void fill_slot_num(uint32_t *d_each_ins_slot_num_ptr,
                               uint64_t **d_ins_slot_num_vector_ptr,
                               size_t key_num,
@@ -1172,7 +1224,7 @@ __global__ void fill_slot_num(uint32_t *d_each_ins_slot_num_ptr,
     }
   }
 }
-
+// 可以搞成模板
 __global__ void fill_slot_tensor(uint64_t *feature_list,
                                  uint32_t *feature_size_prefixsum,
                                  uint32_t *each_ins_slot_num_inner_prefix,
@@ -1182,6 +1234,26 @@ __global__ void fill_slot_tensor(uint64_t *feature_list,
                                  int slot,
                                  int slot_num,
                                  size_t node_num) {
+  const size_t i = blockIdx.x * blockDim.y + threadIdx.y;
+  if (i < node_num) {
+    size_t dst_index = slot_lod_tensor[i];
+    size_t src_index = feature_size_prefixsum[i] +
+                       each_ins_slot_num_inner_prefix[slot_num * i + slot];
+    for (uint64_t j = 0; j < ins_slot_num[i]; j++) {
+      slot_tensor[dst_index + j] = feature_list[src_index + j];
+    }
+  }
+}
+
+__global__ void fill_float_tensor(float *feature_list,
+                                  uint32_t *feature_size_prefixsum,
+                                  uint32_t *each_ins_slot_num_inner_prefix,
+                                  uint64_t *ins_slot_num,
+                                  int64_t *slot_lod_tensor,
+                                  float *slot_tensor,
+                                  int slot,
+                                  int slot_num,
+                                  size_t node_num) {
   const size_t i = blockIdx.x * blockDim.y + threadIdx.y;
   if (i < node_num) {
     size_t dst_index = slot_lod_tensor[i];
@@ -1260,14 +1332,12 @@ void FillOneStep(
     uint64_t *walk,
     uint8_t *walk_ntype,
     int len,
-    NeighborSampleResult &sample_res,
+    NeighborSampleResult *sample_res,
     int cur_degree,
     int step,
     const GraphDataGeneratorConfig &conf,
-    std::shared_ptr<phi::Allocation> &d_sample_keys_ptr,
-    std::shared_ptr<phi::Allocation> &d_prefix_sum_ptr,
-    std::vector<std::shared_ptr<phi::Allocation>> &d_sampleidx2rows,
-    int &cur_sampleidx2row,
+    std::vector<std::shared_ptr<phi::Allocation>> *d_sampleidx2rows,
+    int *cur_sampleidx2row,
     const paddle::platform::Place &place,
     cudaStream_t stream) {
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
@@ -1275,15 +1345,19 @@ void FillOneStep(
   uint8_t edge_src_id = node_id >> 32;
   uint8_t edge_dst_id = node_id;
   size_t temp_storage_bytes = 0;
-  int *d_actual_sample_size = sample_res.actual_sample_size;
-  uint64_t *d_neighbors = sample_res.val;
+  int *d_actual_sample_size = sample_res->actual_sample_size;
+  uint64_t *d_neighbors = sample_res->val;
+  auto d_prefix_sum_ptr =
+      memory::AllocShared(place,
+                          (conf.once_max_sample_keynum + 1) * sizeof(int),
+                          phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   int *d_prefix_sum = reinterpret_cast<int *>(d_prefix_sum_ptr->ptr());
-  uint64_t *d_sample_keys =
-      reinterpret_cast<uint64_t *>(d_sample_keys_ptr->ptr());
+  cudaMemsetAsync(
+      d_prefix_sum, 0, (conf.once_max_sample_keynum + 1) * sizeof(int), stream);
   int *d_sampleidx2row =
-      reinterpret_cast<int *>(d_sampleidx2rows[cur_sampleidx2row]->ptr());
-  int *d_tmp_sampleidx2row =
-      reinterpret_cast<int *>(d_sampleidx2rows[1 - cur_sampleidx2row]->ptr());
+      reinterpret_cast<int *>((*d_sampleidx2rows)[*cur_sampleidx2row]->ptr());
+  int *d_tmp_sampleidx2row = reinterpret_cast<int *>(
+      (*d_sampleidx2rows)[1 - *cur_sampleidx2row]->ptr());
 
   CUDA_CHECK(cub::DeviceScan::InclusiveSum(NULL,
                                            temp_storage_bytes,
@@ -1318,18 +1392,14 @@ void FillOneStep(
         conf.walk_degree,
         conf.walk_len,
         d_actual_sample_size,
-        d_neighbors,
-        d_sample_keys);
+        d_neighbors);
 
   } else {
     GraphFillSampleKeysKernel<<<GET_BLOCKS(len), CUDA_NUM_THREADS, 0, stream>>>(
-        d_neighbors,
-        d_sample_keys,
         d_prefix_sum,
         d_sampleidx2row,
         d_tmp_sampleidx2row,
         d_actual_sample_size,
-        cur_degree,
         len);
 
     GraphDoWalkKernel<<<GET_BLOCKS(len), CUDA_NUM_THREADS, 0, stream>>>(
@@ -1346,21 +1416,19 @@ void FillOneStep(
         edge_dst_id);
   }
   if (conf.debug_mode) {
-    size_t once_max_sample_keynum =
-        conf.walk_degree * conf.once_sample_startid_len;
     int *h_prefix_sum = new int[len + 1];
     int *h_actual_size = new int[len];
-    int *h_offset2idx = new int[once_max_sample_keynum];
+    int *h_offset2idx = new int[conf.once_max_sample_keynum];
     cudaMemcpy(h_offset2idx,
                d_tmp_sampleidx2row,
-               once_max_sample_keynum * sizeof(int),
+               conf.once_max_sample_keynum * sizeof(int),
                cudaMemcpyDeviceToHost);
 
     cudaMemcpy(h_prefix_sum,
                d_prefix_sum,
                (len + 1) * sizeof(int),
                cudaMemcpyDeviceToHost);
-    for (int xx = 0; xx < once_max_sample_keynum; xx++) {
+    for (int xx = 0; xx < conf.once_max_sample_keynum; xx++) {
       VLOG(2) << "h_offset2idx[" << xx << "]: " << h_offset2idx[xx];
     }
     for (int xx = 0; xx < len + 1; xx++) {
@@ -1371,10 +1439,10 @@ void FillOneStep(
     delete[] h_offset2idx;
   }
   cudaStreamSynchronize(stream);
-  cur_sampleidx2row = 1 - cur_sampleidx2row;
+  *cur_sampleidx2row = 1 - *cur_sampleidx2row;
 }
 
-int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num) {
+int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num, int tensor_pair_idx) {
   platform::CUDADeviceGuard guard(conf_.gpuid);
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   std::shared_ptr<phi::Allocation> d_feature_list;
@@ -1382,16 +1450,14 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num) {
 
   size_t temp_bytes = (key_num + 1) * sizeof(uint32_t);
   if (d_feature_size_list_buf_ == NULL ||
-    d_feature_size_list_buf_->size() < temp_bytes) {
-      d_feature_size_list_buf_ =
-          memory::AllocShared(this->place_, temp_bytes);
+      d_feature_size_list_buf_->size() < temp_bytes) {
+    d_feature_size_list_buf_ = memory::AllocShared(this->place_, temp_bytes);
   }
   if (d_feature_size_prefixsum_buf_ == NULL ||
-    d_feature_size_prefixsum_buf_->size() < temp_bytes) {
-      d_feature_size_prefixsum_buf_ =
-          memory::AllocShared(this->place_, temp_bytes);
+      d_feature_size_prefixsum_buf_->size() < temp_bytes) {
+    d_feature_size_prefixsum_buf_ =
+        memory::AllocShared(this->place_, temp_bytes);
   }
-
   int fea_num =
       gpu_graph_ptr->get_feature_info_of_nodes(conf_.gpuid,
                                                d_walk,
@@ -1400,29 +1466,42 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num) {
                                                d_feature_size_prefixsum_buf_,
                                                d_feature_list,
                                                d_slot_list);
-  int64_t *slot_tensor_ptr_[conf_.slot_num];
-  int64_t *slot_lod_tensor_ptr_[conf_.slot_num];
+  // num of slot feature
+  int slot_num = conf_.slot_num - float_slot_num_;
+  int64_t *slot_tensor_ptr_[slot_num];
+  int64_t *slot_lod_tensor_ptr_[slot_num];
+
+  int feed_vec_idx = 2 + tensor_pair_idx * conf_.tensor_num_of_one_pair;
+  ++feed_vec_idx;
+  if (conf_.enable_pair_label) {
+    ++feed_vec_idx;
+  }
+
   if (fea_num == 0) {
     int64_t default_lod = 1;
+    int ii = 0;
     for (int i = 0; i < conf_.slot_num; ++i) {
-      slot_lod_tensor_ptr_[i] =
-          feed_vec_[id_offset_of_feed_vec_ + 2 * i + 1]->mutable_data<int64_t>(
-              {(long)key_num + 1}, this->place_);  // NOLINT
-      slot_tensor_ptr_[i] =
-          feed_vec_[id_offset_of_feed_vec_ + 2 * i]->mutable_data<int64_t>(
-              {1, 1}, this->place_);
-      CUDA_CHECK(cudaMemsetAsync(
-          slot_tensor_ptr_[i], 0, sizeof(int64_t), train_stream_));
-      CUDA_CHECK(cudaMemsetAsync(slot_lod_tensor_ptr_[i],
-                                 0,
-                                 sizeof(int64_t) * key_num,
-                                 train_stream_));
-      CUDA_CHECK(cudaMemcpyAsync(
-          reinterpret_cast<char *>(slot_lod_tensor_ptr_[i] + key_num),
+      if ((*feed_info_)[feed_vec_idx + 2 * i].type[0] == 'u') {
+        slot_lod_tensor_ptr_[ii] =
+            feed_vec_[feed_vec_idx + 2 * i + 1]->mutable_data<int64_t>(
+                {(long)key_num + 1}, this->place_);  // NOLINT
+        slot_tensor_ptr_[ii] =
+            feed_vec_[feed_vec_idx + 2 * i]->mutable_data<int64_t>(
+                {1, 1}, this->place_);
+        CUDA_CHECK(cudaMemsetAsync(
+            slot_tensor_ptr_[ii], 0, sizeof(int64_t), train_stream_));
+        CUDA_CHECK(cudaMemsetAsync(slot_lod_tensor_ptr_[ii],
+                                   0,
+                                   sizeof(int64_t) * key_num,
+                                   train_stream_));
+        CUDA_CHECK(cudaMemcpyAsync(
+            reinterpret_cast<char *>(slot_lod_tensor_ptr_[ii] + key_num),
           &default_lod,
           sizeof(int64_t),
           cudaMemcpyHostToDevice,
           train_stream_));
+        ii++;
+      }
     }
     CUDA_CHECK(cudaStreamSynchronize(train_stream_));
     return 0;
@@ -1432,9 +1511,9 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num) {
       reinterpret_cast<uint64_t *>(d_feature_list->ptr());
   uint8_t *d_slot_list_ptr = reinterpret_cast<uint8_t *>(d_slot_list->ptr());
   uint32_t *d_feature_size_list_ptr =
-       reinterpret_cast<uint32_t *>(d_feature_size_list_buf_->ptr());
+      reinterpret_cast<uint32_t *>(d_feature_size_list_buf_->ptr());
   uint32_t *d_feature_size_prefixsum_ptr =
-       reinterpret_cast<uint32_t *>(d_feature_size_prefixsum_buf_->ptr());
+      reinterpret_cast<uint32_t *>(d_feature_size_prefixsum_buf_->ptr());
   VLOG(2) << "end trans feature list and slot list";
 
   CUDA_CHECK(cudaStreamSynchronize(train_stream_));
@@ -1455,7 +1534,6 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num) {
 
   dim3 grid((key_num - 1) / 256 + 1);
   dim3 block(1, 256);
-
   get_each_ins_info<<<grid, block, 0, train_stream_>>>(
       d_slot_list_ptr,
       d_feature_size_list_ptr,
@@ -1463,100 +1541,125 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num) {
       d_each_ins_slot_num_ptr,
       d_each_ins_slot_num_inner_prefix_ptr,
       key_num,
-      conf_.slot_num);
+      slot_num);
 
-  std::vector<std::shared_ptr<phi::Allocation>> ins_slot_num(conf_.slot_num,
+  std::vector<std::shared_ptr<phi::Allocation>> ins_slot_num(slot_num,
                                                              nullptr);
-  std::vector<uint64_t *> ins_slot_num_vecotr(conf_.slot_num, NULL);
+  std::vector<uint64_t *> ins_slot_num_vecotr(slot_num, NULL);
   std::shared_ptr<phi::Allocation> d_ins_slot_num_vector =
-      memory::AllocShared(place_, (conf_.slot_num) * sizeof(uint64_t *));
+      memory::AllocShared(place_, (slot_num) * sizeof(uint64_t *));
   uint64_t **d_ins_slot_num_vector_ptr =
       reinterpret_cast<uint64_t **>(d_ins_slot_num_vector->ptr());
-  for (int i = 0; i < conf_.slot_num; i++) {
-    ins_slot_num[i] = memory::AllocShared(place_, key_num * sizeof(uint64_t));
-    ins_slot_num_vecotr[i] =
-        reinterpret_cast<uint64_t *>(ins_slot_num[i]->ptr());
-  }
-  CUDA_CHECK(
-      cudaMemcpyAsync(reinterpret_cast<char *>(d_ins_slot_num_vector_ptr),
-                      ins_slot_num_vecotr.data(),
-                      sizeof(uint64_t *) * conf_.slot_num,
-                      cudaMemcpyHostToDevice,
-                      train_stream_));
-  fill_slot_num<<<grid, block, 0, train_stream_>>>(d_each_ins_slot_num_ptr,
-                                                   d_ins_slot_num_vector_ptr,
-                                                   key_num,
-                                                   conf_.slot_num);
-  CUDA_CHECK(cudaStreamSynchronize(train_stream_));
 
-  for (int i = 0; i < conf_.slot_num; ++i) {
-    slot_lod_tensor_ptr_[i] =
-        feed_vec_[id_offset_of_feed_vec_ + 2 * i + 1]->mutable_data<int64_t>(
-            {(long)key_num + 1}, this->place_);  // NOLINT
-  }
-  size_t temp_storage_bytes = 0;
-  CUDA_CHECK(cub::DeviceScan::InclusiveSum(NULL,
-                                           temp_storage_bytes,
-                                           ins_slot_num_vecotr[0],
-                                           slot_lod_tensor_ptr_[0] + 1,
-                                           key_num,
-                                           train_stream_));
-  CUDA_CHECK(cudaStreamSynchronize(train_stream_));
-  auto d_temp_storage = memory::Alloc(
-      this->place_,
-      temp_storage_bytes,
-      phi::Stream(reinterpret_cast<phi::StreamId>(train_stream_)));
-  std::vector<int64_t> each_slot_fea_num(conf_.slot_num, 0);
-  for (int i = 0; i < conf_.slot_num; ++i) {
-    CUDA_CHECK(cudaMemsetAsync(
-        slot_lod_tensor_ptr_[i], 0, sizeof(uint64_t), train_stream_));
-    CUDA_CHECK(cub::DeviceScan::InclusiveSum(d_temp_storage->ptr(),
-                                             temp_storage_bytes,
-                                             ins_slot_num_vecotr[i],
-                                             slot_lod_tensor_ptr_[i] + 1,
-                                             key_num,
-                                             train_stream_));
-    CUDA_CHECK(cudaMemcpyAsync(&each_slot_fea_num[i],
-                               slot_lod_tensor_ptr_[i] + key_num,
-                               sizeof(uint64_t),
-                               cudaMemcpyDeviceToHost,
-                               train_stream_));
-  }
-  CUDA_CHECK(cudaStreamSynchronize(train_stream_));
-  for (int i = 0; i < conf_.slot_num; ++i) {
-    slot_tensor_ptr_[i] =
-        feed_vec_[id_offset_of_feed_vec_ + 2 * i]->mutable_data<int64_t>(
-            {each_slot_fea_num[i], 1}, this->place_);
-  }
-  int64_t default_lod = 1;
-  for (int i = 0; i < conf_.slot_num; ++i) {
-    fill_slot_tensor<<<grid, block, 0, train_stream_>>>(
-        d_feature_list_ptr,
-        d_feature_size_prefixsum_ptr,
-        d_each_ins_slot_num_inner_prefix_ptr,
-        ins_slot_num_vecotr[i],
-        slot_lod_tensor_ptr_[i],
-        slot_tensor_ptr_[i],
-        i,
-        conf_.slot_num,
-        key_num);
-    // trick for empty tensor
-    if (each_slot_fea_num[i] == 0) {
-      slot_tensor_ptr_[i] =
-          feed_vec_[id_offset_of_feed_vec_ + 2 * i]->mutable_data<int64_t>(
-              {1, 1}, this->place_);
-      CUDA_CHECK(cudaMemsetAsync(
-          slot_tensor_ptr_[i], 0, sizeof(uint64_t), train_stream_));
-      CUDA_CHECK(cudaMemcpyAsync(
-          reinterpret_cast<char *>(slot_lod_tensor_ptr_[i] + key_num),
-          &default_lod,
-          sizeof(int64_t),
-          cudaMemcpyHostToDevice,
-          train_stream_));
+  int ii = 0;
+  for (int i = 0; i < conf_.slot_num; i++) {
+    if ((*feed_info_)[feed_vec_idx + 2 * i].type[0] == 'u') {
+      ins_slot_num[ii] = memory::AllocShared(place_, key_num * sizeof(uint64_t));
+      ins_slot_num_vecotr[ii] =
+          reinterpret_cast<uint64_t *>(ins_slot_num[ii]->ptr());
+      ii++;
     }
   }
-  CUDA_CHECK(cudaStreamSynchronize(train_stream_));
+  if (slot_num > 0) {
+    CUDA_CHECK(
+        cudaMemcpyAsync(reinterpret_cast<char *>(d_ins_slot_num_vector_ptr),
+                        ins_slot_num_vecotr.data(),
+                        sizeof(uint64_t *) * slot_num,
+                        cudaMemcpyHostToDevice,
+                        train_stream_));
+    fill_slot_num<<<grid, block, 0, train_stream_>>>(d_each_ins_slot_num_ptr,
+                                                     d_ins_slot_num_vector_ptr,
+                                                     key_num,
+                                                     slot_num);
+    CUDA_CHECK(cudaStreamSynchronize(train_stream_));
 
+    ii = 0;
+    for (int i = 0; i < conf_.slot_num; ++i) {
+      if ((*feed_info_)[feed_vec_idx + 2 * i].type[0] == 'u') {
+        slot_lod_tensor_ptr_[ii] =
+        feed_vec_[feed_vec_idx + 2 * i + 1]->mutable_data<int64_t>(
+            {(long)key_num + 1}, this->place_);  // NOLINT
+        ii++;
+      }
+    }
+
+    size_t temp_storage_bytes = 0;
+    CUDA_CHECK(cub::DeviceScan::InclusiveSum(NULL,
+                                             temp_storage_bytes,
+                                             ins_slot_num_vecotr[0],
+                                             slot_lod_tensor_ptr_[0] + 1,
+                                             key_num,
+                                             train_stream_));
+    CUDA_CHECK(cudaStreamSynchronize(train_stream_));
+
+
+    auto d_temp_storage = memory::Alloc(
+        this->place_,
+        temp_storage_bytes,
+        phi::Stream(reinterpret_cast<phi::StreamId>(train_stream_)));
+
+    ii = 0;
+    std::vector<int64_t> each_slot_fea_num(slot_num, 0);
+    for (int i = 0; i < conf_.slot_num; ++i) {
+      if ((*feed_info_)[feed_vec_idx + 2 * i].type[0] == 'u') {
+        CUDA_CHECK(cudaMemsetAsync(
+            slot_lod_tensor_ptr_[ii], 0, sizeof(uint64_t), train_stream_));
+        CUDA_CHECK(cub::DeviceScan::InclusiveSum(d_temp_storage->ptr(),
+                                                 temp_storage_bytes,
+                                                 ins_slot_num_vecotr[ii],
+                                                 slot_lod_tensor_ptr_[ii] + 1,
+                                                 key_num,
+                                                 train_stream_));
+        CUDA_CHECK(cudaMemcpyAsync(&each_slot_fea_num[ii],
+                                   slot_lod_tensor_ptr_[ii] + key_num,
+                                   sizeof(uint64_t),
+                                   cudaMemcpyDeviceToHost,
+                                   train_stream_));
+        ii++;
+      }
+    }
+    CUDA_CHECK(cudaStreamSynchronize(train_stream_));
+    ii = 0;
+    for (int i = 0; i < conf_.slot_num; ++i) {
+      if ((*feed_info_)[feed_vec_idx + 2 * i].type[0] == 'u') {
+        slot_tensor_ptr_[ii] = feed_vec_[feed_vec_idx + 2 * i]->mutable_data<int64_t>(
+            {each_slot_fea_num[ii], 1}, this->place_);
+        ii++;
+      }
+    }
+    ii = 0;
+    int64_t default_lod = 1;
+    for (int i = 0; i < conf_.slot_num; ++i) {
+      if ((*feed_info_)[feed_vec_idx + 2 * i].type[0] == 'u') {
+        fill_slot_tensor<<<grid, block, 0, train_stream_>>>(
+            d_feature_list_ptr,
+            d_feature_size_prefixsum_ptr,
+            d_each_ins_slot_num_inner_prefix_ptr,
+            ins_slot_num_vecotr[ii],
+            slot_lod_tensor_ptr_[ii],
+            slot_tensor_ptr_[ii],
+            ii,
+            slot_num,
+            key_num);
+
+        // trick for empty tensor
+        if (each_slot_fea_num[ii] == 0) {
+          slot_tensor_ptr_[ii] =
+              feed_vec_[feed_vec_idx + 2 * i]->mutable_data<int64_t>({1, 1}, this->place_);
+          CUDA_CHECK(cudaMemsetAsync(
+              slot_tensor_ptr_[ii], 0, sizeof(uint64_t), train_stream_));
+          CUDA_CHECK(cudaMemcpyAsync(
+              reinterpret_cast<char *>(slot_lod_tensor_ptr_[ii] + key_num),
+              &default_lod,
+              sizeof(int64_t),
+              cudaMemcpyHostToDevice,
+              train_stream_));
+        }
+        ii++;
+      }
+    }
+    CUDA_CHECK(cudaStreamSynchronize(train_stream_));
+  }
   if (conf_.debug_mode) {
     std::vector<uint32_t> h_feature_size_list(key_num, 0);
     std::vector<uint32_t> h_feature_size_list_prefixsum(key_num, 0);
@@ -1608,7 +1711,8 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num) {
     VLOG(0) << "all fea_num is " << fea_num << " calc fea_num is "
             << h_feature_size_list[key_num - 1] +
                    h_feature_size_list_prefixsum[key_num - 1];
-    for (int i = 0; i < conf_.slot_num; ++i) {
+
+    for (int i = 0; i < slot_num; ++i) {
       std::vector<int64_t> h_slot_lod_tensor(key_num + 1, 0);
       CUDA_CHECK(
           cudaMemcpyAsync(reinterpret_cast<char *>(h_slot_lod_tensor.data()),
@@ -1644,29 +1748,369 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num) {
   return 0;
 }
 
+int GraphDataGenerator::FillFloatFeature(uint64_t *d_walk, size_t key_num, int tensor_pair_idx) {
+  platform::CUDADeviceGuard guard(conf_.gpuid);
+  auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
+  std::shared_ptr<phi::Allocation> d_feature_list;
+  std::shared_ptr<phi::Allocation> d_slot_list;
+
+  if (conf_.sage_mode) {
+    size_t temp_storage_bytes = (key_num + 1) * sizeof(uint32_t);
+    if (d_feature_size_list_buf_ == NULL ||
+        d_feature_size_list_buf_->size() < temp_storage_bytes) {
+      d_feature_size_list_buf_ =
+          memory::AllocShared(this->place_, temp_storage_bytes);
+    }
+    if (d_feature_size_prefixsum_buf_ == NULL ||
+        d_feature_size_prefixsum_buf_->size() < temp_storage_bytes) {
+      d_feature_size_prefixsum_buf_ =
+          memory::AllocShared(this->place_, temp_storage_bytes);
+    }
+  }
+
+  uint32_t *d_feature_size_list_ptr =
+      reinterpret_cast<uint32_t *>(d_feature_size_list_buf_->ptr());
+  uint32_t *d_feature_size_prefixsum_ptr =
+      reinterpret_cast<uint32_t *>(d_feature_size_prefixsum_buf_->ptr());
+
+  int fea_num =
+      gpu_graph_ptr->get_float_feature_info_of_nodes(conf_.gpuid,
+                                                     d_walk,
+                                                     key_num,
+                                                     d_feature_size_list_ptr,
+                                                     d_feature_size_prefixsum_ptr,
+                                                     d_feature_list,
+                                                     d_slot_list);
+
+  int feed_vec_idx = 2 + tensor_pair_idx * conf_.tensor_num_of_one_pair;
+  ++feed_vec_idx;
+  if (conf_.enable_pair_label) {
+    ++feed_vec_idx;
+  }
+
+  float *slot_tensor_ptr_[float_slot_num_];
+  int64_t *slot_lod_tensor_ptr_[float_slot_num_];
+  if (fea_num == 0) {
+    int64_t default_lod = 1;
+    int ii = 0;
+    for (int i = 0; i < conf_.slot_num; ++i) {
+      if ((*feed_info_)[feed_vec_idx + 2 * i].type[0] == 'f') {
+        slot_lod_tensor_ptr_[ii] = feed_vec_[feed_vec_idx + 2 * i + 1]->mutable_data<int64_t>(
+            {(long)key_num + 1}, this->place_);  // NOLINT
+        slot_tensor_ptr_[ii] =
+            feed_vec_[feed_vec_idx + 2 * i]->mutable_data<float>({1, 1}, this->place_);
+        CUDA_CHECK(cudaMemsetAsync(
+            slot_tensor_ptr_[ii], 0, sizeof(float), train_stream_));
+        CUDA_CHECK(cudaMemsetAsync(slot_lod_tensor_ptr_[ii],
+                                   0,
+                                   sizeof(int64_t) * key_num,
+                                   train_stream_));
+        CUDA_CHECK(cudaMemcpyAsync(
+          reinterpret_cast<char *>(slot_lod_tensor_ptr_[ii] + key_num),
+          &default_lod,
+          sizeof(int64_t),
+          cudaMemcpyHostToDevice,
+          train_stream_));
+        ii++;
+      }
+    }
+    CUDA_CHECK(cudaStreamSynchronize(train_stream_));
+    return 0;
+  }
+
+  float *d_feature_list_ptr =
+      reinterpret_cast<float *>(d_feature_list->ptr());
+  uint8_t *d_slot_list_ptr = reinterpret_cast<uint8_t *>(d_slot_list->ptr());
+
+  std::shared_ptr<phi::Allocation> d_each_ins_slot_num_inner_prefix =
+      memory::AllocShared(place_, (float_slot_num_ * key_num) * sizeof(uint32_t));
+  std::shared_ptr<phi::Allocation> d_each_ins_slot_num =
+      memory::AllocShared(place_, (float_slot_num_ * key_num) * sizeof(uint32_t));
+  uint32_t *d_each_ins_slot_num_ptr =
+      reinterpret_cast<uint32_t *>(d_each_ins_slot_num->ptr());
+  uint32_t *d_each_ins_slot_num_inner_prefix_ptr =
+      reinterpret_cast<uint32_t *>(d_each_ins_slot_num_inner_prefix->ptr());
+  CUDA_CHECK(cudaMemsetAsync(d_each_ins_slot_num_ptr,
+                             0,
+                             float_slot_num_ * key_num * sizeof(uint32_t),
+                             train_stream_));
+
+  dim3 grid((key_num - 1) / 256 + 1);
+  dim3 block(1, 256);
+  get_each_ins_float_info<<<grid, block, 0, train_stream_>>>(
+      d_slot_list_ptr,
+      d_feature_size_list_ptr,
+      d_feature_size_prefixsum_ptr,
+      d_each_ins_slot_num_ptr,
+      d_each_ins_slot_num_inner_prefix_ptr,
+      key_num,
+      float_slot_num_);
+
+  std::vector<std::shared_ptr<phi::Allocation>> ins_slot_num(float_slot_num_,
+                                                             nullptr);
+  std::vector<uint64_t *> ins_slot_num_vecotr(float_slot_num_, NULL);
+  std::shared_ptr<phi::Allocation> d_ins_slot_num_vector =
+      memory::AllocShared(place_, (float_slot_num_) * sizeof(uint64_t *));
+  uint64_t **d_ins_slot_num_vector_ptr =
+      reinterpret_cast<uint64_t **>(d_ins_slot_num_vector->ptr());
+
+  int ii = 0;
+  for (int i = 0; i < conf_.slot_num; i++) {
+    if ((*feed_info_)[feed_vec_idx + 2 * i].type[0] == 'f') {
+      ins_slot_num[ii] = memory::AllocShared(place_, key_num * sizeof(uint64_t));
+      ins_slot_num_vecotr[ii] =
+          reinterpret_cast<uint64_t *>(ins_slot_num[ii]->ptr());
+      ii++;
+    }
+  }
+  
+  if (float_slot_num_ > 0) {
+    CUDA_CHECK(
+        cudaMemcpyAsync(reinterpret_cast<char *>(d_ins_slot_num_vector_ptr),
+                        ins_slot_num_vecotr.data(),
+                        sizeof(uint64_t *) * float_slot_num_,
+                        cudaMemcpyHostToDevice,
+                        train_stream_));
+
+    fill_slot_num<<<grid, block, 0, train_stream_>>>(
+        d_each_ins_slot_num_ptr, d_ins_slot_num_vector_ptr, key_num, float_slot_num_);
+    CUDA_CHECK(cudaStreamSynchronize(train_stream_));
+
+    ii = 0;
+    for (int i = 0; i < conf_.slot_num; ++i) {
+      if ((*feed_info_)[feed_vec_idx + 2 * i].type[0] == 'f') {
+        slot_lod_tensor_ptr_[ii] = feed_vec_[feed_vec_idx + 2 * i + 1]->mutable_data<int64_t>(
+            {(long)key_num + 1}, this->place_);  // NOLINT
+        ii++;
+      }
+    }
+    size_t temp_storage_bytes = 0;
+    CUDA_CHECK(cub::DeviceScan::InclusiveSum(NULL,
+                                             temp_storage_bytes,
+                                             ins_slot_num_vecotr[0],
+                                             slot_lod_tensor_ptr_[0] + 1,
+                                             key_num,
+                                             train_stream_));
+    CUDA_CHECK(cudaStreamSynchronize(train_stream_));
+    auto d_temp_storage = memory::Alloc(
+        this->place_,
+        temp_storage_bytes,
+        phi::Stream(reinterpret_cast<phi::StreamId>(train_stream_)));
+    std::vector<int64_t> each_slot_fea_num(float_slot_num_, 0);
+
+    ii = 0;
+    for (int i = 0; i < conf_.slot_num; ++i) {
+      if ((*feed_info_)[feed_vec_idx + 2 * i].type[0] == 'f') {
+        CUDA_CHECK(cudaMemsetAsync(
+            slot_lod_tensor_ptr_[ii], 0, sizeof(uint64_t), train_stream_));
+        CUDA_CHECK(cub::DeviceScan::InclusiveSum(d_temp_storage->ptr(),
+                                                 temp_storage_bytes,
+                                                 ins_slot_num_vecotr[ii],
+                                                 slot_lod_tensor_ptr_[ii] + 1,
+                                                 key_num,
+                                                 train_stream_));
+        CUDA_CHECK(cudaMemcpyAsync(&each_slot_fea_num[ii],
+                                   slot_lod_tensor_ptr_[ii] + key_num,
+                                   sizeof(uint64_t),
+                                   cudaMemcpyDeviceToHost,
+                                   train_stream_));
+        ii++;
+      }
+    }
+    CUDA_CHECK(cudaStreamSynchronize(train_stream_));
+    ii = 0;
+    for (int i = 0; i < conf_.slot_num; ++i) {
+      if ((*feed_info_)[feed_vec_idx + 2 * i].type[0] == 'f') {
+        slot_tensor_ptr_[ii] = feed_vec_[feed_vec_idx + 2 * i]->mutable_data<float>(
+            {each_slot_fea_num[ii], 1}, this->place_);
+        ii++;
+      }
+    }
+    ii = 0;
+    int64_t default_lod = 1;
+    for (int i = 0; i < conf_.slot_num; ++i) {
+      if ((*feed_info_)[feed_vec_idx + 2 * i].type[0] == 'f') {
+        fill_float_tensor<<<grid, block, 0, train_stream_>>>(
+            d_feature_list_ptr,
+            d_feature_size_prefixsum_ptr,
+            d_each_ins_slot_num_inner_prefix_ptr,
+            ins_slot_num_vecotr[ii],
+            slot_lod_tensor_ptr_[ii],
+            slot_tensor_ptr_[ii],
+            ii,
+            float_slot_num_,
+            key_num);
+        // trick for empty tensor
+        if (each_slot_fea_num[ii] == 0) {
+          slot_tensor_ptr_[ii] =
+              feed_vec_[feed_vec_idx + 2 * i]->mutable_data<float>({1, 1}, this->place_);
+          CUDA_CHECK(cudaMemsetAsync(
+              slot_tensor_ptr_[ii], 0, sizeof(float), train_stream_));
+          CUDA_CHECK(cudaMemcpyAsync(
+              reinterpret_cast<char *>(slot_lod_tensor_ptr_[ii] + key_num),
+              &default_lod,
+              sizeof(int64_t),
+              cudaMemcpyHostToDevice,
+              train_stream_));
+        }
+        ii++;
+      }
+    }
+    CUDA_CHECK(cudaStreamSynchronize(train_stream_));
+  }
+  if (conf_.debug_mode) {
+    std::vector<uint32_t> h_feature_size_list(key_num, 0);
+    std::vector<uint32_t> h_feature_size_list_prefixsum(key_num, 0);
+    std::vector<uint64_t> node_list(key_num, 0);
+    std::vector<float> h_feature_list(fea_num, 0);
+    std::vector<uint8_t> h_slot_list(fea_num, 0);
+
+    CUDA_CHECK(
+        cudaMemcpyAsync(reinterpret_cast<char *>(h_feature_size_list.data()),
+                        d_feature_size_list_ptr,
+                        sizeof(uint32_t) * key_num,
+                        cudaMemcpyDeviceToHost,
+                        train_stream_));
+    CUDA_CHECK(cudaMemcpyAsync(
+        reinterpret_cast<char *>(h_feature_size_list_prefixsum.data()),
+        d_feature_size_prefixsum_ptr,
+        sizeof(uint32_t) * key_num,
+        cudaMemcpyDeviceToHost,
+        train_stream_));
+    CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<char *>(node_list.data()),
+                               d_walk,
+                               sizeof(uint64_t) * key_num,
+                               cudaMemcpyDeviceToHost,
+                               train_stream_));
+
+    CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<char *>(h_feature_list.data()),
+                               d_feature_list_ptr,
+                               sizeof(float) * fea_num,
+                               cudaMemcpyDeviceToHost,
+                               train_stream_));
+    CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<char *>(h_slot_list.data()),
+                               d_slot_list_ptr,
+                               sizeof(uint8_t) * fea_num,
+                               cudaMemcpyDeviceToHost,
+                               train_stream_));
+
+    CUDA_CHECK(cudaStreamSynchronize(train_stream_));
+    for (size_t i = 0; i < key_num; i++) {
+      std::stringstream ss;
+      ss << "node_id: " << node_list[i]
+         << " fea_num: " << h_feature_size_list[i] << " offset "
+         << h_feature_size_list_prefixsum[i] << " slot: ";
+      for (uint32_t j = 0; j < h_feature_size_list[i]; j++) {
+        ss << int(h_slot_list[h_feature_size_list_prefixsum[i] + j]) << " : "
+           << h_feature_list[h_feature_size_list_prefixsum[i] + j] << "  ";
+      }
+      VLOG(0) << ss.str();
+    }
+    VLOG(0) << "all float fea_num is " << fea_num << " calc float fea_num is "
+            << h_feature_size_list[key_num - 1] +
+                   h_feature_size_list_prefixsum[key_num - 1];
+    for (int i = 0; i < float_slot_num_; ++i) {
+      std::vector<int64_t> h_slot_lod_tensor(key_num + 1, 0);
+      CUDA_CHECK(
+          cudaMemcpyAsync(reinterpret_cast<char *>(h_slot_lod_tensor.data()),
+                          slot_lod_tensor_ptr_[i],
+                          sizeof(int64_t) * (key_num + 1),
+                          cudaMemcpyDeviceToHost,
+                          train_stream_));
+      CUDA_CHECK(cudaStreamSynchronize(train_stream_));
+      std::stringstream ss_lod;
+      std::stringstream ss_tensor;
+      ss_lod << " slot " << i << " lod is [";
+      for (size_t j = 0; j < key_num + 1; j++) {
+        ss_lod << h_slot_lod_tensor[j] << ",";
+      }
+      ss_lod << "]";
+      std::vector<float> h_slot_tensor(h_slot_lod_tensor[key_num], 0);
+      CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<char *>(h_slot_tensor.data()),
+                                 slot_tensor_ptr_[i],
+                                 sizeof(float) * h_slot_lod_tensor[key_num],
+                                 cudaMemcpyDeviceToHost,
+                                 train_stream_));
+      CUDA_CHECK(cudaStreamSynchronize(train_stream_));
+
+      ss_tensor << " tensor is [ ";
+      for (size_t j = 0; j < h_slot_lod_tensor[key_num]; j++) {
+        ss_tensor << h_slot_tensor[j] << ",";
+      }
+      ss_tensor << "]";
+      VLOG(0) << ss_lod.str() << "  " << ss_tensor.str();
+    }
+  }
+  return 0;
+}
+
 uint64_t CopyUniqueNodes(
     HashTable<uint64_t, uint64_t> *table,
     uint64_t copy_unique_len,
     const paddle::platform::Place &place,
     const std::shared_ptr<phi::Allocation> &d_uniq_node_num_ptr,
-    std::vector<uint64_t> &host_vec,  // output
-    cudaStream_t stream);
+    std::vector<uint64_t> *host_vec_ptr,  // output
+    cudaStream_t stream) {
+  if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
+    uint64_t h_uniq_node_num = 0;
+    uint64_t *d_uniq_node_num =
+        reinterpret_cast<uint64_t *>(d_uniq_node_num_ptr->ptr());
+    cudaMemcpyAsync(&h_uniq_node_num,
+                    d_uniq_node_num,
+                    sizeof(uint64_t),
+                    cudaMemcpyDeviceToHost,
+                    stream);
+    cudaStreamSynchronize(stream);
+    auto d_uniq_node = memory::AllocShared(
+        place,
+        h_uniq_node_num * sizeof(uint64_t),
+        phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+    uint64_t *d_uniq_node_ptr =
+        reinterpret_cast<uint64_t *>(d_uniq_node->ptr());
+
+    auto d_node_cursor = memory::AllocShared(
+        place,
+        sizeof(uint64_t),
+        phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+
+    uint64_t *d_node_cursor_ptr =
+        reinterpret_cast<uint64_t *>(d_node_cursor->ptr());
+    cudaMemsetAsync(d_node_cursor_ptr, 0, sizeof(uint64_t), stream);
+    // uint64_t unused_key = std::numeric_limits<uint64_t>::max();
+    table->get_keys(d_uniq_node_ptr, d_node_cursor_ptr, stream);
+
+    cudaStreamSynchronize(stream);
+
+    host_vec_ptr->resize(h_uniq_node_num + copy_unique_len);
+    cudaMemcpyAsync(host_vec_ptr->data() + copy_unique_len,
+                    d_uniq_node_ptr,
+                    sizeof(uint64_t) * h_uniq_node_num,
+                    cudaMemcpyDeviceToHost,
+                    stream);
+    cudaStreamSynchronize(stream);
+    return h_uniq_node_num;
+  }
+  return 0;
+}
 
 // 对于deepwalk模式，尝试插入table，0表示插入成功，1表示插入失败；
 // 对于sage模式，尝试插入table，table数量不够则清空table重新插入，返回值无影响。
 int InsertTable(const uint64_t *d_keys,  // Input
                 uint64_t len,            // Input
-                std::shared_ptr<phi::Allocation> &d_uniq_node_num,
+                std::shared_ptr<phi::Allocation> *d_uniq_node_num,
                 const GraphDataGeneratorConfig &conf,
-                uint64_t &copy_unique_len,
+                uint64_t *copy_unique_len_ptr,
                 const paddle::platform::Place &place,
                 HashTable<uint64_t, uint64_t> *table,
-                std::vector<uint64_t> &host_vec,  // Output
+                std::vector<uint64_t> *host_vec_ptr,  // Output
                 cudaStream_t stream) {
+  if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::WHOLE_HBM) {
+    return 0;
+  }
   // Used under NOT WHOLE_HBM.
   uint64_t h_uniq_node_num = 0;
   uint64_t *d_uniq_node_num_ptr =
-      reinterpret_cast<uint64_t *>(d_uniq_node_num->ptr());
+      reinterpret_cast<uint64_t *>((*d_uniq_node_num)->ptr());
   cudaMemcpyAsync(&h_uniq_node_num,
                   d_uniq_node_num_ptr,
                   sizeof(uint64_t),
@@ -1682,9 +2126,13 @@ int InsertTable(const uint64_t *d_keys,  // Input
         return 1;
       } else {
         // Copy unique nodes first.
-        uint64_t copy_len = CopyUniqueNodes(
-            table, copy_unique_len, place, d_uniq_node_num, host_vec, stream);
-        copy_unique_len += copy_len;
+        uint64_t copy_len = CopyUniqueNodes(table,
+                                            *copy_unique_len_ptr,
+                                            place,
+                                            *d_uniq_node_num,
+                                            host_vec_ptr,
+                                            stream);
+        *copy_unique_len_ptr += copy_len;
         table->clear(stream);
         cudaMemsetAsync(d_uniq_node_num_ptr, 0, sizeof(uint64_t), stream);
       }
@@ -1692,9 +2140,13 @@ int InsertTable(const uint64_t *d_keys,  // Input
   } else {
     // used only for sage_mode.
     if (h_uniq_node_num + len >= conf.infer_table_cap) {
-      uint64_t copy_len = CopyUniqueNodes(
-          table, copy_unique_len, place, d_uniq_node_num, host_vec, stream);
-      copy_unique_len += copy_len;
+      uint64_t copy_len = CopyUniqueNodes(table,
+                                          *copy_unique_len_ptr,
+                                          place,
+                                          *d_uniq_node_num,
+                                          host_vec_ptr,
+                                          stream);
+      *copy_unique_len_ptr += copy_len;
       table->clear(stream);
       cudaMemsetAsync(d_uniq_node_num_ptr, 0, sizeof(uint64_t), stream);
     }
@@ -1705,76 +2157,80 @@ int InsertTable(const uint64_t *d_keys,  // Input
   return 0;
 }
 
-std::vector<std::shared_ptr<phi::Allocation>>
-GraphDataGenerator::SampleNeighbors(int64_t *uniq_nodes,
-                                    int len,
-                                    int sample_size,
-                                    std::vector<int> &edges_split_num,
-                                    int64_t *neighbor_len) {
+std::vector<std::shared_ptr<phi::Allocation>> SampleNeighbors(
+    int64_t *uniq_nodes,
+    int len,
+    int sample_size,
+    const GraphDataGeneratorConfig &conf,
+    std::vector<int> *edges_split_num_ptr,
+    int64_t *neighbor_len,
+    std::vector<std::shared_ptr<phi::Allocation>> *edge_type_graph_ptr,
+    const paddle::platform::Place &place,
+    cudaStream_t stream) {
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   auto sample_res = gpu_graph_ptr->graph_neighbor_sample_sage(
-      conf_.gpuid,
-      edge_to_id_len_,
+      conf.gpuid,
+      conf.edge_to_id_len,
       reinterpret_cast<uint64_t *>(uniq_nodes),
       sample_size,
       len,
-      edge_type_graph_,
-      conf_.weighted_sample,
-      conf_.return_weight);
+      *edge_type_graph_ptr,
+      conf.weighted_sample,
+      conf.return_weight);
 
   int *all_sample_count_ptr =
       reinterpret_cast<int *>(sample_res.actual_sample_size_mem->ptr());
 
-  auto cumsum_actual_sample_size = memory::Alloc(
-      place_,
-      (len * edge_to_id_len_ + 1) * sizeof(int),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+  auto cumsum_actual_sample_size =
+      memory::Alloc(place,
+                    (len * conf.edge_to_id_len + 1) * sizeof(int),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   int *cumsum_actual_sample_size_ptr =
       reinterpret_cast<int *>(cumsum_actual_sample_size->ptr());
   cudaMemsetAsync(cumsum_actual_sample_size_ptr,
                   0,
-                  (len * edge_to_id_len_ + 1) * sizeof(int),
-                  sample_stream_);
+                  (len * conf.edge_to_id_len + 1) * sizeof(int),
+                  stream);
 
   size_t temp_storage_bytes = 0;
   CUDA_CHECK(cub::DeviceScan::InclusiveSum(NULL,
                                            temp_storage_bytes,
                                            all_sample_count_ptr,
                                            cumsum_actual_sample_size_ptr + 1,
-                                           len * edge_to_id_len_,
-                                           sample_stream_));
-  auto d_temp_storage = memory::Alloc(
-      place_,
-      temp_storage_bytes,
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+                                           len * conf.edge_to_id_len,
+                                           stream));
+  auto d_temp_storage =
+      memory::Alloc(place,
+                    temp_storage_bytes,
+                    phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   CUDA_CHECK(cub::DeviceScan::InclusiveSum(d_temp_storage->ptr(),
                                            temp_storage_bytes,
                                            all_sample_count_ptr,
                                            cumsum_actual_sample_size_ptr + 1,
-                                           len * edge_to_id_len_,
-                                           sample_stream_));
-  cudaStreamSynchronize(sample_stream_);
+                                           len * conf.edge_to_id_len,
+                                           stream));
+  cudaStreamSynchronize(stream);
 
-  edges_split_num.resize(edge_to_id_len_);
-  for (int i = 0; i < edge_to_id_len_; i++) {
-    cudaMemcpyAsync(edges_split_num.data() + i,
+  edges_split_num_ptr->resize(conf.edge_to_id_len);
+  for (int i = 0; i < conf.edge_to_id_len; i++) {
+    cudaMemcpyAsync(edges_split_num_ptr->data() + i,
                     cumsum_actual_sample_size_ptr + (i + 1) * len,
                     sizeof(int),
                     cudaMemcpyDeviceToHost,
-                    sample_stream_);
+                    stream);
   }
 
-  CUDA_CHECK(cudaStreamSynchronize(sample_stream_));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 
-  int all_sample_size = edges_split_num[edge_to_id_len_ - 1];
-  auto final_sample_val = memory::AllocShared(
-      place_,
-      all_sample_size * sizeof(int64_t),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-  auto final_sample_val_dst = memory::AllocShared(
-      place_,
-      all_sample_size * sizeof(int64_t),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+  int all_sample_size = (*edges_split_num_ptr)[conf.edge_to_id_len - 1];
+  auto final_sample_val =
+      memory::AllocShared(place,
+                          all_sample_size * sizeof(int64_t),
+                          phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  auto final_sample_val_dst =
+      memory::AllocShared(place,
+                          all_sample_size * sizeof(int64_t),
+                          phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   int64_t *final_sample_val_ptr =
       reinterpret_cast<int64_t *>(final_sample_val->ptr());
   int64_t *final_sample_val_dst_ptr =
@@ -1784,37 +2240,37 @@ GraphDataGenerator::SampleNeighbors(int64_t *uniq_nodes,
 
   std::shared_ptr<phi::Allocation> final_sample_weight;
   float *final_sample_weight_ptr = nullptr, *all_sample_weight_ptr = nullptr;
-  if (conf_.return_weight) {
+  if (conf.return_weight) {
     final_sample_weight = memory::AllocShared(
-        place_,
+        place,
         all_sample_size * sizeof(float),
-        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+        phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
     final_sample_weight_ptr =
         reinterpret_cast<float *>(final_sample_weight->ptr());
     all_sample_weight_ptr =
         reinterpret_cast<float *>(sample_res.weight_mem->ptr());
   }
-  FillActualNeighbors<<<GET_BLOCKS(len * edge_to_id_len_),
+  FillActualNeighbors<<<GET_BLOCKS(len * conf.edge_to_id_len),
                         CUDA_NUM_THREADS,
                         0,
-                        sample_stream_>>>(all_sample_val_ptr,
-                                          final_sample_val_ptr,
-                                          final_sample_val_dst_ptr,
-                                          all_sample_count_ptr,
-                                          cumsum_actual_sample_size_ptr,
-                                          all_sample_weight_ptr,
-                                          final_sample_weight_ptr,
-                                          sample_size,
-                                          len * edge_to_id_len_,
-                                          len,
-                                          conf_.return_weight);
+                        stream>>>(all_sample_val_ptr,
+                                  final_sample_val_ptr,
+                                  final_sample_val_dst_ptr,
+                                  all_sample_count_ptr,
+                                  cumsum_actual_sample_size_ptr,
+                                  all_sample_weight_ptr,
+                                  final_sample_weight_ptr,
+                                  sample_size,
+                                  len * conf.edge_to_id_len,
+                                  len,
+                                  conf.return_weight);
   *neighbor_len = all_sample_size;
-  cudaStreamSynchronize(sample_stream_);
+  cudaStreamSynchronize(stream);
 
   std::vector<std::shared_ptr<phi::Allocation>> sample_results;
   sample_results.emplace_back(final_sample_val);
   sample_results.emplace_back(final_sample_val_dst);
-  if (conf_.return_weight) {
+  if (conf.return_weight) {
     sample_results.emplace_back(final_sample_weight);
   }
   return sample_results;
@@ -1969,29 +2425,37 @@ std::shared_ptr<phi::Allocation> GetReindexResult(
   return final_nodes;
 }
 
-std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
-    uint64_t *node_ids,
-    int len,
+std::shared_ptr<phi::Allocation> GenerateSampleGraph(
+    uint64_t *node_ids,  // input
+    int len,             // input
     int *final_len,
-    std::shared_ptr<phi::Allocation> &inverse) {
-  VLOG(2) << conf_.gpuid << " Get Unique Nodes";
+    const GraphDataGeneratorConfig &conf,
+    std::vector<std::shared_ptr<phi::Allocation>> *inverse_vec_ptr,
+    std::vector<std::vector<std::shared_ptr<phi::Allocation>>>
+        *graph_edges_vec_ptr,  // output
+    std::vector<std::vector<std::vector<int>>>
+        *edges_split_num_vec_ptr,  // output
+    std::vector<std::shared_ptr<phi::Allocation>> *edge_type_graph_ptr,
+    const paddle::platform::Place &place,
+    cudaStream_t stream) {
+  VLOG(2) << conf.gpuid << " Get Unique Nodes";
 
-  auto uniq_nodes = memory::Alloc(
-      place_,
-      len * sizeof(uint64_t),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-  int *inverse_ptr = reinterpret_cast<int *>(inverse->ptr());
+  auto inverse = memory::AllocShared(place, len * sizeof(uint32_t),
+                                phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  uint32_t *inverse_ptr = reinterpret_cast<uint32_t *>(inverse->ptr());
+  auto uniq_nodes = memory::Alloc(place, len * sizeof(uint64_t),
+                                phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   int64_t *uniq_nodes_data = reinterpret_cast<int64_t *>(uniq_nodes->ptr());
   int uniq_len =
       dedup_keys_and_fillidx(node_ids,
                              len,
                              reinterpret_cast<uint64_t *>(uniq_nodes_data),
-                             reinterpret_cast<uint32_t *>(inverse_ptr),
-                             place_,
-                             sample_stream_);
-  int len_samples = samples_.size();
+                             inverse_ptr,
+                             place,
+                             stream);
+  int len_samples = conf.samples.size();
 
-  VLOG(2) << conf_.gpuid << " Sample Neighbors and Reindex";
+  VLOG(2) << conf.gpuid << " Sample Neighbors and Reindex";
   std::vector<int> edges_split_num;
   std::vector<std::shared_ptr<phi::Allocation>> final_nodes_vec;
   std::vector<std::shared_ptr<phi::Allocation>> graph_edges;
@@ -2005,12 +2469,16 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
     if (i == 0) {
       auto sample_results = SampleNeighbors(uniq_nodes_data,
                                             uniq_len,
-                                            samples_[i],
-                                            edges_split_num,
-                                            &neighbors_len);
+                                            conf.samples[i],
+                                            conf,
+                                            &edges_split_num,
+                                            &neighbors_len,
+                                            edge_type_graph_ptr,
+                                            place,
+                                            stream);
       neighbors = sample_results[0];
       reindex_dst = sample_results[1];
-      if (conf_.return_weight) {
+      if (conf.return_weight) {
         weights = sample_results[2];
       }
       edges_split_num.push_back(uniq_len);
@@ -2019,12 +2487,16 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
           reinterpret_cast<int64_t *>(final_nodes_vec[i - 1]->ptr());
       auto sample_results = SampleNeighbors(final_nodes_data,
                                             final_nodes_len_vec[i - 1],
-                                            samples_[i],
-                                            edges_split_num,
-                                            &neighbors_len);
+                                            conf.samples[i],
+                                            conf,
+                                            &edges_split_num,
+                                            &neighbors_len,
+                                            edge_type_graph_ptr,
+                                            place,
+                                            stream);
       neighbors = sample_results[0];
       reindex_dst = sample_results[1];
-      if (conf_.return_weight) {
+      if (conf.return_weight) {
         weights = sample_results[2];
       }
       edges_split_num.push_back(final_nodes_len_vec[i - 1]);
@@ -2036,11 +2508,11 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
       auto tmp_final_nodes = GetReindexResult(reindex_src_data,
                                               uniq_nodes_data,
                                               &final_nodes_len,
-                                              conf_.reindex_table_size,
+                                              conf.reindex_table_size,
                                               uniq_len,
                                               neighbors_len,
-                                              place_,
-                                              sample_stream_);
+                                              place,
+                                              stream);
       final_nodes_vec.emplace_back(tmp_final_nodes);
       final_nodes_len_vec.emplace_back(final_nodes_len);
     } else {
@@ -2049,11 +2521,11 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
       auto tmp_final_nodes = GetReindexResult(reindex_src_data,
                                               final_nodes_data,
                                               &final_nodes_len,
-                                              conf_.reindex_table_size,
+                                              conf.reindex_table_size,
                                               final_nodes_len_vec[i - 1],
                                               neighbors_len,
-                                              place_,
-                                              sample_stream_);
+                                              place,
+                                              stream);
       final_nodes_vec.emplace_back(tmp_final_nodes);
       final_nodes_len_vec.emplace_back(final_nodes_len);
     }
@@ -2063,428 +2535,125 @@ std::shared_ptr<phi::Allocation> GraphDataGenerator::GenerateSampleGraph(
     edges_split_num.emplace_back(neighbors_len);
     graph_edges.emplace_back(neighbors);
     graph_edges.emplace_back(reindex_dst);
-    if (conf_.return_weight) {
+    if (conf.return_weight) {
       graph_edges.emplace_back(weights);
     }
     edges_split_num_for_graph.emplace_back(edges_split_num);
   }
-  graph_edges_vec_.emplace_back(graph_edges);
-  edges_split_num_vec_.emplace_back(edges_split_num_for_graph);
+  graph_edges_vec_ptr->emplace_back(graph_edges);
+  edges_split_num_vec_ptr->emplace_back(edges_split_num_for_graph);
+  inverse_vec_ptr->emplace_back(inverse);
 
   *final_len = final_nodes_len_vec[len_samples - 1];
   return final_nodes_vec[len_samples - 1];
 }
 
-std::shared_ptr<phi::Allocation> GraphDataGenerator::GetNodeDegree(
-    uint64_t *node_ids, int len) {
-  auto node_degree = memory::AllocShared(
-      place_,
-      len * edge_to_id_len_ * sizeof(int),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+std::shared_ptr<phi::Allocation> GetNodeDegree(
+    uint64_t *node_ids,
+    int len,
+    const GraphDataGeneratorConfig &conf,
+    const paddle::platform::Place &place,
+    cudaStream_t stream) {
+  auto node_degree =
+      memory::AllocShared(place,
+                          len * conf.edge_to_id_len * sizeof(int),
+                          phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   auto edge_to_id = gpu_graph_ptr->edge_to_id;
   for (auto &iter : edge_to_id) {
     int edge_idx = iter.second;
     gpu_graph_ptr->get_node_degree(
-        conf_.gpuid, edge_idx, node_ids, len, node_degree);
+        conf.gpuid, edge_idx, node_ids, len, node_degree);
   }
   return node_degree;
 }
 
-uint64_t CopyUniqueNodes(
-    HashTable<uint64_t, uint64_t> *table,
-    uint64_t copy_unique_len,
-    const paddle::platform::Place &place,
-    const std::shared_ptr<phi::Allocation> &d_uniq_node_num_ptr,
-    std::vector<uint64_t> &host_vec,  // output
-    cudaStream_t stream) {
-  if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
-    uint64_t h_uniq_node_num = 0;
-    uint64_t *d_uniq_node_num =
-        reinterpret_cast<uint64_t *>(d_uniq_node_num_ptr->ptr());
-    cudaMemcpyAsync(&h_uniq_node_num,
-                    d_uniq_node_num,
-                    sizeof(uint64_t),
-                    cudaMemcpyDeviceToHost,
-                    stream);
-    cudaStreamSynchronize(stream);
-    auto d_uniq_node = memory::AllocShared(
-        place,
-        h_uniq_node_num * sizeof(uint64_t),
-        phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
-    uint64_t *d_uniq_node_ptr =
-        reinterpret_cast<uint64_t *>(d_uniq_node->ptr());
-
-    auto d_node_cursor = memory::AllocShared(
-        place,
-        sizeof(uint64_t),
-        phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
-
-    uint64_t *d_node_cursor_ptr =
-        reinterpret_cast<uint64_t *>(d_node_cursor->ptr());
-    cudaMemsetAsync(d_node_cursor_ptr, 0, sizeof(uint64_t), stream);
-    // uint64_t unused_key = std::numeric_limits<uint64_t>::max();
-    table->get_keys(d_uniq_node_ptr, d_node_cursor_ptr, stream);
-
-    cudaStreamSynchronize(stream);
-
-    host_vec.resize(h_uniq_node_num + copy_unique_len);
-    cudaMemcpyAsync(host_vec.data() + copy_unique_len,
-                    d_uniq_node_ptr,
-                    sizeof(uint64_t) * h_uniq_node_num,
-                    cudaMemcpyDeviceToHost,
-                    stream);
-    cudaStreamSynchronize(stream);
-    return h_uniq_node_num;
+int multi_node_sync_sample(int flag,
+                           const ncclRedOp_t &op,
+                           const paddle::platform::Place &place,
+                           phi::DenseTensor *multi_node_sync_stat_ptr) {
+  if (flag < 0 && flag > 2) {
+    VLOG(0) << "invalid flag! " << flag;
+    assert(false);
+    return -1;
   }
-  return 0;
+
+  int ret = 0;
+#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
+  int *stat_ptr = multi_node_sync_stat_ptr->data<int>();
+  auto comm = platform::NCCLCommContext::Instance().Get(0, place.GetDeviceId());
+  auto stream = comm->stream();
+  PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllReduce(
+      &stat_ptr[flag], &stat_ptr[3], 1, ncclInt, op, comm->comm(), stream));
+  PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyAsync(&ret,  // output
+                                             &stat_ptr[3],
+                                             sizeof(int),
+                                             cudaMemcpyDeviceToHost,
+                                             stream));
+  PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
+#endif
+  return ret;
 }
 
-void GraphDataGenerator::DoWalkandSage() {
-  int device_id = place_.GetDeviceId();
-  debug_gpu_memory_info(device_id, "DoWalkandSage start");
-  platform::CUDADeviceGuard guard(conf_.gpuid);
-  if (conf_.gpu_graph_training) {
-    // train
-    bool train_flag;
-    if (FLAGS_graph_metapath_split_opt) {
-      train_flag = FillWalkBufMultiPath();
-    } else {
-      train_flag = FillWalkBuf();
-    }
+int FillWalkBuf(const std::vector<uint64_t> &h_device_keys_len,
+                const std::vector<std::shared_ptr<phi::Allocation>>
+                    &d_device_keys,                              // input
+                const std::vector<std::vector<int>> &meta_path,  // input
+                const GraphDataGeneratorConfig &conf,
+                bool *epoch_finish_ptr,
+                uint64_t *copy_unique_len_ptr,
+                const paddle::platform::Place &place,
+                const std::vector<int> &first_node_type,
+                std::unordered_map<int, size_t> *node_type_start_ptr,
+                std::set<int> *finish_node_type_ptr,
+                uint64_t *walk,  // output
+                uint8_t *walk_ntype,
+                std::shared_ptr<phi::Allocation> *d_uniq_node_num,
+                int *d_random_row,
+                int *d_random_row_col_shift,
+                phi::DenseTensor *multi_node_sync_stat_ptr,
+                std::vector<uint64_t> *host_vec_ptr,
+                int *total_row_ptr,
+                size_t *jump_rows_ptr,
+                int *shuffle_seed_ptr,
+                HashTable<uint64_t, uint64_t> *table,
+                BufState *buf_state,
+                cudaStream_t stream) {
+  platform::CUDADeviceGuard guard(conf.gpuid);
 
-    if (conf_.sage_mode) {
-      sage_batch_num_ = 0;
-      if (train_flag) {
-        int total_instance = 0, uniq_instance = 0;
-        bool ins_pair_flag = true;
-        int sage_pass_end = 0;
-        uint64_t *ins_buf, *ins_cursor;
-        while (ins_pair_flag) {
-          int res = 0;
-          while (ins_buf_pair_len_ < conf_.batch_size) {
-            res = FillInsBuf(d_walk_,
-                             d_walk_ntype_,
-                             conf_,
-                             d_random_row_,
-                             d_random_row_col_shift_,
-                             buf_state_,
-                             d_ins_buf_,
-                             d_pair_label_buf_,
-                             d_pair_num_,
-                             ins_buf_pair_len_,
-                             sample_stream_);
-            if (res == -1) {
-              if (ins_buf_pair_len_ == 0) {
-                if (is_multi_node_) {
-                  sage_pass_end = 1;
-                  if (total_row_ != 0) {
-                    buf_state_.Reset(total_row_);
-                    VLOG(1) << "reset buf state to make batch num equal in multi node";
-                  }
-                } else {
-                  ins_pair_flag = false;
-                  break;
-                }
-              } else {
-                break;
-              }
-            }
-          }
-
-          // check whether reach sage pass end
-          if (is_multi_node_) {
-            int res = multi_node_sync_sample(sage_pass_end, ncclProd);
-            if (res) {
-              ins_pair_flag = false;
-            }
-          }
-
-          if (!ins_pair_flag) {
-            break;
-          }
-
-          total_instance = ins_buf_pair_len_ < conf_.batch_size
-                               ? ins_buf_pair_len_
-                               : conf_.batch_size;
-          total_instance *= 2;
-
-          ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_->ptr());
-          ins_cursor = ins_buf + ins_buf_pair_len_ * 2 - total_instance;
-          auto inverse = memory::AllocShared(
-              place_,
-              total_instance * sizeof(int),
-              phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-          auto final_sage_nodes = GenerateSampleGraph(
-              ins_cursor, total_instance, &uniq_instance, inverse);
-          uint64_t *final_sage_nodes_ptr =
-              reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
-          if (conf_.get_degree) {
-            auto node_degrees =
-                GetNodeDegree(final_sage_nodes_ptr, uniq_instance);
-            node_degree_vec_.emplace_back(node_degrees);
-          }
-
-          if (conf_.enable_pair_label) {
-            auto pair_label = memory::AllocShared(
-                place_,
-                total_instance / 2 * sizeof(int),
-                phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-            int32_t *pair_label_buf =
-                reinterpret_cast<int32_t *>(d_pair_label_buf_->ptr());
-            int32_t *pair_label_cursor =
-                pair_label_buf + ins_buf_pair_len_ - total_instance / 2;
-            cudaMemcpyAsync(pair_label->ptr(),
-                            pair_label_cursor,
-                            sizeof(int32_t) * total_instance / 2,
-                            cudaMemcpyDeviceToDevice,
-                            sample_stream_);
-            pair_label_vec_.emplace_back(pair_label);
-          }
-
-          cudaStreamSynchronize(sample_stream_);
-          if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
-            uint64_t *final_sage_nodes_ptr =
-                reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
-            InsertTable(final_sage_nodes_ptr,
-                        uniq_instance,
-                        d_uniq_node_num_,
-                        conf_,
-                        copy_unique_len_,
-                        place_,
-                        table_,
-                        host_vec_,
-                        sample_stream_);
-          }
-          final_sage_nodes_vec_.emplace_back(final_sage_nodes);
-          inverse_vec_.emplace_back(inverse);
-          uniq_instance_vec_.emplace_back(uniq_instance);
-          total_instance_vec_.emplace_back(total_instance);
-          ins_buf_pair_len_ -= total_instance / 2;
-          sage_batch_num_ += 1;
-        }
-        uint64_t h_uniq_node_num = CopyUniqueNodes(table_,
-                                                   copy_unique_len_,
-                                                   place_,
-                                                   d_uniq_node_num_,
-                                                   host_vec_,
-                                                   sample_stream_);
-        VLOG(1) << "train sage_batch_num: " << sage_batch_num_;
-      }
-    }
-  } else {
-    // infer
-    bool infer_flag = FillInferBuf();
-    if (conf_.sage_mode) {
-      sage_batch_num_ = 0;
-      if (infer_flag) {
-        // Set new batch size for multi_node
-        if (is_multi_node_) {
-          int new_batch_size = dynamic_adjust_batch_num_for_sage();
-          conf_.batch_size = new_batch_size;
-        }
-
-        int total_instance = 0, uniq_instance = 0;
-        total_instance =
-            (infer_node_start_ + conf_.batch_size <= infer_node_end_)
-                ? conf_.batch_size
-                : infer_node_end_ - infer_node_start_;
-        total_instance *= 2;
-        while (total_instance != 0) {
-          uint64_t *d_type_keys = reinterpret_cast<uint64_t *>(
-              d_device_keys_[infer_cursor_]->ptr());
-          d_type_keys += infer_node_start_;
-          infer_node_start_ += total_instance / 2;
-          auto node_buf = memory::AllocShared(
-              place_,
-              total_instance * sizeof(uint64_t),
-              phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-          int64_t *node_buf_ptr = reinterpret_cast<int64_t *>(node_buf->ptr());
-          CopyDuplicateKeys<<<GET_BLOCKS(total_instance / 2),
-                              CUDA_NUM_THREADS,
-                              0,
-                              sample_stream_>>>(
-              node_buf_ptr, d_type_keys, total_instance / 2);
-          uint64_t *node_buf_ptr_ =
-              reinterpret_cast<uint64_t *>(node_buf->ptr());
-          auto inverse = memory::AllocShared(
-              place_,
-              total_instance * sizeof(int),
-              phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-          auto final_sage_nodes = GenerateSampleGraph(
-              node_buf_ptr_, total_instance, &uniq_instance, inverse);
-          uint64_t *final_sage_nodes_ptr =
-              reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
-          if (conf_.get_degree) {
-            auto node_degrees =
-                GetNodeDegree(final_sage_nodes_ptr, uniq_instance);
-            node_degree_vec_.emplace_back(node_degrees);
-          }
-          cudaStreamSynchronize(sample_stream_);
-          if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
-            uint64_t *final_sage_nodes_ptr =
-                reinterpret_cast<uint64_t *>(final_sage_nodes->ptr());
-            InsertTable(final_sage_nodes_ptr,
-                        uniq_instance,
-                        d_uniq_node_num_,
-                        conf_,
-                        copy_unique_len_,
-                        place_,
-                        table_,
-                        host_vec_,
-                        sample_stream_);
-          }
-          final_sage_nodes_vec_.emplace_back(final_sage_nodes);
-          inverse_vec_.emplace_back(inverse);
-          uniq_instance_vec_.emplace_back(uniq_instance);
-          total_instance_vec_.emplace_back(total_instance);
-          sage_batch_num_ += 1;
-
-          total_instance =
-              (infer_node_start_ + conf_.batch_size <= infer_node_end_)
-                  ? conf_.batch_size
-                  : infer_node_end_ - infer_node_start_;
-          total_instance *= 2;
-        }
-
-        uint64_t h_uniq_node_num = CopyUniqueNodes(table_,
-                                                   copy_unique_len_,
-                                                   place_,
-                                                   d_uniq_node_num_,
-                                                   host_vec_,
-                                                   sample_stream_);
-        VLOG(1) << "infer sage_batch_num: " << sage_batch_num_;
-      }
-    }
-  }
-  debug_gpu_memory_info(device_id, "DoWalkandSage end");
-}
-
-void GraphDataGenerator::clear_gpu_mem() {
-  platform::CUDADeviceGuard guard(conf_.gpuid);
-  d_sample_keys_.reset();
-  d_prefix_sum_.reset();
-  for (size_t i = 0; i < d_sampleidx2rows_.size(); i++) {
-    d_sampleidx2rows_[i].reset();
-  }
-  delete table_;
-}
-
-int GraphDataGenerator::FillInferBuf() {
-  platform::CUDADeviceGuard guard(conf_.gpuid);
-  auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
-  auto &global_infer_node_type_start =
-      gpu_graph_ptr->global_infer_node_type_start_[conf_.gpuid];
-  auto &infer_cursor = gpu_graph_ptr->infer_cursor_[conf_.thread_id];
-  total_row_ = 0;
-  if (infer_cursor < h_device_keys_len_.size()) {
-    while (global_infer_node_type_start[infer_cursor] >=
-           h_device_keys_len_[infer_cursor]) {
-      infer_cursor++;
-      if (infer_cursor >= h_device_keys_len_.size()) {
-        return 0;
-      }
-    }
-    if (!infer_node_type_index_set_.empty()) {
-      while (infer_cursor < h_device_keys_len_.size()) {
-        if (infer_node_type_index_set_.find(infer_cursor) ==
-            infer_node_type_index_set_.end()) {
-          VLOG(2) << "Skip cursor[" << infer_cursor << "]";
-          infer_cursor++;
-          continue;
-        } else {
-          VLOG(2) << "Not skip cursor[" << infer_cursor << "]";
-          break;
-        }
-      }
-      if (infer_cursor >= h_device_keys_len_.size()) {
-        return 0;
-      }
-    }
-
-    size_t device_key_size = h_device_keys_len_[infer_cursor];
-    total_row_ =
-        (global_infer_node_type_start[infer_cursor] + buf_size_ <=
-         device_key_size)
-            ? buf_size_
-            : device_key_size - global_infer_node_type_start[infer_cursor];
-
-    uint64_t *d_type_keys =
-        reinterpret_cast<uint64_t *>(d_device_keys_[infer_cursor]->ptr());
-    if (!conf_.sage_mode) {
-      host_vec_.resize(total_row_);
-      cudaMemcpyAsync(host_vec_.data(),
-                      d_type_keys + global_infer_node_type_start[infer_cursor],
-                      sizeof(uint64_t) * total_row_,
-                      cudaMemcpyDeviceToHost,
-                      sample_stream_);
-      cudaStreamSynchronize(sample_stream_);
-    }
-    VLOG(1) << "cursor: " << infer_cursor
-            << " start: " << global_infer_node_type_start[infer_cursor]
-            << " num: " << total_row_;
-    infer_node_start_ = global_infer_node_type_start[infer_cursor];
-    global_infer_node_type_start[infer_cursor] += total_row_;
-    infer_node_end_ = global_infer_node_type_start[infer_cursor];
-    infer_cursor_ = infer_cursor;
-    return 1;
-  }
-  return 0;
-}
-
-void GraphDataGenerator::ClearSampleState() {
-  auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
-  auto &finish_node_type = gpu_graph_ptr->finish_node_type_[conf_.gpuid];
-  auto &node_type_start = gpu_graph_ptr->node_type_start_[conf_.gpuid];
-  finish_node_type.clear();
-  for (auto iter = node_type_start.begin(); iter != node_type_start.end();
-       iter++) {
-    iter->second = 0;
-  }
-}
-
-int GraphDataGenerator::FillWalkBuf() {
-  platform::CUDADeviceGuard guard(conf_.gpuid);
-  size_t once_max_sample_keynum =
-      conf_.walk_degree * conf_.once_sample_startid_len;
   ////////
   uint64_t *h_walk;
-  uint64_t *h_sample_keys;
-  int *h_offset2idx;
-  int *h_len_per_row;
-  uint64_t *h_prefix_sum;
-  if (conf_.debug_mode) {
-    h_walk = new uint64_t[buf_size_];
-    h_sample_keys = new uint64_t[once_max_sample_keynum];
-    h_offset2idx = new int[once_max_sample_keynum];
-    h_len_per_row = new int[once_max_sample_keynum];
-    h_prefix_sum = new uint64_t[once_max_sample_keynum + 1];
+  if (conf.debug_mode) {
+    h_walk = new uint64_t[conf.buf_size];
   }
   ///////
-  auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
-  uint64_t *walk = reinterpret_cast<uint64_t *>(d_walk_->ptr());
-  uint64_t *d_sample_keys = reinterpret_cast<uint64_t *>(d_sample_keys_->ptr());
-  cudaMemsetAsync(walk, 0, buf_size_ * sizeof(uint64_t), sample_stream_);
-  uint8_t *walk_ntype = NULL;
-  if (conf_.need_walk_ntype) {
-    walk_ntype = reinterpret_cast<uint8_t *>(d_walk_ntype_->ptr());
-    cudaMemsetAsync(walk_ntype, 0, buf_size_ * sizeof(uint8_t), sample_stream_);
+  cudaMemsetAsync(walk, 0, conf.buf_size * sizeof(uint64_t), stream);
+  if (conf.need_walk_ntype) {
+    cudaMemsetAsync(walk_ntype, 0, conf.buf_size * sizeof(uint8_t), stream);
   }
   int sample_times = 0;
   int i = 0;
-  total_row_ = 0;
+  *total_row_ptr = 0;
+
+  std::vector<std::shared_ptr<phi::Allocation>> d_sampleidx2rows;
+  d_sampleidx2rows.push_back(memory::AllocShared(
+      place,
+      conf.once_max_sample_keynum * sizeof(int),
+      phi::Stream(reinterpret_cast<phi::StreamId>(stream))));
+  d_sampleidx2rows.push_back(memory::AllocShared(
+      place,
+      conf.once_max_sample_keynum * sizeof(int),
+      phi::Stream(reinterpret_cast<phi::StreamId>(stream))));
+  int cur_sampleidx2row = 0;
 
   // 获取全局采样状态
-  auto &first_node_type = gpu_graph_ptr->first_node_type_;
-  auto &meta_path = gpu_graph_ptr->meta_path_;
-  auto &node_type_start = gpu_graph_ptr->node_type_start_[conf_.gpuid];
-  auto &finish_node_type = gpu_graph_ptr->finish_node_type_[conf_.gpuid];
+  auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   auto &type_to_index = gpu_graph_ptr->get_graph_type_to_index();
-  auto &cursor = gpu_graph_ptr->cursor_[conf_.thread_id];
+  auto &cursor = gpu_graph_ptr->cursor_[conf.thread_id];
   size_t node_type_len = first_node_type.size();
-  int remain_size = buf_size_ - conf_.walk_degree *
-                                    conf_.once_sample_startid_len *
-                                    conf_.walk_len;
+  int remain_size = conf.buf_size - conf.walk_degree *
+                                        conf.once_sample_startid_len *
+                                        conf.walk_len;
   int total_samples = 0;
 
   // Definition of variables related to multi machine sampling
@@ -2517,28 +2686,28 @@ int GraphDataGenerator::FillWalkBuf() {
     int cur_node_idx = cursor % node_type_len;
     int node_type = first_node_type[cur_node_idx];
     auto &path = meta_path[cur_node_idx];
-    size_t start = node_type_start[node_type];
+    size_t start = (*node_type_start_ptr)[node_type];
     int type_index = type_to_index[node_type];
-    size_t device_key_size = h_device_keys_len_[type_index];
+    size_t device_key_size = h_device_keys_len[type_index];
     uint64_t *d_type_keys =
-        reinterpret_cast<uint64_t *>(d_device_keys_[type_index]->ptr());
-    int tmp_len = start + conf_.once_sample_startid_len > device_key_size
+        reinterpret_cast<uint64_t *>(d_device_keys[type_index]->ptr());
+    int tmp_len = start + conf.once_sample_startid_len > device_key_size
                       ? device_key_size - start
-                      : conf_.once_sample_startid_len;
+                      : conf.once_sample_startid_len;
     VLOG(2) << "choose node_type: " << node_type
             << " cur_node_idx: " << cur_node_idx
             << " meta_path.size: " << meta_path.size()
             << " key_size: " << device_key_size << " start: " << start
             << " tmp_len: " << tmp_len;
     if (tmp_len == 0) {
-      finish_node_type.insert(node_type);
-      if (finish_node_type.size() == node_type_start.size()) {
+      finish_node_type_ptr->insert(node_type);
+      if (finish_node_type_ptr->size() == node_type_start_ptr->size()) {
         // scenarios 2: epoch finish
         if (FLAGS_enable_graph_multi_node_sampling) {
           sample_flag = EVENT_FINISH_EPOCH;
         } else {
           cursor = 0;
-          epoch_finish_ = true;
+          *epoch_finish_ptr = true;
           break;
         }
       }
@@ -2558,8 +2727,9 @@ int GraphDataGenerator::FillWalkBuf() {
     // Perform synchronous information exchange between multiple machines
     // to decide whether to continue sampling
     if (FLAGS_enable_graph_multi_node_sampling) {
-      switch_command = multi_node_sync_sample(switch_flag, ncclProd);
-      VLOG(2) << "gpuid:" << conf_.gpuid << " multi node sample sync"
+      switch_command = multi_node_sync_sample(
+          switch_flag, ncclProd, place, multi_node_sync_stat_ptr);
+      VLOG(2) << "gpuid:" << conf.gpuid << " multi node sample sync"
               << " switch_flag:" << switch_flag << "," << switch_command;
       if (switch_command) {
         cursor += 1;
@@ -2567,13 +2737,14 @@ int GraphDataGenerator::FillWalkBuf() {
         continue;
       }
 
-      sample_command = multi_node_sync_sample(sample_flag, ncclMax);
-      VLOG(2) << "gpuid:" << conf_.gpuid << " multi node sample sync"
+      sample_command = multi_node_sync_sample(
+          sample_flag, ncclMax, place, multi_node_sync_stat_ptr);
+      VLOG(2) << "gpuid:" << conf.gpuid << " multi node sample sync"
               << " sample_flag:" << sample_flag << "," << sample_command;
       if (sample_command == EVENT_FINISH_EPOCH) {
         // end sampling current epoch
         cursor = 0;
-        epoch_finish_ = true;
+        *epoch_finish_ptr = true;
         VLOG(0) << "sample epoch finish!";
         break;
       } else if (sample_command == EVENT_WALKBUF_FULL) {
@@ -2593,71 +2764,70 @@ int GraphDataGenerator::FillWalkBuf() {
     bool update = true;
     uint64_t *cur_walk = walk + i;
     uint8_t *cur_walk_ntype = NULL;
-    if (conf_.need_walk_ntype) {
+    if (conf.need_walk_ntype) {
       cur_walk_ntype = walk_ntype + i;
     }
 
     NeighborSampleQuery q;
-    q.initialize(conf_.gpuid,
+    q.initialize(conf.gpuid,
                  path[0],
                  (uint64_t)(d_type_keys + start),
-                 conf_.walk_degree,
+                 conf.walk_degree,
                  tmp_len,
                  step);
     auto sample_res = gpu_graph_ptr->graph_neighbor_sample_v3(
-        q, false, true, conf_.weighted_sample);
+        q, false, true, conf.weighted_sample);
 
-    jump_rows_ = sample_res.total_sample_size;
+    *jump_rows_ptr = sample_res.total_sample_size;
     total_samples += sample_res.total_sample_size;
 
     if (FLAGS_enable_graph_multi_node_sampling) {
-      int flag = jump_rows_ > 0 ? 1 : 0;
-      int command = multi_node_sync_sample(flag, ncclMax);
-      VLOG(2) << "gpuid:" << conf_.gpuid << " multi node step sync"
+      int flag = *jump_rows_ptr > 0 ? 1 : 0;
+      int command = multi_node_sync_sample(
+          flag, ncclMax, place, multi_node_sync_stat_ptr);
+      VLOG(2) << "gpuid:" << conf.gpuid << " multi node step sync"
               << " step:" << step << " step_sample:" << flag << "," << command;
       if (command <= 0) {
-        node_type_start[node_type] = tmp_len + start;
+        (*node_type_start_ptr)[node_type] = tmp_len + start;
         cursor += 1;
         continue;
       }
-    } else if (jump_rows_ == 0) {
-      node_type_start[node_type] = tmp_len + start;
+    } else if (*jump_rows_ptr == 0) {
+      (*node_type_start_ptr)[node_type] = tmp_len + start;
       cursor += 1;
       continue;
     }
 
-    if (!conf_.sage_mode) {
-      if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
-        if (InsertTable(d_type_keys + start,
-                        tmp_len,
-                        d_uniq_node_num_,
-                        conf_,
-                        copy_unique_len_,
-                        place_,
-                        table_,
-                        host_vec_,
-                        sample_stream_) != 0) {
-          VLOG(2) << "gpu:" << conf_.gpuid
-                  << " in step 0, insert key stage, table is full";
-          update = false;
-          assert(false);
-          break;
-        }
-        if (InsertTable(sample_res.actual_val,
-                        sample_res.total_sample_size,
-                        d_uniq_node_num_,
-                        conf_,
-                        copy_unique_len_,
-                        place_,
-                        table_,
-                        host_vec_,
-                        sample_stream_) != 0) {
-          VLOG(2) << "gpu:" << conf_.gpuid
-                  << " in step 0, insert sample res, table is full";
-          update = false;
-          assert(false);
-          break;
-        }
+    if (!conf.sage_mode) {
+      if (InsertTable(d_type_keys + start,
+                      tmp_len,
+                      d_uniq_node_num,
+                      conf,
+                      copy_unique_len_ptr,
+                      place,
+                      table,
+                      host_vec_ptr,
+                      stream) != 0) {
+        VLOG(2) << "gpu:" << conf.gpuid
+                << " in step 0, insert key stage, table is full";
+        update = false;
+        assert(false);
+        break;
+      }
+      if (InsertTable(sample_res.actual_val,
+                      sample_res.total_sample_size,
+                      d_uniq_node_num,
+                      conf,
+                      copy_unique_len_ptr,
+                      place,
+                      table,
+                      host_vec_ptr,
+                      stream) != 0) {
+        VLOG(2) << "gpu:" << conf.gpuid
+                << " in step 0, insert sample res, table is full";
+        update = false;
+        assert(false);
+        break;
       }
     }
     FillOneStep(d_type_keys + start,
@@ -2665,21 +2835,21 @@ int GraphDataGenerator::FillWalkBuf() {
                 cur_walk,
                 cur_walk_ntype,
                 tmp_len,
-                sample_res,
-                conf_.walk_degree,
+                &sample_res,
+                conf.walk_degree,
                 step,
-                conf_,
-                d_sample_keys_,
-                d_prefix_sum_,
-                d_sampleidx2rows_,
-                cur_sampleidx2row_,
-                place_,
-                sample_stream_);
+                conf,
+                &d_sampleidx2rows,
+                &cur_sampleidx2row,
+                place,
+                stream);
     /////////
-    if (conf_.debug_mode) {
-      cudaMemcpy(
-          h_walk, walk, buf_size_ * sizeof(uint64_t), cudaMemcpyDeviceToHost);
-      for (int xx = 0; xx < buf_size_; xx++) {
+    if (conf.debug_mode) {
+      cudaMemcpy(h_walk,
+                 walk,
+                 conf.buf_size * sizeof(uint64_t),
+                 cudaMemcpyDeviceToHost);
+      for (int xx = 0; xx < conf.buf_size; xx++) {
         VLOG(2) << "h_walk[" << xx << "]: " << h_walk[xx];
       }
     }
@@ -2687,12 +2857,13 @@ int GraphDataGenerator::FillWalkBuf() {
     /////////
     step++;
     size_t path_len = path.size();
-    for (; step < conf_.walk_len; step++) {
+    for (; step < conf.walk_len; step++) {
       if (FLAGS_enable_graph_multi_node_sampling) {
         // Step synchronization for multi-step sampling in multi node
         int flag = sample_res.total_sample_size > 0 ? 1 : 0;
-        int command = multi_node_sync_sample(flag, ncclMax);
-        VLOG(2) << "gpuid:" << conf_.gpuid << " multi node step sync"
+        int command = multi_node_sync_sample(
+            flag, ncclMax, place, multi_node_sync_stat_ptr);
+        VLOG(2) << "gpuid:" << conf.gpuid << " multi node step sync"
                 << " step:" << step << " step_sample:" << flag << ","
                 << command;
         if (command <= 0) {
@@ -2712,7 +2883,7 @@ int GraphDataGenerator::FillWalkBuf() {
         sample_keys_ptr = reinterpret_cast<uint64_t *>(sample_key_mem->ptr());
       }
       int edge_type_id = path[(step - 1) % path_len];
-      q.initialize(conf_.gpuid,
+      q.initialize(conf.gpuid,
                    edge_type_id,
                    (uint64_t)sample_keys_ptr,
                    1,
@@ -2720,25 +2891,23 @@ int GraphDataGenerator::FillWalkBuf() {
                    step);
       int sample_key_len = sample_res.total_sample_size;
       sample_res = gpu_graph_ptr->graph_neighbor_sample_v3(
-          q, false, true, conf_.weighted_sample);
+          q, false, true, conf.weighted_sample);
       total_samples += sample_res.total_sample_size;
-      if (!conf_.sage_mode) {
-        if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
-          if (InsertTable(sample_res.actual_val,
-                          sample_res.total_sample_size,
-                          d_uniq_node_num_,
-                          conf_,
-                          copy_unique_len_,
-                          place_,
-                          table_,
-                          host_vec_,
-                          sample_stream_) != 0) {
-            VLOG(0) << "gpu:" << conf_.gpuid << " in step: " << step
-                    << ", table is full";
-            update = false;
-            assert(false);
-            break;
-          }
+      if (!conf.sage_mode) {
+        if (InsertTable(sample_res.actual_val,
+                        sample_res.total_sample_size,
+                        d_uniq_node_num,
+                        conf,
+                        copy_unique_len_ptr,
+                        place,
+                        table,
+                        host_vec_ptr,
+                        stream) != 0) {
+          VLOG(0) << "gpu:" << conf.gpuid << " in step: " << step
+                  << ", table is full";
+          update = false;
+          assert(false);
+          break;
         }
       }
       FillOneStep(d_type_keys + start,
@@ -2746,20 +2915,20 @@ int GraphDataGenerator::FillWalkBuf() {
                   cur_walk,
                   cur_walk_ntype,
                   sample_key_len,
-                  sample_res,
+                  &sample_res,
                   1,
                   step,
-                  conf_,
-                  d_sample_keys_,
-                  d_prefix_sum_,
-                  d_sampleidx2rows_,
-                  cur_sampleidx2row_,
-                  place_,
-                  sample_stream_);
-      if (conf_.debug_mode) {
-        cudaMemcpy(
-            h_walk, walk, buf_size_ * sizeof(uint64_t), cudaMemcpyDeviceToHost);
-        for (int xx = 0; xx < buf_size_; xx++) {
+                  conf,
+                  &d_sampleidx2rows,
+                  &cur_sampleidx2row,
+                  place,
+                  stream);
+      if (conf.debug_mode) {
+        cudaMemcpy(h_walk,
+                   walk,
+                   conf.buf_size * sizeof(uint64_t),
+                   cudaMemcpyDeviceToHost);
+        for (int xx = 0; xx < conf.buf_size; xx++) {
           VLOG(2) << "h_walk[" << xx << "]: " << h_walk[xx];
         }
       }
@@ -2767,9 +2936,9 @@ int GraphDataGenerator::FillWalkBuf() {
 
     // 此时更新全局采样状态
     if (update == true) {
-      node_type_start[node_type] = tmp_len + start;
-      i += jump_rows_ * conf_.walk_len;
-      total_row_ += jump_rows_;
+      (*node_type_start_ptr)[node_type] = tmp_len + start;
+      i += *jump_rows_ptr * conf.walk_len;
+      *total_row_ptr += *jump_rows_ptr;
       cursor += 1;
       sample_times++;
     } else {
@@ -2781,107 +2950,101 @@ int GraphDataGenerator::FillWalkBuf() {
     VLOG(2) << "sample " << sample_times << " finish, node_type=" << node_type
             << ", path:[" << path[0] << "," << path[1] << "]"
             << ", start:" << start << ", len:" << tmp_len
-            << ", row:" << jump_rows_ << ", total_step:" << step
+            << ", row:" << *jump_rows_ptr << ", total_step:" << step
             << ", device_key_size:" << device_key_size;
   }
-  buf_state_.Reset(total_row_);
-  int *d_random_row = reinterpret_cast<int *>(d_random_row_->ptr());
-  int *d_random_row_col_shift =
-      reinterpret_cast<int *>(d_random_row_col_shift_->ptr());
-
-  paddle::memory::ThrustAllocator<cudaStream_t> allocator(place_,
-                                                          sample_stream_);
-  thrust::random::default_random_engine engine(shuffle_seed_);
-  const auto &exec_policy = thrust::cuda::par(allocator).on(sample_stream_);
+  buf_state->Reset(*total_row_ptr);
+  paddle::memory::ThrustAllocator<cudaStream_t> allocator(place, stream);
+  thrust::random::default_random_engine engine(*shuffle_seed_ptr);
+  const auto &exec_policy = thrust::cuda::par(allocator).on(stream);
   thrust::counting_iterator<int> cnt_iter(0);
   thrust::shuffle_copy(exec_policy,
                        cnt_iter,
-                       cnt_iter + total_row_,
+                       cnt_iter + *total_row_ptr,
                        thrust::device_pointer_cast(d_random_row),
                        engine);
 
   thrust::transform(exec_policy,
                     cnt_iter,
-                    cnt_iter + total_row_,
+                    cnt_iter + *total_row_ptr,
                     thrust::device_pointer_cast(d_random_row_col_shift),
-                    RandInt(0, conf_.walk_len));
+                    RandInt(0, conf.walk_len));
 
-  cudaStreamSynchronize(sample_stream_);
-  shuffle_seed_ = engine();
+  cudaStreamSynchronize(stream);
+  *shuffle_seed_ptr = engine();
 
-  if (conf_.debug_mode) {
-    int *h_random_row = new int[total_row_ + 10];
+  if (conf.debug_mode) {
+    int *h_random_row = new int[*total_row_ptr + 10];
     cudaMemcpy(h_random_row,
                d_random_row,
-               total_row_ * sizeof(int),
+               *total_row_ptr * sizeof(int),
                cudaMemcpyDeviceToHost);
-    for (int xx = 0; xx < total_row_; xx++) {
+    for (int xx = 0; xx < *total_row_ptr; xx++) {
       VLOG(2) << "h_random_row[" << xx << "]: " << h_random_row[xx];
     }
     delete[] h_random_row;
     delete[] h_walk;
-    delete[] h_sample_keys;
-    delete[] h_offset2idx;
-    delete[] h_len_per_row;
-    delete[] h_prefix_sum;
   }
 
-  if (!conf_.sage_mode) {
-    uint64_t h_uniq_node_num = CopyUniqueNodes(table_,
-                                               copy_unique_len_,
-                                               place_,
-                                               d_uniq_node_num_,
-                                               host_vec_,
-                                               sample_stream_);
-    VLOG(1) << "sample_times:" << sample_times << ", d_walk_size:" << buf_size_
-            << ", d_walk_offset:" << i << ", total_rows:" << total_row_
-            << ", total_samples:" << total_samples
-            << ", h_uniq_node_num: " << h_uniq_node_num;
-  } else {
-    VLOG(1) << "sample_times:" << sample_times << ", d_walk_size:" << buf_size_
-            << ", d_walk_offset:" << i << ", total_rows:" << total_row_
-            << ", total_samples:" << total_samples;
-  }
-  return total_row_ != 0;
+  return *total_row_ptr != 0;
 }
 
-int GraphDataGenerator::FillWalkBufMultiPath() {
-  platform::CUDADeviceGuard guard(conf_.gpuid);
-  size_t once_max_sample_keynum =
-      conf_.walk_degree * conf_.once_sample_startid_len;
+
+int FillWalkBufMultiPath(
+    const std::vector<uint64_t> &h_device_keys_len,
+    const std::vector<std::vector<int>> &meta_path,
+    const GraphDataGeneratorConfig &conf,
+    bool *epoch_finish_ptr,
+    uint64_t *copy_unique_len_ptr,
+    const paddle::platform::Place &place,
+    const std::vector<int> &first_node_type,
+    std::unordered_map<int, size_t> *node_type_start_ptr,
+    uint64_t *walk,  // output
+    uint8_t *walk_ntype,
+    std::shared_ptr<phi::Allocation> *d_uniq_node_num,
+    int *d_random_row,
+    int *d_random_row_col_shift,
+    std::vector<uint64_t> *host_vec_ptr,
+    int *total_row_ptr,
+    size_t *jump_rows_ptr,
+    int *shuffle_seed_ptr,
+    uint64_t *d_train_metapath_keys,
+    uint64_t *h_train_metapath_keys_len_ptr,
+    HashTable<uint64_t, uint64_t> *table,
+    BufState *buf_state,
+    cudaStream_t stream) {
+  platform::CUDADeviceGuard guard(conf.gpuid);
+
   ////////
   uint64_t *h_walk;
-  uint64_t *h_sample_keys;
-  int *h_offset2idx;
-  int *h_len_per_row;
-  uint64_t *h_prefix_sum;
-  if (conf_.debug_mode) {
-    h_walk = new uint64_t[buf_size_];
-    h_sample_keys = new uint64_t[once_max_sample_keynum];
-    h_offset2idx = new int[once_max_sample_keynum];
-    h_len_per_row = new int[once_max_sample_keynum];
-    h_prefix_sum = new uint64_t[once_max_sample_keynum + 1];
+  if (conf.debug_mode) {
+    h_walk = new uint64_t[conf.buf_size];
   }
   ///////
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
-  uint64_t *walk = reinterpret_cast<uint64_t *>(d_walk_->ptr());
-  uint8_t *walk_ntype = NULL;
-  if (conf_.need_walk_ntype) {
-    walk_ntype = reinterpret_cast<uint8_t *>(d_walk_ntype_->ptr());
+  cudaMemsetAsync(walk, 0, conf.buf_size * sizeof(uint64_t), stream);
+  if (conf.need_walk_ntype) {
+    cudaMemsetAsync(walk_ntype, 0, conf.buf_size * sizeof(uint8_t), stream);
   }
-  uint64_t *d_sample_keys = reinterpret_cast<uint64_t *>(d_sample_keys_->ptr());
-  cudaMemsetAsync(walk, 0, buf_size_ * sizeof(uint64_t), sample_stream_);
   int sample_times = 0;
   int i = 0;
-  total_row_ = 0;
+  *total_row_ptr = 0;
+
+  std::vector<std::shared_ptr<phi::Allocation>> d_sampleidx2rows;
+  d_sampleidx2rows.push_back(memory::AllocShared(
+      place,
+      conf.once_max_sample_keynum * sizeof(int),
+      phi::Stream(reinterpret_cast<phi::StreamId>(stream))));
+  d_sampleidx2rows.push_back(memory::AllocShared(
+      place,
+      conf.once_max_sample_keynum * sizeof(int),
+      phi::Stream(reinterpret_cast<phi::StreamId>(stream))));
+  int cur_sampleidx2row = 0;
 
   // 获取全局采样状态
-  auto &first_node_type = gpu_graph_ptr->first_node_type_;
   auto &cur_metapath = gpu_graph_ptr->cur_metapath_;
-  auto &meta_path = gpu_graph_ptr->meta_path_;
   auto &path = gpu_graph_ptr->cur_parse_metapath_;
-  auto &cur_metapath_start = gpu_graph_ptr->cur_metapath_start_[conf_.gpuid];
-  auto &finish_node_type = gpu_graph_ptr->finish_node_type_[conf_.gpuid];
+  auto &cur_metapath_start = gpu_graph_ptr->cur_metapath_start_[conf.gpuid];
   auto &type_to_index = gpu_graph_ptr->get_graph_type_to_index();
   size_t node_type_len = first_node_type.size();
   std::string first_node =
@@ -2889,31 +3052,30 @@ int GraphDataGenerator::FillWalkBufMultiPath() {
   auto it = gpu_graph_ptr->node_to_id.find(first_node);
   auto node_type = it->second;
 
-  int remain_size = buf_size_ - conf_.walk_degree *
-                                    conf_.once_sample_startid_len *
-                                    conf_.walk_len;
+  int remain_size = conf.buf_size - conf.walk_degree *
+                                        conf.once_sample_startid_len *
+                                        conf.walk_len;
   int total_samples = 0;
 
   while (i <= remain_size) {
     size_t start = cur_metapath_start;
-    size_t device_key_size = h_train_metapath_keys_len_;
+    size_t device_key_size = *h_train_metapath_keys_len_ptr;
     VLOG(2) << "type: " << node_type << " size: " << device_key_size
             << " start: " << start;
-    uint64_t *d_type_keys =
-        reinterpret_cast<uint64_t *>(d_train_metapath_keys_->ptr());
-    int tmp_len = start + conf_.once_sample_startid_len > device_key_size
+    uint64_t *d_type_keys = d_train_metapath_keys;
+    int tmp_len = start + conf.once_sample_startid_len > device_key_size
                       ? device_key_size - start
-                      : conf_.once_sample_startid_len;
+                      : conf.once_sample_startid_len;
     bool update = true;
     if (tmp_len == 0) {
-      epoch_finish_ = true;
+      *epoch_finish_ptr = true;
       break;
     }
 
-    VLOG(2) << "gpuid = " << conf_.gpuid << " path[0] = " << path[0];
+    VLOG(2) << "gpuid = " << conf.gpuid << " path[0] = " << path[0];
     uint64_t *cur_walk = walk + i;
     uint8_t *cur_walk_ntype = NULL;
-    if (conf_.need_walk_ntype) {
+    if (conf.need_walk_ntype) {
       cur_walk_ntype = walk_ntype + i;
     }
 
@@ -2921,52 +3083,50 @@ int GraphDataGenerator::FillWalkBufMultiPath() {
     VLOG(2) << "sample edge type: " << path[0] << " step: " << 1;
 
     NeighborSampleQuery q;
-    q.initialize(conf_.gpuid,
+    q.initialize(conf.gpuid,
                  path[0],
                  (uint64_t)(d_type_keys + start),
-                 conf_.walk_degree,
+                 conf.walk_degree,
                  tmp_len,
                  step);
     auto sample_res = gpu_graph_ptr->graph_neighbor_sample_v3(
-        q, false, true, conf_.weighted_sample);
+        q, false, true, conf.weighted_sample);
 
-    jump_rows_ = sample_res.total_sample_size;
+    *jump_rows_ptr = sample_res.total_sample_size;
     total_samples += sample_res.total_sample_size;
     VLOG(2) << "i = " << i << " start = " << start << " tmp_len = " << tmp_len
-            << "jump row: " << jump_rows_;
-    if (jump_rows_ == 0) {
+            << "jump row: " << *jump_rows_ptr;
+    if (*jump_rows_ptr == 0) {
       cur_metapath_start = tmp_len + start;
       continue;
     }
 
-    if (!conf_.sage_mode) {
-      if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
-        if (InsertTable(d_type_keys + start,
-                        tmp_len,
-                        d_uniq_node_num_,
-                        conf_,
-                        copy_unique_len_,
-                        place_,
-                        table_,
-                        host_vec_,
-                        sample_stream_) != 0) {
-          VLOG(2) << "in step 0, insert key stage, table is full";
-          update = false;
-          break;
-        }
-        if (InsertTable(sample_res.actual_val,
-                        sample_res.total_sample_size,
-                        d_uniq_node_num_,
-                        conf_,
-                        copy_unique_len_,
-                        place_,
-                        table_,
-                        host_vec_,
-                        sample_stream_) != 0) {
-          VLOG(2) << "in step 0, insert sample res stage, table is full";
-          update = false;
-          break;
-        }
+    if (!conf.sage_mode) {
+      if (InsertTable(d_type_keys + start,
+                      tmp_len,
+                      d_uniq_node_num,
+                      conf,
+                      copy_unique_len_ptr,
+                      place,
+                      table,
+                      host_vec_ptr,
+                      stream) != 0) {
+        VLOG(2) << "in step 0, insert key stage, table is full";
+        update = false;
+        break;
+      }
+      if (InsertTable(sample_res.actual_val,
+                      sample_res.total_sample_size,
+                      d_uniq_node_num,
+                      conf,
+                      copy_unique_len_ptr,
+                      place,
+                      table,
+                      host_vec_ptr,
+                      stream) != 0) {
+        VLOG(2) << "in step 0, insert sample res stage, table is full";
+        update = false;
+        break;
       }
     }
 
@@ -2975,21 +3135,21 @@ int GraphDataGenerator::FillWalkBufMultiPath() {
                 cur_walk,
                 cur_walk_ntype,
                 tmp_len,
-                sample_res,
-                conf_.walk_degree,
+                &sample_res,
+                conf.walk_degree,
                 step,
-                conf_,
-                d_sample_keys_,
-                d_prefix_sum_,
-                d_sampleidx2rows_,
-                cur_sampleidx2row_,
-                place_,
-                sample_stream_);
+                conf,
+                &d_sampleidx2rows,
+                &cur_sampleidx2row,
+                place,
+                stream);
     /////////
-    if (conf_.debug_mode) {
-      cudaMemcpy(
-          h_walk, walk, buf_size_ * sizeof(uint64_t), cudaMemcpyDeviceToHost);
-      for (int xx = 0; xx < buf_size_; xx++) {
+    if (conf.debug_mode) {
+      cudaMemcpy(h_walk,
+                 walk,
+                 conf.buf_size * sizeof(uint64_t),
+                 cudaMemcpyDeviceToHost);
+      for (int xx = 0; xx < conf.buf_size; xx++) {
         VLOG(2) << "h_walk[" << xx << "]: " << h_walk[xx];
       }
     }
@@ -3000,7 +3160,7 @@ int GraphDataGenerator::FillWalkBufMultiPath() {
     /////////
     step++;
     size_t path_len = path.size();
-    for (; step < conf_.walk_len; step++) {
+    for (; step < conf.walk_len; step++) {
       if (sample_res.total_sample_size == 0) {
         VLOG(2) << "sample finish, step=" << step;
         break;
@@ -3010,7 +3170,7 @@ int GraphDataGenerator::FillWalkBufMultiPath() {
           reinterpret_cast<uint64_t *>(sample_key_mem->ptr());
       int edge_type_id = path[(step - 1) % path_len];
       VLOG(2) << "sample edge type: " << edge_type_id << " step: " << step;
-      q.initialize(conf_.gpuid,
+      q.initialize(conf.gpuid,
                    edge_type_id,
                    (uint64_t)sample_keys_ptr,
                    1,
@@ -3018,23 +3178,21 @@ int GraphDataGenerator::FillWalkBufMultiPath() {
                    step);
       int sample_key_len = sample_res.total_sample_size;
       sample_res = gpu_graph_ptr->graph_neighbor_sample_v3(
-          q, false, true, conf_.weighted_sample);
+          q, false, true, conf.weighted_sample);
       total_samples += sample_res.total_sample_size;
-      if (!conf_.sage_mode) {
-        if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
-          if (InsertTable(sample_res.actual_val,
-                          sample_res.total_sample_size,
-                          d_uniq_node_num_,
-                          conf_,
-                          copy_unique_len_,
-                          place_,
-                          table_,
-                          host_vec_,
-                          sample_stream_) != 0) {
-            VLOG(2) << "in step: " << step << ", table is full";
-            update = false;
-            break;
-          }
+      if (!conf.sage_mode) {
+        if (InsertTable(sample_res.actual_val,
+                        sample_res.total_sample_size,
+                        d_uniq_node_num,
+                        conf,
+                        copy_unique_len_ptr,
+                        place,
+                        table,
+                        host_vec_ptr,
+                        stream) != 0) {
+          VLOG(2) << "in step: " << step << ", table is full";
+          update = false;
+          break;
         }
       }
       FillOneStep(d_type_keys + start,
@@ -3042,20 +3200,20 @@ int GraphDataGenerator::FillWalkBufMultiPath() {
                   cur_walk,
                   cur_walk_ntype,
                   sample_key_len,
-                  sample_res,
+                  &sample_res,
                   1,
                   step,
-                  conf_,
-                  d_sample_keys_,
-                  d_prefix_sum_,
-                  d_sampleidx2rows_,
-                  cur_sampleidx2row_,
-                  place_,
-                  sample_stream_);
-      if (conf_.debug_mode) {
-        cudaMemcpy(
-            h_walk, walk, buf_size_ * sizeof(uint64_t), cudaMemcpyDeviceToHost);
-        for (int xx = 0; xx < buf_size_; xx++) {
+                  conf,
+                  &d_sampleidx2rows,
+                  &cur_sampleidx2row,
+                  place,
+                  stream);
+      if (conf.debug_mode) {
+        cudaMemcpy(h_walk,
+                   walk,
+                   conf.buf_size * sizeof(uint64_t),
+                   cudaMemcpyDeviceToHost);
+        for (int xx = 0; xx < conf.buf_size; xx++) {
           VLOG(2) << "h_walk[" << xx << "]: " << h_walk[xx];
         }
       }
@@ -3066,78 +3224,524 @@ int GraphDataGenerator::FillWalkBufMultiPath() {
     // 此时更新全局采样状态
     if (update == true) {
       cur_metapath_start = tmp_len + start;
-      i += jump_rows_ * conf_.walk_len;
-      total_row_ += jump_rows_;
+      i += *jump_rows_ptr * conf.walk_len;
+      *total_row_ptr += *jump_rows_ptr;
       sample_times++;
     } else {
       VLOG(2) << "table is full, not update stat!";
       break;
     }
   }
-  buf_state_.Reset(total_row_);
-  int *d_random_row = reinterpret_cast<int *>(d_random_row_->ptr());
-  int *d_random_row_col_shift =
-      reinterpret_cast<int *>(d_random_row_col_shift_->ptr());
+  buf_state->Reset(*total_row_ptr);
 
-  paddle::memory::ThrustAllocator<cudaStream_t> allocator(place_,
-                                                          sample_stream_);
-  thrust::random::default_random_engine engine(shuffle_seed_);
-  const auto &exec_policy = thrust::cuda::par(allocator).on(sample_stream_);
+  paddle::memory::ThrustAllocator<cudaStream_t> allocator(place, stream);
+  thrust::random::default_random_engine engine(*shuffle_seed_ptr);
+  const auto &exec_policy = thrust::cuda::par(allocator).on(stream);
   thrust::counting_iterator<int> cnt_iter(0);
   thrust::shuffle_copy(exec_policy,
                        cnt_iter,
-                       cnt_iter + total_row_,
+                       cnt_iter + *total_row_ptr,
                        thrust::device_pointer_cast(d_random_row),
                        engine);
 
   thrust::transform(exec_policy,
                     cnt_iter,
-                    cnt_iter + total_row_,
+                    cnt_iter + *total_row_ptr,
                     thrust::device_pointer_cast(d_random_row_col_shift),
-                    RandInt(0, conf_.walk_len));
+                    RandInt(0, conf.walk_len));
 
-  cudaStreamSynchronize(sample_stream_);
-  shuffle_seed_ = engine();
+  cudaStreamSynchronize(stream);
+  *shuffle_seed_ptr = engine();
 
-  if (conf_.debug_mode) {
-    int *h_random_row = new int[total_row_ + 10];
+  if (conf.debug_mode) {
+    int *h_random_row = new int[*total_row_ptr + 10];
     cudaMemcpy(h_random_row,
                d_random_row,
-               total_row_ * sizeof(int),
+               *total_row_ptr * sizeof(int),
                cudaMemcpyDeviceToHost);
-    for (int xx = 0; xx < total_row_; xx++) {
+    for (int xx = 0; xx < *total_row_ptr; xx++) {
       VLOG(2) << "h_random_row[" << xx << "]: " << h_random_row[xx];
     }
     delete[] h_random_row;
     delete[] h_walk;
-    delete[] h_sample_keys;
-    delete[] h_offset2idx;
-    delete[] h_len_per_row;
-    delete[] h_prefix_sum;
   }
 
-  if (!conf_.sage_mode) {
-    uint64_t h_uniq_node_num = CopyUniqueNodes(table_,
-                                               copy_unique_len_,
-                                               place_,
-                                               d_uniq_node_num_,
-                                               host_vec_,
-                                               sample_stream_);
-    VLOG(1) << "sample_times:" << sample_times << ", d_walk_size:" << buf_size_
-            << ", d_walk_offset:" << i << ", total_rows:" << total_row_
-            << ", h_uniq_node_num:" << h_uniq_node_num
-            << ", total_samples:" << total_samples;
+  return *total_row_ptr != 0;
+}
+
+void GraphDataGenerator::DoWalkandSage() {
+  int device_id = place_.GetDeviceId();
+  debug_gpu_memory_info(device_id, "DoWalkandSage start");
+  platform::CUDADeviceGuard guard(conf_.gpuid);
+  sage_batch_num_ = 0;
+  if (conf_.gpu_graph_training) {
+    bool train_flag = DoWalkForTrain();
+    if (train_flag && conf_.sage_mode) {
+      DoSageForTrain();
+    }
   } else {
-    VLOG(1) << "sample_times:" << sample_times << ", d_walk_size:" << buf_size_
-            << ", d_walk_offset:" << i << ", total_rows:" << total_row_
-            << ", total_samples:" << total_samples;
+    bool infer_flag = DoWalkForInfer();
+    if (infer_flag && conf_.sage_mode) {
+      DoSageForInfer();
+    }
+  }
+  if (conf_.gpu_graph_training || conf_.sage_mode) {
+    CopyUniqueNodes(table_, copy_unique_len_, place_, d_uniq_node_num_,
+            &host_vec_, sample_stream_);
+  }
+}
+
+bool GraphDataGenerator::DoWalkForTrain() {
+  bool train_flag = true;
+  for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
+          ++tensor_pair_idx) {
+    uint8_t *walk_ntype = NULL;
+    if (conf_.need_walk_ntype) {
+      walk_ntype = reinterpret_cast<uint8_t *>(d_walk_ntype_[tensor_pair_idx]->ptr());
+    }
+    
+    auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
+    if (FLAGS_graph_metapath_split_opt) {
+      train_flag &= FillWalkBufMultiPath(
+                    h_device_keys_len_[tensor_pair_idx],
+                    gpu_graph_ptr->meta_path_[tensor_pair_idx],
+                    conf_,
+                    &epoch_finish_,
+                    &copy_unique_len_,
+                    place_,
+                    gpu_graph_ptr->first_node_type_[tensor_pair_idx],
+                    &(gpu_graph_ptr->node_type_start_[tensor_pair_idx][conf_.gpuid]),
+                    reinterpret_cast<uint64_t *>(d_walk_[tensor_pair_idx]->ptr()),
+                    walk_ntype,
+                    &d_uniq_node_num_,
+                    reinterpret_cast<int *>(d_random_row_[tensor_pair_idx]->ptr()),
+                    reinterpret_cast<int *>(d_random_row_col_shift_[tensor_pair_idx]->ptr()),
+                    &host_vec_,
+                    &total_row_[tensor_pair_idx],
+                    &jump_rows_[tensor_pair_idx],
+                    &shuffle_seed_[tensor_pair_idx],
+                    reinterpret_cast<uint64_t *>(d_train_metapath_keys_[tensor_pair_idx]->ptr()),
+                    &h_train_metapath_keys_len_[tensor_pair_idx],
+                    table_,
+                    &buf_state_[tensor_pair_idx],
+                    sample_stream_);
+    } else {
+      train_flag &= FillWalkBuf(h_device_keys_len_[tensor_pair_idx],
+                      d_device_keys_[tensor_pair_idx],
+                      gpu_graph_ptr->meta_path_[tensor_pair_idx],
+                      conf_,
+                      &epoch_finish_,
+                      &copy_unique_len_,
+                      place_,
+                      gpu_graph_ptr->first_node_type_[tensor_pair_idx],
+                      &(gpu_graph_ptr->node_type_start_[tensor_pair_idx][conf_.gpuid]),
+                      &(gpu_graph_ptr->finish_node_type_[tensor_pair_idx][conf_.gpuid]),
+                      reinterpret_cast<uint64_t *>(d_walk_[tensor_pair_idx]->ptr()),
+                      walk_ntype,
+                      &d_uniq_node_num_,
+                      reinterpret_cast<int *>(d_random_row_[tensor_pair_idx]->ptr()),
+                      reinterpret_cast<int *>(d_random_row_col_shift_[tensor_pair_idx]->ptr()),
+                      &multi_node_sync_stat_,
+                      &host_vec_,
+                      &total_row_[tensor_pair_idx],
+                      &jump_rows_[tensor_pair_idx],
+                      &shuffle_seed_[tensor_pair_idx],
+                      table_,
+                      &buf_state_[tensor_pair_idx],
+                      sample_stream_);
+    }
   }
 
-  return total_row_ != 0;
+  return train_flag;
+}
+
+void GraphDataGenerator::DoSageForTrain() {
+  int total_instance = 0, uniq_instance = 0;
+  bool is_sage_pass_continue = true;
+  int sage_pass_end = 0;
+  uint64_t *ins_buf, *ins_cursor;
+  while (is_sage_pass_continue) {
+    for (int tensor_pair_idx = 0;
+            tensor_pair_idx < conf_.tensor_pair_num && is_sage_pass_continue;
+            ++tensor_pair_idx) {
+      while (ins_buf_pair_len_[tensor_pair_idx] < conf_.batch_size) {
+        int32_t *pair_label_buf = NULL;
+        if (conf_.enable_pair_label) {
+          pair_label_buf =
+              reinterpret_cast<int32_t *>(d_pair_label_buf_[tensor_pair_idx]->ptr());
+        }
+        int res = FillInsBuf(d_walk_[tensor_pair_idx],
+                         d_walk_ntype_[tensor_pair_idx],
+                         conf_,
+                         d_random_row_[tensor_pair_idx],
+                         d_random_row_col_shift_[tensor_pair_idx],
+                         &buf_state_[tensor_pair_idx],
+                         reinterpret_cast<uint64_t *>(d_ins_buf_[tensor_pair_idx]->ptr()),
+                         pair_label_buf,
+                         reinterpret_cast<int *>(d_pair_num_[tensor_pair_idx]->ptr()),
+                         &ins_buf_pair_len_[tensor_pair_idx],
+                         sample_stream_);
+        if (res == -1) {
+          if (ins_buf_pair_len_[tensor_pair_idx] == 0) {
+            if (conf_.is_multi_node) {
+              sage_pass_end = 1;
+              if (total_row_[tensor_pair_idx] != 0) {
+                buf_state_[tensor_pair_idx].Reset(total_row_[tensor_pair_idx]);
+                VLOG(1) << "reset buf state to make batch num equal in "
+                           "multi node";
+              }
+            } else {
+              is_sage_pass_continue = false;
+              break;
+            }
+          } else {
+            break;
+          }
+        }
+      } // end while (ins_buf_pair_len_[tensor_pair_idx] < conf_.batch_size)
+
+      // check whether reach sage pass end
+      if (conf_.is_multi_node) {
+        int res = multi_node_sync_sample(
+            sage_pass_end, ncclProd, place_, &multi_node_sync_stat_);
+        if (res) {
+          is_sage_pass_continue = false;
+          break;
+        }
+      }
+
+      total_instance = ins_buf_pair_len_[tensor_pair_idx] < conf_.batch_size ?
+          ins_buf_pair_len_[tensor_pair_idx] : conf_.batch_size;
+      total_instance *= 2;
+
+      ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_[tensor_pair_idx]->ptr());
+      ins_cursor = ins_buf + ins_buf_pair_len_[tensor_pair_idx] * 2 - total_instance;
+      auto final_sage_nodes = GenerateSampleGraph(ins_cursor,
+                                                  total_instance,
+                                                  &uniq_instance,
+                                                  conf_,
+                                                  &inverse_vec_,
+                                                  &graph_edges_vec_,
+                                                  &edges_split_num_vec_,
+                                                  &edge_type_graph_,
+                                                  place_,
+                                                  sample_stream_);
+      final_sage_nodes_vec_.emplace_back(final_sage_nodes);
+      uniq_instance_vec_.emplace_back(uniq_instance);
+      total_instance_vec_.emplace_back(total_instance);
+
+      if (conf_.get_degree) {
+        auto node_degrees = GetNodeDegree(reinterpret_cast<uint64_t *>(final_sage_nodes->ptr()),
+                                          uniq_instance,
+                                          conf_,
+                                          place_,
+                                          sample_stream_);
+        node_degree_vec_.emplace_back(node_degrees);
+      }
+      
+      if (conf_.enable_pair_label) {
+        auto pair_label = memory::AllocShared(
+            place_,
+            total_instance / 2 * sizeof(int),
+            phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+        int32_t *pair_label_buf =
+            reinterpret_cast<int32_t *>(d_pair_label_buf_[tensor_pair_idx]->ptr());
+        int32_t *pair_label_cursor =
+            pair_label_buf + ins_buf_pair_len_[tensor_pair_idx] - total_instance / 2;
+        cudaMemcpyAsync(pair_label->ptr(),
+                        pair_label_cursor,
+                        sizeof(int32_t) * total_instance / 2,
+                        cudaMemcpyDeviceToDevice,
+                        sample_stream_);
+        pair_label_vec_.emplace_back(pair_label);
+      }
+      
+      cudaStreamSynchronize(sample_stream_);
+      InsertTable(reinterpret_cast<uint64_t *>(final_sage_nodes->ptr()),
+                  uniq_instance,
+                  &d_uniq_node_num_,
+                  conf_,
+                  &copy_unique_len_,
+                  place_,
+                  table_,
+                  &host_vec_,
+                  sample_stream_);
+      
+      ins_buf_pair_len_[tensor_pair_idx] -= total_instance / 2;
+    } // end for (int tensor_pair_idx = 0;
+    if (is_sage_pass_continue) {
+      sage_batch_num_ += 1;
+    }
+  } // end while (is_sage_pass_continue)
+}
+
+void GraphDataGenerator::DoSageForInfer() {
+  // Set new batch size for multi_node
+  if (conf_.is_multi_node) {
+    int new_batch_size = dynamic_adjust_batch_num_for_sage();
+    conf_.batch_size = new_batch_size;
+  }
+
+  for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
+          ++tensor_pair_idx) {
+    int total_instance = 0, uniq_instance = 0;
+    total_instance =
+        (infer_node_start_[tensor_pair_idx] + conf_.batch_size <= infer_node_end_[tensor_pair_idx])
+            ? conf_.batch_size
+            : infer_node_end_[tensor_pair_idx] - infer_node_start_[tensor_pair_idx];
+    total_instance *= 2;
+    while (total_instance != 0) {
+      uint64_t *d_type_keys = reinterpret_cast<uint64_t *>(
+          d_device_keys_[tensor_pair_idx][infer_cursor_[tensor_pair_idx]]->ptr());
+      d_type_keys += infer_node_start_[tensor_pair_idx];
+      infer_node_start_[tensor_pair_idx] += total_instance / 2;
+      auto node_buf = memory::AllocShared(
+          place_,
+          total_instance * sizeof(uint64_t),
+          phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+      int64_t *node_buf_ptr = reinterpret_cast<int64_t *>(node_buf->ptr());
+      CopyDuplicateKeys<<<GET_BLOCKS(total_instance / 2),
+                          CUDA_NUM_THREADS,
+                          0,
+                          sample_stream_>>>(
+          node_buf_ptr, d_type_keys, total_instance / 2);
+      auto final_sage_nodes = GenerateSampleGraph(reinterpret_cast<uint64_t *>(node_buf->ptr()),
+                                                  total_instance,
+                                                  &uniq_instance,
+                                                  conf_,
+                                                  &inverse_vec_,
+                                                  &graph_edges_vec_,
+                                                  &edges_split_num_vec_,
+                                                  &edge_type_graph_,
+                                                  place_,
+                                                  sample_stream_);
+      final_sage_nodes_vec_.emplace_back(final_sage_nodes);
+      uniq_instance_vec_.emplace_back(uniq_instance);
+      total_instance_vec_.emplace_back(total_instance);
+      
+      if (conf_.get_degree) {
+        auto node_degrees = GetNodeDegree(reinterpret_cast<uint64_t *>(final_sage_nodes->ptr()),
+                                          uniq_instance,
+                                          conf_,
+                                          place_,
+                                          sample_stream_);
+        node_degree_vec_.emplace_back(node_degrees);
+      }
+      cudaStreamSynchronize(sample_stream_);
+      InsertTable(reinterpret_cast<uint64_t *>(final_sage_nodes->ptr()),
+                  uniq_instance,
+                  &d_uniq_node_num_,
+                  conf_,
+                  &copy_unique_len_,
+                  place_,
+                  table_,
+                  &host_vec_,
+                  sample_stream_);
+      
+      total_instance =
+          (infer_node_start_[tensor_pair_idx] + conf_.batch_size <= infer_node_end_[tensor_pair_idx])
+              ? conf_.batch_size
+              : infer_node_end_[tensor_pair_idx] - infer_node_start_[tensor_pair_idx];
+      total_instance *= 2;
+      sage_batch_num_ += 1;
+    } // end while (total_instance != 0)
+  } // end for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
+
+  sage_batch_num_ /= conf_.tensor_pair_num;
+}
+
+void GraphDataGenerator::clear_gpu_mem() {
+  platform::CUDADeviceGuard guard(conf_.gpuid);
+  delete table_;
+}
+
+int dynamic_adjust_total_row_for_infer(int local_reach_end,
+                                    const paddle::platform::Place &place,
+                                    cudaStream_t stream) {
+  auto send_buff = memory::Alloc(
+      place,
+      2 * sizeof(int),
+      phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  int *send_buff_ptr = reinterpret_cast<int *>(send_buff->ptr());
+  cudaMemcpyAsync(send_buff_ptr,
+                  &local_reach_end,
+                  sizeof(int),
+                  cudaMemcpyHostToDevice,
+                  stream);
+  cudaStreamSynchronize(stream);
+  auto comm =
+      platform::NCCLCommContext::Instance().Get(0, place.GetDeviceId());
+  PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllReduce(&send_buff_ptr[0],
+                                                              &send_buff_ptr[1],
+                                                              1,
+                                                              ncclInt,
+                                                              ncclProd,
+                                                              comm->comm(),
+                                                              stream));
+  int global_reach_end = 0;
+  cudaMemcpyAsync(&global_reach_end,
+                  &send_buff_ptr[1],
+                  sizeof(int),
+                  cudaMemcpyDeviceToHost,
+                  stream);
+  cudaStreamSynchronize(stream);
+  return global_reach_end;
+}
+
+bool FillInferBuf(const std::vector<uint64_t> &h_device_keys_len, // input
+                const std::vector<std::shared_ptr<phi::Allocation>> &d_device_keys,
+                const GraphDataGeneratorConfig &conf,
+                int tensor_pair_idx,
+                int *total_row_ptr,
+                size_t *infer_node_start_ptr,
+                size_t *infer_node_end_ptr,
+                size_t *infer_cursor_ptr,
+                std::vector<uint64_t> *host_vec_ptr,  // output
+                const paddle::platform::Place &place,
+                cudaStream_t stream) {
+  auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
+  auto &global_infer_node_type_start =
+      gpu_graph_ptr->global_infer_node_type_start_[conf.gpuid];
+  auto &infer_cursor = gpu_graph_ptr->infer_cursor_[tensor_pair_idx][conf.thread_id];
+  *total_row_ptr = 0;
+  if (infer_cursor < h_device_keys_len.size()) {
+    while (global_infer_node_type_start[infer_cursor] >=
+           h_device_keys_len[infer_cursor]) {
+      infer_cursor++;
+      if (infer_cursor >= h_device_keys_len.size()) {
+        return false;
+      }
+    }
+    if (!conf.infer_node_type_index_set.empty()) {
+      while (infer_cursor < h_device_keys_len.size()) {
+        if (conf.infer_node_type_index_set.find(infer_cursor) ==
+            conf.infer_node_type_index_set.end()) {
+          VLOG(2) << "Skip cursor[" << infer_cursor << "]";
+          infer_cursor++;
+          continue;
+        } else {
+          VLOG(2) << "Not skip cursor[" << infer_cursor << "]";
+          break;
+        }
+      }
+      if (infer_cursor >= h_device_keys_len.size()) {
+        return false;
+      }
+    }
+
+    size_t device_key_size = h_device_keys_len[infer_cursor];
+    if (conf.is_multi_node) {
+      int local_reach_end = global_infer_node_type_start[infer_cursor] + conf.buf_size >= 
+                            device_key_size;
+      int global_reach_end = dynamic_adjust_total_row_for_infer(local_reach_end, place, stream);
+      int remain = device_key_size - global_infer_node_type_start[infer_cursor];
+      if (global_reach_end) {
+        *total_row_ptr = remain;
+      } else {
+        if (local_reach_end) {
+          *total_row_ptr = remain / 2;
+        } else {
+          *total_row_ptr = conf.buf_size;
+        }
+      }
+    } else {
+      *total_row_ptr =
+          (global_infer_node_type_start[infer_cursor] + conf.buf_size <=
+           device_key_size)
+              ? conf.buf_size
+              : device_key_size - global_infer_node_type_start[infer_cursor];
+    }
+
+    uint64_t *d_type_keys =
+        reinterpret_cast<uint64_t *>(d_device_keys[infer_cursor]->ptr());
+    if (!conf.sage_mode) {
+      host_vec_ptr->resize(*total_row_ptr);
+      cudaMemcpyAsync(host_vec_ptr->data(),
+                      d_type_keys + global_infer_node_type_start[infer_cursor],
+                      sizeof(uint64_t) * *total_row_ptr,
+                      cudaMemcpyDeviceToHost,
+                      stream);
+      cudaStreamSynchronize(stream);
+    }
+    VLOG(1) << "gpuid: " << conf.gpuid
+            << " cursor: " << infer_cursor
+            << " start: " << global_infer_node_type_start[infer_cursor]
+            << " num: " << *total_row_ptr
+            << " device_key_size: " << device_key_size;
+    *infer_node_start_ptr = global_infer_node_type_start[infer_cursor];
+    global_infer_node_type_start[infer_cursor] += *total_row_ptr;
+    *infer_node_end_ptr = global_infer_node_type_start[infer_cursor];
+    *infer_cursor_ptr = infer_cursor;
+    return true;
+  }
+
+  return false;
+}
+
+bool GraphDataGenerator::DoWalkForInfer() {
+  platform::CUDADeviceGuard guard(conf_.gpuid);
+  bool infer_flag = true;
+  for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
+          ++tensor_pair_idx) {
+    infer_flag &= FillInferBuf(h_device_keys_len_[tensor_pair_idx],
+                            d_device_keys_[tensor_pair_idx],
+                            conf_,
+                            tensor_pair_idx,
+                            &total_row_[tensor_pair_idx],
+                            &infer_node_start_[tensor_pair_idx],
+                            &infer_node_end_[tensor_pair_idx],
+                            &infer_cursor_[tensor_pair_idx],
+                            &host_vec_,
+                            place_,
+                            sample_stream_);
+    cudaStreamSynchronize(sample_stream_);
+  }
+
+  return infer_flag;
+}
+ 
+void GraphDataGenerator::ClearSampleState() {
+  auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
+  for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
+          ++tensor_pair_idx) {
+    auto &finish_node_type = gpu_graph_ptr->finish_node_type_[tensor_pair_idx][conf_.gpuid];
+    auto &node_type_start = gpu_graph_ptr->node_type_start_[tensor_pair_idx][conf_.gpuid];
+    finish_node_type.clear();
+    for (auto iter = node_type_start.begin(); iter != node_type_start.end();
+         iter++) {
+      iter->second = 0;
+    }
+  }
 }
 
 void GraphDataGenerator::SetFeedVec(std::vector<phi::DenseTensor *> feed_vec) {
   feed_vec_ = feed_vec;
+}
+
+void GraphDataGenerator::SetFeedInfo(std::vector<UsedSlotInfo>* feed_info) {
+  feed_info_ = feed_info;
+  for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
+          ++tensor_pair_idx) {
+    int feed_vec_idx = 2 + tensor_pair_idx * conf_.tensor_num_of_one_pair;
+    ++feed_vec_idx;
+    if (conf_.enable_pair_label) {
+      ++feed_vec_idx;
+    }
+    for (int i = 0; i < conf_.slot_num; i++) {
+      int offset = feed_vec_idx + 2 * i; 
+      if ((*feed_info_)[offset].type[0] == 'f') { // float feature
+        // if (first_float_idx_ == -1) { 
+        //  first_float_idx_ = i;
+        // }
+        float_slot_num_++;
+      } else if ((*feed_info_)[offset].type[0] == 'u') { // slot feature
+        // if (first_slot_idx_ == -1) { 
+        //   first_slot_idx_ = i;
+        // }
+        uint_slot_num_++;
+      }
+    }
+  }
 }
 
 void GraphDataGenerator::AllocResource(
@@ -3168,11 +3772,11 @@ void GraphDataGenerator::AllocResource(
           << " feed_vec.size: " << feed_vec.size()
           << " table cap: " << conf_.train_table_cap;
 
-  is_multi_node_ = false;
+  conf_.is_multi_node = false;
 #if defined(PADDLE_WITH_GLOO)
   auto gloo = paddle::framework::GlooWrapper::GetInstance();
   if (gloo->Size() > 1) {
-    is_multi_node_ = true;
+    conf_.is_multi_node = true;
   }
 #endif
 
@@ -3192,49 +3796,54 @@ void GraphDataGenerator::AllocResource(
   //                              stream_));
   // }
   if (conf_.gpu_graph_training && FLAGS_graph_metapath_split_opt) {
-    d_train_metapath_keys_ =
-        gpu_graph_ptr->d_node_iter_graph_metapath_keys_[thread_id];
-    h_train_metapath_keys_len_ =
-        gpu_graph_ptr->h_node_iter_graph_metapath_keys_len_[thread_id];
-    VLOG(2) << "h train metapaths key len: " << h_train_metapath_keys_len_;
-  } else {
-    auto &d_graph_all_type_keys =
-        gpu_graph_ptr->d_node_iter_graph_all_type_keys_;
-    auto &h_graph_all_type_keys_len =
-        gpu_graph_ptr->h_node_iter_graph_all_type_keys_len_;
-
-    for (size_t i = 0; i < d_graph_all_type_keys.size(); i++) {
-      d_device_keys_.push_back(d_graph_all_type_keys[i][thread_id]);
-      h_device_keys_len_.push_back(h_graph_all_type_keys_len[i][thread_id]);
+    d_train_metapath_keys_.resize(conf_.tensor_pair_num);
+    h_train_metapath_keys_len_.resize(conf_.tensor_pair_num);
+    for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
+            ++tensor_pair_idx) {
+      d_train_metapath_keys_[tensor_pair_idx] =
+          gpu_graph_ptr->d_node_iter_graph_metapath_keys_[thread_id];
+      h_train_metapath_keys_len_[tensor_pair_idx] =
+          gpu_graph_ptr->h_node_iter_graph_metapath_keys_len_[thread_id];
+      VLOG(2) << "h train metapaths key len: " << h_train_metapath_keys_len_[tensor_pair_idx];
     }
-    VLOG(2) << "h_device_keys size: " << h_device_keys_len_.size();
+  } else {
+    d_device_keys_.resize(conf_.tensor_pair_num);
+    h_device_keys_len_.resize(conf_.tensor_pair_num);
+    for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
+            ++tensor_pair_idx) {
+      auto &d_graph_all_type_keys =
+          gpu_graph_ptr->d_node_iter_graph_all_type_keys_;
+      auto &h_graph_all_type_keys_len =
+          gpu_graph_ptr->h_node_iter_graph_all_type_keys_len_;
+
+      for (size_t i = 0; i < d_graph_all_type_keys.size(); i++) {
+        d_device_keys_[tensor_pair_idx].push_back(d_graph_all_type_keys[i][thread_id]);
+        h_device_keys_len_[tensor_pair_idx].push_back(h_graph_all_type_keys_len[i][thread_id]);
+      }
+      VLOG(2) << "h_device_keys size: " << h_device_keys_len_[tensor_pair_idx].size();
+    }
   }
 
-  size_t once_max_sample_keynum =
-      conf_.walk_degree * conf_.once_sample_startid_len;
-  d_prefix_sum_ = memory::AllocShared(
-      place_,
-      (once_max_sample_keynum + 1) * sizeof(int),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-  int *d_prefix_sum_ptr = reinterpret_cast<int *>(d_prefix_sum_->ptr());
-  cudaMemsetAsync(d_prefix_sum_ptr,
-                  0,
-                  (once_max_sample_keynum + 1) * sizeof(int),
-                  sample_stream_);
-  infer_cursor_ = 0;
-  jump_rows_ = 0;
-  d_uniq_node_num_ = memory::AllocShared(
-      place_,
-      sizeof(uint64_t),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+  infer_cursor_.assign(conf_.tensor_pair_num, 0);
+  jump_rows_.assign(conf_.tensor_pair_num, 0);
+  d_uniq_node_num_ = memory::AllocShared(place_,
+          sizeof(uint64_t),
+          phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
   cudaMemsetAsync(d_uniq_node_num_->ptr(), 0, sizeof(uint64_t), sample_stream_);
 
-  d_walk_ = memory::AllocShared(
-      place_,
-      buf_size_ * sizeof(uint64_t),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-  cudaMemsetAsync(
-      d_walk_->ptr(), 0, buf_size_ * sizeof(uint64_t), sample_stream_);
+  total_row_.assign(conf_.tensor_pair_num, 0);
+  infer_node_start_.assign(conf_.tensor_pair_num, 0);
+  infer_node_end_.assign(conf_.tensor_pair_num, 0);
+  d_walk_.resize(conf_.tensor_pair_num);
+  for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
+          ++tensor_pair_idx) {
+    d_walk_[tensor_pair_idx] = memory::AllocShared(
+            place_,
+            conf_.buf_size * sizeof(uint64_t),
+            phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+    cudaMemsetAsync(
+            d_walk_[tensor_pair_idx]->ptr(), 0, conf_.buf_size * sizeof(uint64_t), sample_stream_);
+  }
 
   conf_.excluded_train_pair_len = gpu_graph_ptr->excluded_train_pair_.size();
   if (conf_.excluded_train_pair_len > 0) {
@@ -3249,59 +3858,58 @@ void GraphDataGenerator::AllocResource(
                                sample_stream_));
   }
 
-  d_sample_keys_ = memory::AllocShared(
-      place_,
-      once_max_sample_keynum * sizeof(uint64_t),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-
-  d_sampleidx2rows_.push_back(memory::AllocShared(
-      place_,
-      once_max_sample_keynum * sizeof(int),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_))));
-  d_sampleidx2rows_.push_back(memory::AllocShared(
-      place_,
-      once_max_sample_keynum * sizeof(int),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_))));
-  cur_sampleidx2row_ = 0;
-
   for (int i = -conf_.window; i < 0; i++) {
     conf_.window_step.push_back(i);
   }
   for (int i = 0; i < conf_.window; i++) {
     conf_.window_step.push_back(i + 1);
   }
-  buf_state_.Init(conf_.batch_size, conf_.walk_len, &conf_.window_step);
-  d_random_row_ = memory::AllocShared(
-      place_,
-      (conf_.once_sample_startid_len * conf_.walk_degree * repeat_time_) *
-          sizeof(int),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+  buf_state_.resize(conf_.tensor_pair_num);
+  d_random_row_.resize(conf_.tensor_pair_num);
+  d_random_row_col_shift_.resize(conf_.tensor_pair_num);
+  for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
+          ++tensor_pair_idx) {
+    buf_state_[tensor_pair_idx].Init(conf_.batch_size, conf_.walk_len, &conf_.window_step);
+    d_random_row_[tensor_pair_idx] = memory::AllocShared(
+        place_,
+        (conf_.once_sample_startid_len * conf_.walk_degree * repeat_time_) *
+            sizeof(int),
+        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+    
+    d_random_row_col_shift_[tensor_pair_idx] = memory::AllocShared(
+        place_,
+        (conf_.once_sample_startid_len * conf_.walk_degree * repeat_time_) *
+            sizeof(int),
+        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+  }
 
-  d_random_row_col_shift_ = memory::AllocShared(
-      place_,
-      (conf_.once_sample_startid_len * conf_.walk_degree * repeat_time_) *
-          sizeof(int),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-
-  shuffle_seed_ = 0;
-
-  ins_buf_pair_len_ = 0;
-  d_ins_buf_ = memory::AllocShared(
-      place_,
-      (conf_.batch_size * 2 * 2) * sizeof(uint64_t),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-  d_pair_num_ = memory::AllocShared(
-      place_,
-      sizeof(int),
-      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+  shuffle_seed_.assign(conf_.tensor_pair_num, 0);
+  ins_buf_pair_len_.assign(conf_.tensor_pair_num, 0);
+  d_ins_buf_.resize(conf_.tensor_pair_num);
+  d_pair_num_.resize(conf_.tensor_pair_num);
+  for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
+          ++tensor_pair_idx) {
+    d_ins_buf_[tensor_pair_idx] = memory::AllocShared(
+        place_,
+        (conf_.batch_size * 2 * 2) * sizeof(uint64_t),
+        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+    d_pair_num_[tensor_pair_idx] = memory::AllocShared(
+        place_,
+        sizeof(int),
+        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+  }
   conf_.enable_pair_label =
       conf_.gpu_graph_training && gpu_graph_ptr->pair_label_conf_.size() > 0;
   if (conf_.enable_pair_label) {
     conf_.node_type_num = gpu_graph_ptr->id_to_feature.size();
-    d_pair_label_buf_ = memory::AllocShared(
-        place_,
-        (conf_.batch_size * 2) * sizeof(int32_t),
-        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+    d_pair_label_buf_.resize(conf_.tensor_pair_num);
+    for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
+            ++tensor_pair_idx) {
+      d_pair_label_buf_[tensor_pair_idx] = memory::AllocShared(
+          place_,
+          (conf_.batch_size * 2) * sizeof(int32_t),
+          phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+    }
     conf_.d_pair_label_conf = memory::AllocShared(
         place_,
         conf_.node_type_num * conf_.node_type_num * sizeof(int32_t),
@@ -3320,12 +3928,18 @@ void GraphDataGenerator::AllocResource(
   conf_.need_walk_ntype =
       conf_.excluded_train_pair_len > 0 || conf_.enable_pair_label;
   if (conf_.need_walk_ntype) {
-    d_walk_ntype_ = memory::AllocShared(
-        place_,
-        buf_size_ * sizeof(uint8_t),
-        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-    cudaMemsetAsync(
-        d_walk_ntype_->ptr(), 0, buf_size_ * sizeof(uint8_t), sample_stream_);
+    d_walk_ntype_.resize(conf_.tensor_pair_num);
+    for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
+            ++tensor_pair_idx) {
+      d_walk_ntype_[tensor_pair_idx] = memory::AllocShared(
+              place_,
+              conf_.buf_size * sizeof(uint8_t),
+              phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+      cudaMemsetAsync(d_walk_ntype_[tensor_pair_idx]->ptr(),
+                    0,
+                    conf_.buf_size * sizeof(uint8_t),
+                    sample_stream_);
+    }
   }
 
   if (!conf_.sage_mode) {
@@ -3335,8 +3949,23 @@ void GraphDataGenerator::AllocResource(
                                   : id_offset_of_feed_vec_ + 1;
     int sample_offset = conf_.return_weight ? 6 : 5;
     conf_.slot_num =
-        (feed_vec.size() - offset - samples_.size() * sample_offset) / 2;
+        (feed_vec.size() - offset - conf_.samples.size() * sample_offset) / 2;
   }
+  VLOG(1) << "slot_num[" << conf_.slot_num << "]";
+  conf_.tensor_num_of_one_pair = 1 + conf_.slot_num * 2; // id and slot
+  if (conf_.sage_mode) {
+    conf_.tensor_num_of_one_pair += 5 * conf_.samples.size() + 1; // sage[] and inverse_index
+  }
+  if (conf_.enable_pair_label) {
+    conf_.tensor_num_of_one_pair++;
+  }
+  if (conf_.get_degree) {
+    conf_.tensor_num_of_one_pair++;
+  }
+  if (conf_.return_weight) {
+    conf_.tensor_num_of_one_pair += conf_.samples.size();
+  }
+  VLOG(1) << "tensor_num_of_one_pair[" << conf_.tensor_num_of_one_pair << "]";
 
   d_slot_tensor_ptr_ = memory::AllocShared(
       place_,
@@ -3350,15 +3979,15 @@ void GraphDataGenerator::AllocResource(
   if (conf_.sage_mode) {
     conf_.reindex_table_size = conf_.batch_size * 2;
     // get hashtable size
-    for (int i = 0; i < samples_.size(); i++) {
-      conf_.reindex_table_size *= (samples_[i] * edge_to_id_len_ + 1);
+    for (int i = 0; i < conf_.samples.size(); i++) {
+      conf_.reindex_table_size *= (conf_.samples[i] * conf_.edge_to_id_len + 1);
     }
     int64_t next_pow2 =
         1 << static_cast<size_t>(1 + std::log2(conf_.reindex_table_size >> 1));
     conf_.reindex_table_size = next_pow2 << 1;
 
     edge_type_graph_ =
-        gpu_graph_ptr->get_edge_type_graph(conf_.gpuid, edge_to_id_len_);
+        gpu_graph_ptr->get_edge_type_graph(conf_.gpuid, conf_.edge_to_id_len);
   }
 
   // parse infer_node_type
@@ -3378,10 +4007,10 @@ void GraphDataGenerator::AllocResource(
       VLOG(2) << "add node[" << type
               << "] into infer_node_type, type_index(cursor)[" << type_index
               << "]";
-      infer_node_type_index_set_.insert(type_index);
+      conf_.infer_node_type_index_set.insert(type_index);
     }
     VLOG(2) << "infer_node_type_index_set_num: "
-            << infer_node_type_index_set_.size();
+            << conf_.infer_node_type_index_set.size();
   }
 
   int *stat_ptr =
@@ -3420,8 +4049,8 @@ void GraphDataGenerator::SetConfig(
     conf_.batch_size = conf_.once_sample_startid_len;
   }
   repeat_time_ = graph_config.sample_times_one_chunk();
-  buf_size_ = conf_.once_sample_startid_len * conf_.walk_len *
-              conf_.walk_degree * repeat_time_;
+  conf_.buf_size = conf_.once_sample_startid_len * conf_.walk_len *
+                   conf_.walk_degree * repeat_time_;
   conf_.train_table_cap = graph_config.train_table_cap();
   conf_.infer_table_cap = graph_config.infer_table_cap();
   conf_.get_degree = graph_config.get_degree();
@@ -3446,21 +4075,25 @@ void GraphDataGenerator::SetConfig(
                            meta_path,
                            graph_config.excluded_train_pair(),
                            graph_config.pair_label());
+  conf_.tensor_pair_num = gpu_graph_ptr->tensor_pair_num_;
   debug_gpu_memory_info("init_conf end");
 
   auto edge_to_id = gpu_graph_ptr->edge_to_id;
-  edge_to_id_len_ = edge_to_id.size();
+  conf_.edge_to_id_len = edge_to_id.size();
   sage_batch_count_ = 0;
   auto samples = paddle::string::split_string<std::string>(str_samples, ";");
   for (size_t i = 0; i < samples.size(); i++) {
     int sample_size = std::stoi(samples[i]);
-    samples_.emplace_back(sample_size);
+    conf_.samples.emplace_back(sample_size);
   }
   copy_unique_len_ = 0;
 
   if (!conf_.gpu_graph_training) {
     infer_node_type_ = graph_config.infer_node_type();
   }
+
+  conf_.once_max_sample_keynum =
+      conf_.walk_degree * conf_.once_sample_startid_len;
 }
 #endif
 
@@ -3479,14 +4112,14 @@ void GraphDataGenerator::DumpWalkPath(std::string dump_path, size_t dump_rate) {
                         "the dump rate[1, 10000000]"));
   int err_no = 0;
   std::shared_ptr<FILE> fp = fs_open_append_write(dump_path, &err_no, "");
-  uint64_t *h_walk = new uint64_t[buf_size_];
-  uint64_t *walk = reinterpret_cast<uint64_t *>(d_walk_->ptr());
+  uint64_t *h_walk = new uint64_t[conf_.buf_size];
+  uint64_t *walk = reinterpret_cast<uint64_t *>(d_walk_[0]->ptr());
   cudaMemcpy(
-      h_walk, walk, buf_size_ * sizeof(uint64_t), cudaMemcpyDeviceToHost);
-  VLOG(1) << "DumpWalkPath all buf_size_:" << buf_size_;
+      h_walk, walk, conf_.buf_size * sizeof(uint64_t), cudaMemcpyDeviceToHost);
+  VLOG(1) << "DumpWalkPath all conf_.buf_size:" << conf_.buf_size;
   std::string ss = "";
   size_t write_count = 0;
-  for (int xx = 0; xx < buf_size_ / dump_rate; xx += conf_.walk_len) {
+  for (int xx = 0; xx < conf_.buf_size / dump_rate; xx += conf_.walk_len) {
     ss = "";
     for (int yy = 0; yy < conf_.walk_len; yy++) {
       ss += std::to_string(h_walk[xx + yy]) + "-";
@@ -3500,37 +4133,13 @@ void GraphDataGenerator::DumpWalkPath(std::string dump_path, size_t dump_rate) {
 #endif
 }
 
-int GraphDataGenerator::multi_node_sync_sample(int flag,
-                                               const ncclRedOp_t &op) {
-  if (flag < 0 && flag > 2) {
-    VLOG(0) << "invalid flag! " << flag;
-    assert(false);
-    return -1;
-  }
-
-  int ret = 0;
-#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
-  int *stat_ptr = multi_node_sync_stat_.data<int>();
-  auto comm =
-      platform::NCCLCommContext::Instance().Get(0, place_.GetDeviceId());
-  auto stream = comm->stream();
-  PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllReduce(
-      &stat_ptr[flag], &stat_ptr[3], 1, ncclInt, op, comm->comm(), stream));
-  PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyAsync(&ret,  // output
-                                             &stat_ptr[3],
-                                             sizeof(int),
-                                             cudaMemcpyDeviceToHost,
-                                             stream));
-  PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
-#endif
-  return ret;
-}
-
 int GraphDataGenerator::dynamic_adjust_batch_num_for_sage() {
-  int batch_num = (total_row_ + conf_.batch_size - 1) / conf_.batch_size;
-  auto send_buff = memory::Alloc(place_, 2 * sizeof(int),
-                                 phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-  int* send_buff_ptr = reinterpret_cast<int*>(send_buff->ptr());
+  int batch_num = (total_row_[0] + conf_.batch_size - 1) / conf_.batch_size;
+  auto send_buff = memory::Alloc(
+      place_,
+      2 * sizeof(int),
+      phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+  int *send_buff_ptr = reinterpret_cast<int *>(send_buff->ptr());
   cudaMemcpyAsync(send_buff_ptr,
                   &batch_num,
                   sizeof(int),
@@ -3554,10 +4163,11 @@ int GraphDataGenerator::dynamic_adjust_batch_num_for_sage() {
                   sample_stream_);
   cudaStreamSynchronize(sample_stream_);
 
-  int new_batch_size = (total_row_ + thread_max_batch_num - 1) / thread_max_batch_num;
+  int new_batch_size =
+      (total_row_[0] + thread_max_batch_num - 1) / thread_max_batch_num;
   VLOG(2) << conf_.gpuid << " dynamic adjust sage batch num "
-                         << " max_batch_num: " << thread_max_batch_num
-                         << " new_batch_size:  " << new_batch_size;
+          << " max_batch_num: " << thread_max_batch_num
+          << " new_batch_size:  " << new_batch_size;
   return new_batch_size;
 }
 
