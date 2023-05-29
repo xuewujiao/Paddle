@@ -470,10 +470,12 @@ void DatasetImpl<T>::LoadIntoMemory() {
   if (gpu_graph_mode_) {
     VLOG(1) << "in gpu_graph_mode";
 #ifdef PADDLE_WITH_HETERPS
+    bool sage_mode = 0;
     std::vector<std::future<void>> wait_futures;
     auto pool = GetReadThreadPool(thread_num_);
     for (size_t i = 0; i < readers_.size(); i++) {
       readers_[i]->SetGpuGraphMode(gpu_graph_mode_);
+      sage_mode = readers_[i]->GetSageMode();
     }
 
     if (STAT_GET(STAT_epoch_finish) == 1) {
@@ -521,6 +523,11 @@ void DatasetImpl<T>::LoadIntoMemory() {
       th.get();
     }
     wait_futures.clear();
+
+    if (!sage_mode) {
+      uint64_t zero_key = 0;
+      gpu_graph_total_keys_.emplace_back(zero_key);
+    }
 
     if (GetEpochFinish() == true) {
       VLOG(0) << "epoch finish, set stat and clear sample stat!";
