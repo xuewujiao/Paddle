@@ -968,6 +968,8 @@ class GraphDataGenerator {
     }
   }
   bool GetSageMode() { return conf_.sage_mode; }
+  bool GetMultiNodeMode() { return conf_.is_multi_node; }
+  bool GetTrainState() { return conf_.gpu_graph_training; }
   void ResetEpochFinish() { epoch_finish_ = false; }
   void reset_pass_end() { pass_end_ = 0; }
   void ClearSampleState();
@@ -976,13 +978,19 @@ class GraphDataGenerator {
     // type_to_index_[type] = h_device_keys_.size();
     // h_device_keys_.push_back(device_keys);
   }
-
+  int GetTrainMemoryDataSize() {
+    // use only for is_multi_node = True, sage_mode = True, gpu_graph_training = True
+    if (!global_train_flag_) {
+      return 0;
+    } else {
+      return total_row_[0];
+    }
+  }
   std::vector<uint64_t>& GetHostVec() { return host_vec_; }
   bool get_epoch_finish() { return epoch_finish_; }
   int get_pass_end() { return pass_end_; }
   void clear_gpu_mem();
   int dynamic_adjust_batch_num_for_sage();
-  int dynamic_adjust_total_row_for_infer(int local_reach_end);
 
  protected:
   void DoSageForInfer();
@@ -1041,6 +1049,7 @@ class GraphDataGenerator {
 
   int sage_batch_count_;
   int sage_batch_num_;
+  bool global_train_flag_ = 0;
   std::vector<int> ins_buf_pair_len_;
   int id_offset_of_feed_vec_;
 
@@ -1170,6 +1179,13 @@ class DataFeed {
     return 0;
 #endif
   }
+  virtual bool GetMultiNodeMode() {
+#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
+    return gpu_graph_data_generator_.GetMultiNodeMode();
+#else
+    return 0;
+#endif
+  }
   virtual int GetGraphPathNum() {
 #if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
     return gpu_graph_data_generator_.GetPathNum();
@@ -1177,6 +1193,20 @@ class DataFeed {
     return 0;
 #endif
   }
+  virtual bool GetTrainState() {
+#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
+    return gpu_graph_data_generator_.GetTrainState();
+#else
+    return 0;
+#endif
+  }
+  virtual int GetTrainMemoryDataSize() {
+#if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
+    return gpu_graph_data_generator_.GetTrainMemoryDataSize();
+#else
+    return 0;
+#endif
+}
 
 #if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
   virtual const std::vector<uint64_t>* GetHostVec() {
