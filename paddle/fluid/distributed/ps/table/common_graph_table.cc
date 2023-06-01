@@ -1945,7 +1945,7 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
 
     size_t index = shard_id - shard_start;
     int slot_fea_num = 0;
-    if (feat_name.size() > 0) slot_fea_num = feat_name[idx].size(); 
+    if (feat_name.size() > 0) slot_fea_num = feat_name[idx].size();
     int float_fea_num = 0;
     if (float_feat_id_map.size() > 0) float_fea_num = float_feat_id_map[idx].size();
     if (load_slot) {
@@ -2661,7 +2661,7 @@ int GraphTable::parse_feature(int idx,
             return -1;
           }
           return 0;
-        } 
+        }
         // else if (dtype == "float64") { // not used
         //  int ret = FeatureNode::parse_value_to_bytes<double>(
         //      fea_fields.begin(), fea_fields.end(), fea_ptr);
@@ -3053,7 +3053,7 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
         feat_shape[k].push_back(f_shape);
         feat_dtype[k].push_back(f_dtype);
         feat_id_map[k][f_name] = feasign_idx++;
-      } 
+      }
       else if (f_dtype == "float32"){
         if (float_feat_id_map.size() < (size_t)node_types.size()) {
           float_feat_name.resize(node_types.size());
@@ -3126,6 +3126,36 @@ void GraphTable::build_graph_total_keys() {
   VLOG(0) << "finish insert edge to graph_total_keys, total keys="
           << graph_total_keys_.size();
 }
+
+void GraphTable::calc_edge_type_limit() {
+  std::vector<uint64_t> graph_type_keys_;
+  std::vector<int> graph_type_keys_neighbor_size_;
+  for (auto &it: this->edge_to_id) {
+    auto edge_type = it.first;
+    auto edge_idx = it.second;
+    graph_type_keys_.clear();
+    graph_type_keys_neighbor_size_.clear();
+    VLOG(0) << "edge type:" << edge_type << ", idx: " << edge_idx;
+    std::vector<std::vector<uint64_t>> keys;
+    this->get_all_id(GraphTableType::EDGE_TABLE, edge_idx, 1, &keys);
+    graph_type_keys_ = std::move(keys[0]);
+    VLOG(0) << "edge type: " << edge_type << " all key size: " << graph_type_keys_.size();
+    for (auto &node_id: graph_type_keys_) {
+      Node *v = find_node(GraphTableType::EDGE_TABLE, edge_idx, node_id);
+      int neighbor_size = v->get_neighbor_size();
+      graph_type_keys_neighbor_size_.push_back(neighbor_size);
+    }
+    std::sort(graph_type_keys_neighbor_size_.begin(), graph_type_keys_neighbor_size_.end());
+    edge_neighbor_limit_size[edge_idx] = graph_type_keys_neighbor_size_[(int)(graph_type_keys_neighbor_size_.size() * 0.9) + 1];
+    //neighbor_limit_size_.push_back(graph_type_keys_neighbor_size_[(int)(graph_type_keys_neighbor_size_.size() * 0.9) + 1]);
+  }
+  for (auto &it: edge_neighbor_limit_size) {
+    auto edge_idx = it.first;
+    auto edge_neighbor_size = it.second;
+    VLOG(0) << "edge idx: " << edge_idx << ", neighbor_size: " << edge_neighbor_size;
+  }
+}
+
 
 void GraphTable::build_graph_type_keys() {
   VLOG(0) << "begin build_graph_type_keys, feature size="
