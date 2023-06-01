@@ -524,6 +524,7 @@ void HogwildWorker::CreateDeviceResource(const ProgramDesc &main_prog) {
 #if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
   float *stat_ptr = sync_stat_.mutable_data<float>(place_, sizeof(float) * 3);
   float flags[] = {0.0, 1.0, 1.0};
+  //float flags[] = {0.0, 1.0, 0.0};
   auto stream = static_cast<phi::GPUContext *>(dev_ctx_)->stream();
   PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyAsync(stat_ptr,  // output
                                              &flags,
@@ -652,6 +653,10 @@ void HogwildWorker::TrainFilesWithProfiler() {
         break;
       }
     } else if (train_mode && is_multi_node) {
+      //if (!CheckBatchNum(cur_batch)) {
+      //  break;
+      //}
+
       int pass_end = device_reader_->get_pass_end();
       bool res = GetPassEnd(pass_end);
       VLOG(2) << "reader pass end: " << pass_end
@@ -804,6 +809,10 @@ void HogwildWorker::TrainFiles() {
     } else if (train_mode && is_multi_node) {
       bool sage_mode = device_reader_->GetSageMode();
       if (!sage_mode) {
+        //if (!CheckBatchNum(cur_batch)) {
+        //  break;
+        //}
+
         int pass_end = device_reader_->get_pass_end();
         bool res = GetPassEnd(pass_end);
         VLOG(2) << "reader pass end: " << pass_end
@@ -811,7 +820,7 @@ void HogwildWorker::TrainFiles() {
         if (res) {
           device_reader_->reset_pass_end();
           VLOG(1) << "get all pass end, train pass will exit";
-         break;
+          break;
         }
       }
     } else {
