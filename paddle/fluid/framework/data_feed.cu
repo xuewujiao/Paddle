@@ -4224,6 +4224,70 @@ void GraphDataGenerator::DumpWalkPath(std::string dump_path, size_t dump_rate) {
     }
     write_count = fwrite_unlocked("\n", 1, 1, fp.get());
   }
+  delete[] h_walk;
+#endif
+}
+
+void GraphDataGenerator::DumpSampleNeighbors(std::string dump_path) {
+#ifdef _LINUX
+  int err_no = 0;
+  std::shared_ptr<FILE> fp = fs_open_append_write(dump_path, &err_no, "");
+  for (int i = 0; i < sage_batch_num_; i++) {
+    int uniq_instance = uniq_instance_vec_[i];
+    uint64_t *h_id_tensor = new uint64_t[uniq_instance];
+    cudaMemcpy(h_id_tensor,
+               final_sage_nodes_vec_[i]->ptr(),
+               sizeof(uint64_t) * uniq_instance,
+               cudaMemcpyDeviceToHost);
+    std::string ss = "id:";
+    for (int xx = 0; xx < uniq_instance; xx++) {
+      ss += std::to_string(h_id_tensor[xx]) + ",";
+    }
+    ss += "\t";
+    int len_samples = conf_.samples.size();
+    std::vector<std::vector<int>> edges_split_num_for_graph =
+        edges_split_num_vec_[i];
+    std::vector<std::shared_ptr<phi::Allocation>> graph_edges =
+        graph_edges_vec_[i];
+    int graph_edges_index = 0;
+    for (int j = 0; j < len_samples; j++) {
+      ss += std::to_string(j) + ":[";
+      std::vector<int> edges_split_num = edges_split_num_for_graph[j];
+      int neighbor_len = edges_split_num[conf_.edge_to_id_len + 2];
+      int64_t *h_edge_src_tensor = new int64_t[neighbor_len];
+      int64_t *h_edge_dst_tensor = new int64_t[neighbor_len];
+      cudaMemcpy(h_edge_src_tensor,
+                 graph_edges[graph_edges_index++]->ptr(),
+                 sizeof(int64_t) * neighbor_len,
+                 cudaMemcpyDeviceToHost);
+      cudaMemcpy(h_edge_dst_tensor,
+                 graph_edges[graph_edges_index++]->ptr(),
+                 sizeof(int64_t) * neighbor_len,
+                 cudaMemcpyDeviceToHost);
+      ss += "src:";
+      for (int yy = 0; yy < neighbor_len; yy++) {
+        ss += std::to_string(h_edge_src_tensor[yy]) + ",";
+      }
+      ss += "\tdst:";
+      for (int yy = 0; yy < neighbor_len; yy++) {
+        ss += std::to_string(h_edge_dst_tensor[yy]) + ",";
+      }
+      ss += "\tsplit:";
+      for (int yy = 0; yy < conf_.edge_to_id_len; yy++) {
+        ss += std::to_string(edges_split_num[yy]) + ",";
+      }
+      ss += "]\t";
+
+      delete[] h_edge_src_tensor;
+      delete[] h_edge_dst_tensor;
+    }
+    size_t write_count = fwrite_unlocked(ss.data(), 1, ss.length(), fp.get());
+    if (write_count != ss.length()) {
+      VLOG(1) << "dump sample neighbors: " << ss << " failed!";
+    }
+    write_count = fwrite_unlocked("\n", 1, 1, fp.get());
+    delete[] h_id_tensor;
+  }
 #endif
 }
 

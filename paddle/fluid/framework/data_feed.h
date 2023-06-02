@@ -974,6 +974,7 @@ class GraphDataGenerator {
   void reset_pass_end() { pass_end_ = 0; }
   void ClearSampleState();
   void DumpWalkPath(std::string dump_path, size_t dump_rate);
+  void DumpSampleNeighbors(std::string dump_path);
   void SetDeviceKeys(std::vector<uint64_t>* device_keys, int type) {
     // type_to_index_[type] = h_device_keys_.size();
     // h_device_keys_.push_back(device_keys);
@@ -1254,6 +1255,10 @@ class DataFeed {
   virtual void DumpWalkPath(std::string dump_path, size_t dump_rate) {
     PADDLE_THROW(platform::errors::Unimplemented(
         "This function(DumpWalkPath) is not implemented."));
+  }
+  virtual void DumpSampleNeighbors(std::string dump_path) {
+    PADDLE_THROW(platform::errors::Unimplemented(
+        "This function(DumpSampleNeighbors) is not implemented"));
   }
 
  protected:
@@ -1865,6 +1870,7 @@ class SlotRecordInMemoryDataFeed : public InMemoryDataFeed<SlotRecord> {
   virtual void DoWalkandSage();
 #endif
   virtual void DumpWalkPath(std::string dump_path, size_t dump_rate);
+  virtual void DumpSampleNeighbors(std::string dump_path);
 
   float sample_rate_ = 1.0f;
   int use_slot_size_ = 0;
