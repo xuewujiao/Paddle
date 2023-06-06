@@ -503,7 +503,7 @@ void DatasetImpl<T>::LoadIntoMemory() {
       offsets[i] = node_num;
       node_num += host_vec.size();
     }
-    gpu_graph_total_keys_.resize(node_num);
+    gpu_graph_total_keys_.resize(node_num + 1);
     for (int i = 0; i < thread_num_; i++) {
       uint64_t off = offsets[i];
       wait_futures.emplace_back(
@@ -521,6 +521,10 @@ void DatasetImpl<T>::LoadIntoMemory() {
       th.get();
     }
     wait_futures.clear();
+
+    uint64_t zerokey = 0;
+    gpu_graph_total_keys_.emplace_back(zerokey);
+    VLOG(0) << "add zero key in multi node";
 
     if (GetEpochFinish() == true) {
       VLOG(0) << "epoch finish, set stat and clear sample stat!";

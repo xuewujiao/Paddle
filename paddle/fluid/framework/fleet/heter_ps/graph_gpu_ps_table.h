@@ -119,6 +119,7 @@ class GpuPsGraphTable
                                                 uint64_t *key,
                                                 int sample_size,
                                                 int len,
+                                                int neighbor_size_limit,
                                                 bool cpu_query_switch,
                                                 bool compress,
                                                 bool weighted);
@@ -128,6 +129,7 @@ class GpuPsGraphTable
                                                 uint64_t *key,
                                                 int sample_size,
                                                 int len,
+                                                int neighbor_size_limit,
                                                 bool cpu_query_switch,
                                                 bool compress,
                                                 bool weighted);
