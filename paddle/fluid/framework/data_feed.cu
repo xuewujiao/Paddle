@@ -1490,7 +1490,8 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num, int te
                                                d_feature_size_list_buf_,
                                                d_feature_size_prefixsum_buf_,
                                                d_feature_list,
-                                               d_slot_list);
+                                               d_slot_list,
+                                               conf_.sage_mode);
   // num of slot feature
   int slot_num = conf_.slot_num - float_slot_num_;
   int64_t *slot_tensor_ptr_[slot_num];
@@ -4039,11 +4040,24 @@ void GraphDataGenerator::AllocResource(
   if (!conf_.sage_mode) {
     conf_.slot_num = (feed_vec.size() - id_offset_of_feed_vec_) / 2;
   } else {
-    int offset = conf_.get_degree ? id_offset_of_feed_vec_ + 2
-                                  : id_offset_of_feed_vec_ + 1;
-    int sample_offset = conf_.return_weight ? 6 : 5;
-    conf_.slot_num =
-        (feed_vec.size() - offset - conf_.samples.size() * sample_offset) / 2;
+    conf_.tensor_num_of_one_pair = (feed_vec.size() - 2) / conf_.tensor_pair_num;
+    assert((conf_.tensor_num_of_one_pair * conf_.tensor_pair_num + 2) == feed_vec.size());
+    uint32_t tensor_num_of_one_sample = 5;
+    if (conf_.return_weight) {
+      tensor_num_of_one_sample++;
+    }
+
+    uint32_t tensor_num_of_one_subgraph = tensor_num_of_one_sample * conf_.samples.size();
+    tensor_num_of_one_subgraph++; // final_index
+    if (conf_.get_degree) {
+      tensor_num_of_one_subgraph++; // degree_norm
+    }
+
+    conf_.slot_num = (conf_.tensor_num_of_one_pair - 1 - tensor_num_of_one_subgraph) / 2;
+    assert((1 + conf_.slot_num * 2 + tensor_num_of_one_subgraph) == conf_.tensor_num_of_one_pair);
+    VLOG(1) << "tensor_num_of_one_pair[" << conf_.tensor_num_of_one_pair
+        << "] tensor_num_of_one_sample[" << tensor_num_of_one_sample
+        << "] tensor_num_of_one_subgraph[" << tensor_num_of_one_subgraph << "]";
   }
   VLOG(1) << "slot_num[" << conf_.slot_num << "]";
   conf_.tensor_num_of_one_pair = 1 + conf_.slot_num * 2; // id and slot
