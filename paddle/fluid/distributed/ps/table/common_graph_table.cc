@@ -348,6 +348,119 @@ paddle::framework::GpuPsCommGraph GraphTable::make_gpu_ps_graph(
   return res;
 }
 
+// ====  edge feature ====
+template <typename T>
+paddle::framework::GpuPsCommGraphEdgeFea<T> GraphTable::make_gpu_ps_graph_edge_fea(
+    int idx, const std::vector<uint64_t> &ids, int slot_num) {
+  std::vector<std::vector<uint64_t>> bags(task_pool_size_);
+  for (int i = 0; i < task_pool_size_; i++) {
+    auto predsize = ids.size() / task_pool_size_;
+    bags[i].reserve(predsize * 1.2);
+  }
+  for (auto x : ids) {
+    int location = x % shard_num % task_pool_size_;
+    bags[location].push_back(x);
+  }
+
+  std::vector<std::future<int>> tasks;
+  std::vector<uint64_t> node_array[task_pool_size_];  // node id list
+  std::vector<paddle::framework::GpuPsNodeInfo> info_array[task_pool_size_];
+  std::vector<T> feature_array[task_pool_size_];
+  std::vector<uint8_t> slot_id_array[task_pool_size_];
+  std::vector<paddle::framework::GpuPsFeaInfo> edge_fea_info_array[task_pool_size_];
+  std::vector<uint64_t> edge_array[task_pool_size_];  // edge id list
+
+  // get edge weight
+  std::vector<half> weight_array[task_pool_size_];  // neighbor weight list
+
+  for (size_t i = 0; i < bags.size(); i++) {
+    if (bags[i].size() > 0) {
+      tasks.push_back(_shards_task_pool[i]->enqueue([&, i, this]() -> int {
+        node_array[i].resize(bags[i].size());
+        info_array[i].resize(bags[i].size());
+        edge_array[i].reserve(bags[i].size()); // 最好reserve bags[i].siz() * 每个节点邻居数的均值
+        edge_fea_info_array[i].reserve(bags[i].size()) // 算它每个节点边数均值为1
+        feature_array[i].reserve(bags[i].size() * 1.2 * slot_num);
+        slot_id_array[i].reserve(bags[i].size() * 1.2 * slot_num);
+        if (is_weighted_) {
+          weight_array[i].reserve(bags[i].size());
+        }
+
+        for (size_t j = 0; j < bags[i].size(); j++) {
+          auto node_id = bags[i][j];
+          node_array[i][j] = node_id;
+          Node *v = find_node(GraphTableType::EDGE_TABLE, idx, node_id);
+          if (v != nullptr) {
+            info_array[i][j].neighbor_offset = edge_array[i].size();
+            info_array[i][j].neighbor_size = v->get_neighbor_size();
+            // add edge feature
+            paddle::framework::GpuPsFeaInfo x;        
+            for (size_t k = 0; k < v->get_neighbor_size(); k++) {
+              edge_array[i].push_back(v->get_neighbor_id(k));
+              if (is_weighted_) {
+                weight_array[i].push_back(v->get_neighbor_weight(k));
+              }
+              //// ====  feature array ====
+              x.feature_offset = feature_array[i].size();
+              int total_feature_size = 0;
+              for (int t = 0; t < slot_num; ++t) {
+                auto feature_ids_size =
+                  v->get_feature_ids(k, t, feature_array[i], slot_id_array[i]);
+                total_feature_size += feature_ids_size;
+              }
+              x.feature_size = total_feature_size;
+              edge_fea_info_array[i].push_back(x);
+              //// ====  feature array ====
+            }
+          } else {
+            info_array[i][j].neighbor_offset = 0;
+            info_array[i][j].neighbor_size = 0;
+          }
+        }
+        return 0;
+      }));
+    }
+  }
+
+  for (size_t i = 0; i < tasks.size(); i++) tasks[i].get();
+
+  int64_t tot_len = 0;
+  int64_t total_fea_len = 0;
+  for (int i = 0; i < task_pool_size_; i++) {
+    tot_len += edge_array[i].size();
+    total_fea_len += feature_array[i].size();
+  }
+
+  paddle::framework::GpuPsCommGraphEdgeFea<T> res;
+  res.init_on_cpu(tot_len, ids.size(), total_fea_len, is_weighted_);
+  int64_t offset = 0, ind = 0, feature_offset = 0;
+  for (int i = 0; i < task_pool_size_; i++) {
+    for (size_t j = 0; j < node_array[i].size(); j++) {
+      res.node_list[ind] = node_array[i][j];
+      res.node_info_list[ind] = info_array[i][j];
+      res.node_info_list[ind++].neighbor_offset += offset;
+    }
+    for (size_t j = 0; j < edge_array[i].size(); j++) {
+      res.neighbor_list[offset + j] = edge_array[i][j];
+
+      if (is_weighted_) {
+        res.weight_list[offset + j] = weight_array[i][j];
+      }
+    }
+    // ===== edge feature  ===
+    for (size_t k = 0; k < feature_array[i].size(); k++) {
+      res.feature_list[feature_offset + k] = feature_array[i][k];
+      res.slot_id_list[feature_offset + k] = slot_id_array[i][k];
+    }
+    // ===== edge feature  ===
+    offset += edge_array[i].size();
+    feature_offset += feature_array[i].size();
+  }
+  return res;
+}
+
+// ====  edge feature ==== 
+
 int32_t GraphTable::add_node_to_ssd(
     int type_id, int idx, uint64_t src_id, char *data, int len) {
   if (_db != NULL) {
@@ -2109,7 +2222,7 @@ int32_t GraphTable::build_sampler(int idx, std::string sample_type) {
 }
 
 std::pair<uint64_t, uint64_t> GraphTable::parse_edge_file(
-    const std::string &path, int idx, bool reverse, bool use_weight) {
+    const std::string &path, int idx, bool reverse, bool use_weight, bool load_edge_slot) {
   is_weighted_ = use_weight;
   std::ifstream file(path);
   std::string line;
@@ -2123,6 +2236,8 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_edge_file(
     part_num = std::stoull(part_name_split[part_name_split.size() - 1]);
   }
 
+  int num = 0;
+  std::vector<paddle::string::str_ptr> vals;
   while (std::getline(file, line)) {
     size_t start = line.find_first_of('\t');
     if (start == std::string::npos) continue;
@@ -2163,18 +2278,60 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_edge_file(
       }
     }
 
+    // === adapt edge file ===
+    vals.clear();
+    num = paddle::string::split_string_ptr(
+        line.c_str(), line.length(), '\t', &vals);
+    // if (vals.empty()) {
+    //  continue;
+    // }
+
     float weight = 1;
-    size_t last = line.find_last_of('\t');
-    if (start != last) {
-      weight = std::stof(&line[last + 1]);
+    bool has_weight = false;
+    if (vals.size() > 2) {
+      std::string tmp_str = vals[2].to_string();
+      if (tmp_str.find(":") == std::string::npos) {
+        has_weight = true;
+        weight = std::stof(tmp_str.c_str());
+      }
     }
+
+    bool has_edge_feature = false;
+    if ((has_weight && vals.size() > 3) || (!has_weight && vals.size() > 2)) has_edge_feature = true
+
+    // size_t last = line.find_last_of('\t');
+    // if (start != last) {
+    //  weight = std::stof(&line[last + 1]);
+    // }
+
     size_t index = src_shard_id - shard_start;
     auto node = edge_shards[idx][index]->add_graph_node(src_id);
     if (node != NULL) {
-      node->build_edges(is_weighted_);
+      node->build_edges(is_weighted_, has_edge_feature);
       node->add_edge(dst_id, weight);
+ 
+      if (load_edge_slot) {
+        if (has_edge_feature) {
+          int start_id = 2;
+          if (has_weight) start_id = 3;
+
+          for (int i = start_id; i < num; ++i) {
+            auto &v = vals[i];
+            int ret = parse_edge_feature(idx, v.ptr, v.len, node); // idx是边类型id
+            if (ret != 0) {
+              VLOG(0) << "Fail to parse edge feature, node_id[" << id << "]";
+              is_parse_edge_fail_ = true;
+              return {0, 0};
+            }
+          }
+
+        }
+      }
+
       local_valid_count++;
     }
+    // === adapt edge file ===
+
   }
   VLOG(2) << local_valid_count << "/" << local_count
           << " edges are loaded from filepath->" << path;
@@ -2184,7 +2341,8 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_edge_file(
 int32_t GraphTable::load_edges(const std::string &path,
                                bool reverse_edge,
                                const std::string &edge_type,
-                               bool use_weight) {
+                               bool use_weight,
+                               bool load_edge_slot) {
 #ifdef PADDLE_WITH_HETERPS
   if (search_level == 2) total_memory_cost = 0;
 #endif
@@ -2211,7 +2369,7 @@ int32_t GraphTable::load_edges(const std::string &path,
     for (size_t i = 0; i < paths.size(); i++) {
       tasks.push_back(load_node_edge_task_pool->enqueue(
           [&, i, idx, this]() -> std::pair<uint64_t, uint64_t> {
-            return parse_edge_file(paths[i], idx, reverse_edge, use_weight);
+            return parse_edge_file(paths[i], idx, reverse_edge, use_weight, load_edge_slot);
           }));
     }
     for (size_t j = 0; j < tasks.size(); j++) {
@@ -2221,7 +2379,7 @@ int32_t GraphTable::load_edges(const std::string &path,
     }
   } else {
     for (auto path : paths) {
-      auto res = parse_edge_file(path, idx, reverse_edge, use_weight);
+      auto res = parse_edge_file(path, idx, reverse_edge, use_weight, load_edge_slot);
       count += res.first;
       valid_count += res.second;
     }
@@ -2679,6 +2837,100 @@ int GraphTable::parse_feature(int idx,
   }
   return 0;
 }
+
+// === edge feature ==== 
+int GraphTable::parse_edge_feature(int idx,
+                                   const char *feat_str,
+                                   size_t len,
+                                   GraphNode *node) {
+  // Return (feat_id, btyes) if name are in this->feat_name, else return (-1,
+  // "")
+  thread_local std::vector<paddle::string::str_ptr> fields;
+  fields.clear();
+  char c = slot_feature_separator_.at(0);
+  paddle::string::split_string_ptr(feat_str, len, c, &fields);
+
+  thread_local std::vector<paddle::string::str_ptr> fea_fields;
+  fea_fields.clear();
+  c = feature_separator_.at(0);
+  paddle::string::split_string_ptr(fields[1].ptr,
+                                   fields[1].len,
+                                   c,
+                                   &fea_fields,
+                                   FLAGS_gpugraph_slot_feasign_max_num);
+  std::string name = fields[0].to_string();
+  auto it = edge_feat_id_map[idx].find(name);
+  if (it != edge_feat_id_map[idx].end()) {
+    int32_t id = it->second;
+
+    std::string *fea_ptr = node->mutable_feature(id);  // id是feature id
+    std::string dtype = this->edge_feat_dtype[idx][id];
+    if (dtype == "feasign") {
+      //      string_vector_2_string(fields.begin() + 1, fields.end(), ' ',
+      //      fea_ptr);
+      int ret = GraphNode::parse_value_to_bytes<uint64_t>(
+          fea_fields.begin(), fea_fields.end(), fea_ptr);
+      if (ret != 0) {
+        VLOG(0) << "Fail to parse value";
+        return -1;
+      }
+      return 0;
+    } else if (dtype == "string") {
+      string_vector_2_string(
+          fea_fields.begin(), fea_fields.end(), ' ', fea_ptr);
+      return 0;
+    } else if (dtype == "int32") {
+      int ret = GraphNode::parse_value_to_bytes<int32_t>(
+          fea_fields.begin(), fea_fields.end(), fea_ptr);
+      if (ret != 0) {
+        VLOG(0) << "Fail to parse value";
+        return -1;
+      }
+      return 0;
+    } else if (dtype == "int64") {
+      int ret = GraphNode::parse_value_to_bytes<uint64_t>(
+          fea_fields.begin(), fea_fields.end(), fea_ptr);
+      if (ret != 0) {
+        VLOG(0) << "Fail to parse value";
+        return -1;
+      }
+      return 0;
+    }
+  } else {
+    if (edge_float_feat_id_map.size() > (size_t)idx) {
+      auto float_it = edge_float_feat_id_map[idx].find(name);
+      if (float_it != edge_float_feat_id_map[idx].end()) {
+        int32_t id = float_it->second;
+        std::string *fea_ptr = node->mutable_float_feature(id);
+        std::string dtype = this->float_feat_dtype[idx][id];
+        if (dtype == "float32") {
+          int ret = GraphNode::parse_value_to_bytes<float>(
+              fea_fields.begin(), fea_fields.end(), fea_ptr);
+          if (ret != 0) {
+            VLOG(0) << "Fail to parse value";
+            return -1;
+          }
+          return 0;
+        } 
+        // else if (dtype == "float64") { // not used
+        //  int ret = FeatureNode::parse_value_to_bytes<double>(
+        //      fea_fields.begin(), fea_fields.end(), fea_ptr);
+        //  if (ret != 0) {
+        //    VLOG(0) << "Fail to parse value";
+        //    return -1;
+        //  }
+        //  return 0;
+        // }
+      } else {
+        VLOG(4) << "edge feature_name[" << name << "] is not in edge_feat_id_map, etype_id["
+                << idx << "] edge_feat_id_map_size[" << edge_feat_id_map.size() << "]";
+      }
+    }
+  }
+  return 0;
+}
+// === edge feature ==== 
+
 // thread safe shard vector merge
 class MergeShardVector {
  public:
@@ -3010,6 +3262,7 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
   load_node_edge_task_pool.reset(new ::ThreadPool(load_thread_num));
 
   auto graph_feature = graph.graph_feature();
+  auto graph_edge_feature = graph.graph_edge_feature();
   auto node_types = graph.node_types();
   auto edge_types = graph.edge_types();
 
@@ -3030,6 +3283,8 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
     edge_to_id[edge_types[k]] = k;
     id_to_edge.push_back(edge_types[k]);
   }
+ 
+  // ==== node feature ====
   feat_name.resize(node_types.size());
   feat_shape.resize(node_types.size());
   feat_dtype.resize(node_types.size());
@@ -3042,9 +3297,6 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
     int feat_conf_size = static_cast<int>(feature.name().size());
     int feasign_idx = 0, float_idx = 0;
     for (int i = 0; i < feat_conf_size; i++) {
-      // auto &f_name = common.attributes()[i];
-      // auto &f_shape = common.dims()[i];
-      // auto &f_dtype = common.params()[i];
       auto &f_name = feature.name()[i];
       auto &f_shape = feature.shape()[i];
       auto &f_dtype = feature.dtype()[i];
@@ -3070,6 +3322,51 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
               << " shape:" << f_shape << " dtype:" << f_dtype;
     }
   }
+  // ==== node feature ====
+
+  // ==== edge feature ====
+
+  edge_feat_name.resize(edge_types.size());
+  edge_feat_shape.resize(edge_types.size());
+  edge_feat_dtype.resize(edge_types.size());
+  VLOG(0) << "got " << edge_types.size() << " edge types in total";
+  for (int k = 0; k < edge_types.size(); k++) {
+    edge_feature_to_id[edge_types[k]] = k;
+    auto edge_type = edge_types[k];
+    auto edge_feature = graph_edge_feature[k]; // add table conf
+    edge_id_to_feature.push_back(edge_type);
+    int edge_feat_conf_size = static_cast<int>(edge_feature.name().size());
+    int feasign_idx = 0, float_idx = 0;
+    for (int i = 0; i < edge_feat_conf_size; i++) {
+      auto &f_name = edge_feature.name()[i];
+      auto &f_shape = edge_feature.shape()[i];
+      auto &f_dtype = edge_feature.dtype()[i];
+      if (f_dtype == "feasign" || f_dtype == "int64") {
+        edge_feat_name[k].push_back(f_name);
+        edge_feat_shape[k].push_back(f_shape);
+        edge_feat_dtype[k].push_back(f_dtype);
+        edge_feat_id_map[k][f_name] = feasign_idx++;
+      } 
+      else if (f_dtype == "float32"){
+        if (edge_float_feat_id_map.size() < (size_t)edge_types.size()) {
+          edge_float_feat_name.resize(edge_types.size());
+          edge_float_feat_shape.resize(edge_types.size());
+          edge_float_feat_dtype.resize(edge_types.size());
+          edge_float_feat_id_map.resize(edge_types.size());
+        }
+        edge_float_feat_name[k].push_back(f_name);
+        edge_float_feat_shape[k].push_back(f_shape);
+        edge_float_feat_dtype[k].push_back(f_dtype);
+        edge_float_feat_id_map[k][f_name] = float_idx++;
+      }
+      VLOG(0) << "init graph table feat conf name:" << f_name
+              << " shape:" << f_shape << " dtype:" << f_dtype;
+    }
+  }
+
+  // ==== edge feature ====
+
+
   // this->table_name = common.table_name();
   // this->table_type = common.name();
   this->table_name = graph.table_name();

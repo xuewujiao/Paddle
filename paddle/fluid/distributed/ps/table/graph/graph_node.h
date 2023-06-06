@@ -39,7 +39,7 @@ class Node {
   int64_t get_py_id() { return (int64_t)id; }
   void set_id(uint64_t id) { this->id = id; }
 
-  virtual void build_edges(bool is_weighted) {}
+  virtual void build_edges(bool is_weighted, bool has_edge_feature = false) {}
   virtual void build_sampler(std::string sample_type) {}
   virtual void add_edge(uint64_t id, float weight) {}
   virtual std::vector<int> sample_k(
@@ -85,11 +85,58 @@ class GraphNode : public Node {
   explicit GraphNode(uint64_t id)
       : Node(id), sampler(nullptr), edges(nullptr) {}
   virtual ~GraphNode();
-  virtual void build_edges(bool is_weighted);
+  virtual void build_edges(bool is_weighted, bool has_edge_feature = false);
   virtual void build_sampler(std::string sample_type);
   virtual void add_edge(uint64_t id, float weight) {
     edges->add_edge(id, weight);
   }
+  
+  // === edge feature ===
+  template <typename T>
+  virtual int get_feature_ids(int edge_idx,
+                              int slot_idx,
+                              std::vector<T> &feature_id,      // NOLINT
+                              std::vector<uint8_t> &slot_id) const {  // NOLINT
+ 
+    return edges->get_feature_ids(edge_idx, slot_idx, feature_id, slot_id);
+  }
+
+  virtual std::string *mutable_feature(int idx) {
+    return edges->mutable_feature(idx);
+  }
+
+  virtual std::string *mutable_float_feature(int idx) {
+    return edges->mutable_float_feature(idx);
+  }
+
+  template <typename T>
+  static int parse_value_to_bytes(
+      std::vector<paddle::string::str_ptr>::iterator feat_str_begin,
+      std::vector<paddle::string::str_ptr>::iterator feat_str_end,
+      std::string *output) {
+    size_t feat_str_size = feat_str_end - feat_str_begin;
+    size_t Tsize = sizeof(T) * feat_str_size;
+    size_t num = output->length();
+    output->resize(num + Tsize);
+
+    T *fea_ptrs = reinterpret_cast<T *>(&(*output)[num]);
+
+    thread_local paddle::string::str_ptr_stream ss;
+    for (size_t i = 0; i < feat_str_size; i++) {
+      ss.reset(*(feat_str_begin + i));
+      int len = ss.end - ss.ptr;
+      char *old_ptr = ss.ptr;
+      ss >> fea_ptrs[i];
+      if (ss.ptr - old_ptr != len) {
+        return -1;
+      }
+    }
+    return 0;
+  }
+  // === edge feature ===
+
+
+
   virtual std::vector<int> sample_k(
       int k, const std::shared_ptr<std::mt19937_64> rng) {
     return sampler->sample_k(k, rng);

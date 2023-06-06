@@ -911,6 +911,7 @@ struct GraphDataGeneratorConfig {
   bool is_multi_node;
   int batch_size;
   int slot_num;
+  int edge_slot_num;
   int walk_degree;
   int walk_len;
   int window;
@@ -957,6 +958,8 @@ class GraphDataGenerator {
       std::shared_ptr<phi::Allocation> final_sage_nodes = nullptr);
   int FillSlotFeature(uint64_t* d_walk, size_t key_num, int tensor_pair_idx);
   int FillFloatFeature(uint64_t* d_walk, size_t key_num, int tensor_pair_idx);
+  int FillEdgeSlotFeature(uint64_t *edge_src, uint64_t *edge_dst, size_t key_num) {
+  int FillEdgeFloatFeature(uint64_t *edge_src, uint64_t *edge_dst, size_t key_num) {
   int GetPathNum() { return total_row_[0]; }
   void ResetPathNum() { total_row_[0] = 0; }
   int GetGraphBatchsize() { return conf_.batch_size; }
@@ -1049,6 +1052,8 @@ class GraphDataGenerator {
   std::vector<BufState> buf_state_;
   int float_slot_num_ = 0; // float slot num
   int uint_slot_num_ = 0; // uint slot num
+  int edge_float_slot_num_ = 0; // edge_float_slot_num
+  int edge_uint_slot_num_ = 0; // edge_uint_slot_num
   std::vector<int> h_slot_feature_num_map_;
   int fea_num_per_node_;
   std::vector<int> shuffle_seed_;

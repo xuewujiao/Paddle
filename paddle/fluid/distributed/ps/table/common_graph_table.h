@@ -589,7 +589,8 @@ class GraphTable : public Table {
   int32_t load_edges(const std::string &path,
                      bool reverse,
                      const std::string &edge_type,
-                     bool use_weight = false);
+                     bool use_weight = false,
+                     bool load_edge_slot = true);
   int get_all_id(GraphTableType table_type,
                  int slice_num,
                  std::vector<std::vector<uint64_t>> *output);
@@ -616,7 +617,8 @@ class GraphTable : public Table {
   std::pair<uint64_t, uint64_t> parse_edge_file(const std::string &path,
                                                 int idx,
                                                 bool reverse,
-                                                bool use_weight);
+                                                bool use_weight,
+                                                bool load_edge_slot);
   std::pair<uint64_t, uint64_t> parse_node_file(const std::string &path,
                                                 const std::string &node_type,
                                                 int idx,
@@ -723,6 +725,9 @@ class GraphTable : public Table {
       int type_id, int idx, uint64_t src_id, char *data, int len);
   virtual paddle::framework::GpuPsCommGraph make_gpu_ps_graph(
       int idx, const std::vector<uint64_t> &ids);
+  template <typename T>
+  virtual paddle::framework::GpuPsCommGraphEdgeFea<T> make_gpu_ps_graph_edge_fea(
+      int idx, const std::vector<uint64_t> &ids, int slot_num);
   virtual paddle::framework::GpuPsCommGraphFea make_gpu_ps_graph_fea(
       int gpu_id, std::vector<uint64_t> &node_ids, int slot_num);  // NOLINT
   virtual paddle::framework::GpuPsCommGraphFloatFea make_gpu_ps_graph_float_fea(
@@ -778,16 +783,29 @@ class GraphTable : public Table {
   const int random_sample_nodes_ranges = 3;
 
   std::vector<std::vector<std::unordered_map<uint64_t, double>>> node_weight;
+
   std::vector<std::vector<std::string>> feat_name;
   std::vector<std::vector<std::string>> feat_dtype;
   std::vector<std::vector<int32_t>> feat_shape;
   std::vector<std::vector<std::string>> float_feat_name;
   std::vector<std::vector<std::string>> float_feat_dtype;
   std::vector<std::vector<int32_t>> float_feat_shape;
-  // int slot_fea_num_{-1};
-  // int float_fea_num_{-1};
   std::vector<std::unordered_map<std::string, int32_t>> feat_id_map;
   std::vector<std::unordered_map<std::string, int32_t>> float_feat_id_map;
+
+  // ==== edge feature ====
+  std::vector<std::vector<std::string>> edge_feat_name;
+  std::vector<std::vector<std::string>> edge_feat_dtype;
+  std::vector<std::vector<int32_t>> edge_feat_shape;
+  std::vector<std::vector<std::string>> edge_float_feat_name;
+  std::vector<std::vector<std::string>> edge_float_feat_dtype;
+  std::vector<std::vector<int32_t>> edge_float_feat_shape;
+  std::vector<std::unordered_map<std::string, int32_t>> edge_feat_id_map;
+  std::vector<std::unordered_map<std::string, int32_t>> edge_float_feat_id_map;
+  std::unordered_map<std::string, int> edge_feature_to_id;
+  std::vector<std::string> id_to_edge_feature;
+  // ==== edge feature ====
+
   std::unordered_map<std::string, int> feature_to_id, edge_to_id;
   std::vector<std::string> id_to_feature, id_to_edge;
   std::string table_name;
@@ -819,6 +837,7 @@ class GraphTable : public Table {
   std::string feature_separator_ = std::string(" ");
   std::vector<int> slot_feature_num_map_;
   bool is_parse_node_fail_ = false;
+  bool is_parse_edge_fail_ = false;
   int node_num_ = 1;
   int node_id_ = 0;
   bool is_weighted_ = false;

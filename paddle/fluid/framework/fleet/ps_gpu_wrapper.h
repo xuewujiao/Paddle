@@ -798,12 +798,15 @@ class PSGPUWrapper {
     slot_vector_ = slot_vector;
     VLOG(0) << "slot_vector size is " << slot_vector_.size();
   }
-  void SetPullFeatureSlotNum(int sparse_slot_num, int float_slot_num) {
+  void SetPullFeatureSlotNum(int sparse_slot_num, int float_slot_num, edge_sparse_slot_num, edge_float_slot_num) {
     slot_num_for_pull_feature_ = sparse_slot_num;
     float_slot_num_ = float_slot_num;
+    edge_slot_num_for_pull_feature_ = edge_sparse_slot_num;
+    edge_float_slot_num_ = edge_float_slot_num;
     auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
     gpu_graph_ptr->set_feature_info(slot_num_for_pull_feature_, float_slot_num_);
     VLOG(0) << "slot_num_for_pull_feature_ is " << slot_num_for_pull_feature_ << ", float_slot_num is " << float_slot_num_;
+            << ", edge_slot_num_for_pull_feature_ is " << edge_slot_num_for_pull_feature_ << ", edge float_slot_num is " << edge_float_slot_num_;
   }
   void SetSlotOffsetVector(const std::vector<int>& slot_offset_vector) {
     slot_offset_vector_ = slot_offset_vector;
@@ -946,6 +949,8 @@ class PSGPUWrapper {
   int max_mf_dim_{0};
   int slot_num_for_pull_feature_{0};
   int float_slot_num_{0};
+  int edge_slot_num_for_pull_feature_{0};
+  int edge_float_slot_num_{0};
   size_t val_type_size_{0};
   size_t grad_type_size_{0};
   size_t pull_type_size_{0};

@@ -700,6 +700,39 @@ void GraphGpuWrapper::add_table_feat_conf(std::string table_name,
   }
   VLOG(0) << "add conf over";
 }
+
+// ====edge feature =====
+void GraphGpuWrapper::add_table_edge_feat_conf(std::string table_name,
+                                               std::string feat_name,
+                                               std::string feat_dtype,
+                                               int feat_shape) {
+  if (edge_to_id.find(table_name) != edge_to_id.end()) {
+    int idx = edge_to_id[table_name];
+    if (table_edge_feat_mapping[idx].find(feat_name) ==
+        table_edge_feat_mapping[idx].end()) {
+      int res = table_edge_feat_mapping[idx].size();
+      table_edge_feat_mapping[idx][feat_name] = res;
+    }
+    int feat_idx = table_edge_feat_mapping[idx][feat_name];
+    VLOG(0) << "table_edge_name " << table_name << " mapping id " << idx;
+    VLOG(0) << " edge feat name " << feat_name << " feat id" << feat_idx;
+    if (feat_idx < table_edge_feat_conf_feat_name[idx].size()) {
+      // overide
+      table_edge_feat_conf_feat_name[idx][feat_idx] = feat_name;
+      table_edge_feat_conf_feat_dtype[idx][feat_idx] = feat_dtype;
+      table_edge_feat_conf_feat_shape[idx][feat_idx] = feat_shape;
+    } else {
+      // new
+      table_edge_feat_conf_feat_name[idx].push_back(feat_name);
+      table_edge_feat_conf_feat_dtype[idx].push_back(feat_dtype);
+      table_edge_feat_conf_feat_shape[idx].push_back(feat_shape);
+    }
+  }
+  VLOG(0) << "add edge conf over";
+}
+// ====edge feature =====
+
+
 void GraphGpuWrapper::init_search_level(int level) { search_level = level; }
 
 gpuStream_t GraphGpuWrapper::get_local_stream(int gpuid) {
@@ -929,6 +962,45 @@ std::vector<GpuPsCommGraphFloatFea> GraphGpuWrapper::get_sub_graph_float_fea(
   return sub_graph_float_feas;
 }
 
+// === edge fea ==
+// get sub_graph_edge_fea
+std::vector<GpuPsCommGraphEdgeFea<uint64_t>> GraphGpuWrapper::get_sub_graph_edge_fea(
+    std::vector<std::vector<uint64_t>> &node_ids, int edge_slot_num) {
+  // GpuPsGraphTable *g = reinterpret_cast<GpuPsGraphTable *>(graph_table);
+  std::vector<std::future<int>> tasks;
+  std::vector<GpuPsCommGraphEdgeFea<uint64_t>> sub_graph_edge_feas(node_ids.size());
+  for (int i = 0; i < node_ids.size(); i++) {
+    tasks.push_back(upload_task_pool->enqueue([&, i, this]() -> int {
+      GpuPsGraphTable *g = reinterpret_cast<GpuPsGraphTable *>(graph_table);
+      sub_graph_edge_feas[i] =
+          g->cpu_graph_table_->make_gpu_ps_graph_edge_fea<uint64_t>(i, node_ids[i], edge_slot_num);
+      return 0;
+    }));
+  }
+  for (size_t i = 0; i < tasks.size(); i++) tasks[i].get();
+  return sub_graph_edge_feas;
+}
+
+// get sub_graph_edge_float_fea
+std::vector<GpuPsCommGraphEdgeFea<float>> GraphGpuWrapper::get_sub_graph_edge_float_fea(
+    std::vector<std::vector<uint64_t>> &node_ids, int edge_float_slot_num) {
+  if (edge_float_slot_num == 0) return {};
+  // GpuPsGraphTable *g = reinterpret_cast<GpuPsGraphTable *>(graph_table);
+  std::vector<std::future<int>> tasks;
+  std::vector<GpuPsCommGraphEdgeFea<float>> sub_graph_edge_float_feas(node_ids.size());
+  for (int i = 0; i < node_ids.size(); i++) {
+    tasks.push_back(upload_task_pool->enqueue([&, i, this]() -> int {
+      GpuPsGraphTable *g = reinterpret_cast<GpuPsGraphTable *>(graph_table);
+      sub_graph_edge_float_feas[i] =
+          g->cpu_graph_table_->make_gpu_ps_graph_edge_fea<float>(i, node_ids[i], edge_float_slot_num);
+      return 0;
+    }));
+  }
+  for (size_t i = 0; i < tasks.size(); i++) tasks[i].get();
+  return sub_graph_edge_float_feas;
+}
+// === edge fea ===
+
 // build_gpu_graph_fea
 void GraphGpuWrapper::build_gpu_graph_fea(GpuPsCommGraphFea &sub_graph_fea,
                                           int i) {
@@ -936,6 +1008,26 @@ void GraphGpuWrapper::build_gpu_graph_fea(GpuPsCommGraphFea &sub_graph_fea,
   g->build_graph_fea_on_single_gpu(sub_graph_fea, i);
   sub_graph_fea.release_on_cpu();
   VLOG(1) << "sub graph fea on gpu " << i << " is built";
+  return;
+}
+
+// build_gpu_graph_edge_fea
+void GraphGpuWrapper::build_gpu_graph_edge_fea(GpuPsCommGraphEdgeFea<uint64_t> &sub_graph_edge_fea,
+                                               int i) {
+  GpuPsGraphTable *g = reinterpret_cast<GpuPsGraphTable *>(graph_table);
+  g->build_graph_edge_fea_on_single_gpu(sub_graph_edge_fea, i);
+  sub_graph_edge_fea.release_on_cpu();
+  VLOG(1) << "sub graph edge fea on gpu " << i << " is built";
+  return;
+}
+
+// build_gpu_graph_edge_float_fea
+void GraphGpuWrapper::build_gpu_graph_edge_float_fea(GpuPsCommGraphEdgeFea<float> &sub_graph_edge_float_fea,
+                                                     int i) {
+  GpuPsGraphTable *g = reinterpret_cast<GpuPsGraphTable *>(graph_table);
+  g->build_graph_edge_float_fea_on_single_gpu(sub_graph_edge_float_fea, i);
+  sub_graph_edge_float_fea.release_on_cpu();
+  VLOG(1) << "sub graph edge float fea on gpu " << i << " is built";
   return;
 }
 
@@ -1038,6 +1130,58 @@ int GraphGpuWrapper::get_float_feature_info_of_nodes(
                                         feature_list,
                                         slot_list);
 }
+
+// === edge feature ===
+
+int GraphGpuWrapper::get_edge_feature_info_of_nodes(
+    int gpu_id,
+    uint64_t *edge_src,
+    uint64_t *edge_dst,
+    int node_num,
+    std::shared_ptr<phi::Allocation> &size_list,
+    std::shared_ptr<phi::Allocation> &size_list_prefix_sum,
+    std::shared_ptr<phi::Allocation> &feature_list,
+    std::shared_ptr<phi::Allocation> &slot_list) {
+  platform::CUDADeviceGuard guard(gpu_id);
+  PADDLE_ENFORCE_NOT_NULL(graph_table,
+                          paddle::platform::errors::InvalidArgument(
+                              "graph_table should not be null"));
+  return reinterpret_cast<GpuPsGraphTable *>(graph_table)
+      ->get_edge_feature_info_of_nodes(gpu_id,
+                                       edge_src,
+                                       edge_dst,
+                                       node_num,
+                                       size_list,
+                                       size_list_prefix_sum,
+                                       feature_list,
+                                       slot_list);
+}
+
+int GraphGpuWrapper::get_edge_float_feature_info_of_nodes(
+    int gpu_id,
+    uint64_t *edge_src,
+    uint64_t *edge_dst,
+    int node_num,
+    uint32_t *size_list,
+    uint32_t *size_list_prefix_sum,
+    std::shared_ptr<phi::Allocation> &feature_list,
+    std::shared_ptr<phi::Allocation> &slot_list) {
+  platform::CUDADeviceGuard guard(gpu_id);
+  PADDLE_ENFORCE_NOT_NULL(graph_table,
+                          paddle::platform::errors::InvalidArgument(
+                              "graph_table should not be null"));
+  return reinterpret_cast<GpuPsGraphTable *>(graph_table)
+      ->get_edge_float_feature_info_of_nodes(gpu_id,
+                                             edge_src,
+                                             edge_dst,
+                                             node_num,
+                                             size_list,
+                                             size_list_prefix_sum,
+                                             feature_list,
+                                             slot_list);
+}
+
+// === edge feature ===
 
 int GraphGpuWrapper::get_feature_of_nodes(int gpu_id,
                                           uint64_t *d_walk,

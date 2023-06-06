@@ -56,12 +56,14 @@ int FeatureNode::get_size(bool need_feature) {
   return size;
 }
 
-void GraphNode::build_edges(bool is_weighted) {
+void GraphNode::build_edges(bool is_weighted, bool has_edge_feature) {
   if (edges == nullptr) {
     if (is_weighted == true) {
-      edges = new WeightedGraphEdgeBlob();
+      if (!has_edge_feature) edges = new WeightedGraphEdgeBlob();
+      else edges = new WeightedGraphEdgeBlobWithFeature(); 
     } else {
-      edges = new GraphEdgeBlob();
+      if (!has_edge_feature) edges = new GraphEdgeBlob();
+      else edges = new GraphEdgeBlobWithFeature();
     }
   }
 }

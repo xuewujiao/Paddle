@@ -75,8 +75,14 @@ class GraphGpuWrapper {
       std::vector<std::vector<uint64_t>>& node_ids, int slot_num);    // NOLINT
   std::vector<GpuPsCommGraphFloatFea> get_sub_graph_float_fea(
       std::vector<std::vector<uint64_t>>& node_ids, int float_slot_num);    // NOLINT
+  std::vector<GpuPsCommGraphEdgeFea<uint64_t>> get_sub_graph_edge_fea(
+      std::vector<std::vector<uint64_t>>& node_ids, int edge_slot_num);    // NOLINT
+  std::vector<GpuPsCommGraphEdgeFea<float>> get_sub_graph_edge_float_fea(
+      std::vector<std::vector<uint64_t>>& node_ids, int edge_float_slot_num);    // NOLINT
   void build_gpu_graph_fea(GpuPsCommGraphFea& sub_graph_fea, int i);  // NOLINT
   void build_gpu_graph_float_fea(GpuPsCommGraphFloatFea& sub_graph_float_fea, int i);  // NOLINT
+  void build_gpu_graph_edge_fea(GpuPsCommGraphEdgeFea<uint64_t>& sub_graph_edge_fea, int i);  // NOLINT
+  void build_gpu_graph_edge_float_fea(GpuPsCommGraphEdgeFea<float>& sub_graph_edge_float_fea, int i);  // NOLINT
   void add_table_feat_conf(std::string table_name,
                            std::string feat_name,
                            std::string feat_dtype,
@@ -196,6 +202,24 @@ class GraphGpuWrapper {
       uint32_t *size_list_prefix_sum,
       std::shared_ptr<phi::Allocation> &feature_list,  // NOLINT  
       std::shared_ptr<phi::Allocation> &slot_list);  // NOLINT
+  int get_edge_feature_info_of_nodes(
+      int gpu_id,
+      uint64_t *edge_src,
+      uint64_t *edge_dst,
+      int node_num,
+      std::shared_ptr<phi::Allocation> &size_list,
+      std::shared_ptr<phi::Allocation> &size_list_prefix_sum,
+      std::shared_ptr<phi::Allocation> &feature_list,  // NOLINT
+      std::shared_ptr<phi::Allocation> &slot_list);  // NOLINT
+  int get_edge_float_feature_info_of_nodes(
+      int gpu_id,
+      uint64_t *edge_src,
+      uint64_t *edge_dst,
+      int node_num,
+      std::shared_ptr<phi::Allocation> &size_list,
+      std::shared_ptr<phi::Allocation> &size_list_prefix_sum,
+      std::shared_ptr<phi::Allocation> &feature_list,  // NOLINT
+      std::shared_ptr<phi::Allocation> &slot_list);  // NOLINT
   void init_metapath(std::string cur_metapath,
                      int cur_metapath_index,
                      int cur_metapath_len);
@@ -217,9 +241,16 @@ class GraphGpuWrapper {
   std::unordered_map<std::string, int> edge_to_id, node_to_id;
   std::vector<std::string> id_to_feature, id_to_edge;
   std::vector<std::unordered_map<std::string, int>> table_feat_mapping;
+  std::vector<std::unordered_map<std::string, int>> table_edge_feat_mapping;
   std::vector<std::vector<std::string>> table_feat_conf_feat_name;
   std::vector<std::vector<std::string>> table_feat_conf_feat_dtype;
   std::vector<std::vector<int>> table_feat_conf_feat_shape;
+  // === edge feature
+  std::vector<std::vector<std::string>> table_edge_feat_conf_feat_name;
+  std::vector<std::vector<std::string>> table_edge_feat_conf_feat_dtype;
+  std::vector<std::vector<int>> table_edge_feat_conf_feat_shape;
+  // === edge feature
+ 
   ::paddle::distributed::GraphParameter table_proto;
   std::vector<int> device_id_mapping;
   int search_level = 1;

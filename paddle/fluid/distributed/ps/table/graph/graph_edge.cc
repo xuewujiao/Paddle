@@ -25,5 +25,20 @@ void WeightedGraphEdgeBlob::add_edge(int64_t id, float weight = 1) {
   id_arr.push_back(id);
   weight_arr.push_back((half)weight);
 }
+
+// 每次新加一条边，新增一个feature vector, 用来保存这条边的所有特征
+void GraphEdgeBlobWithFeature::add_edge(int64_t id, float weight = 1) {
+  id_arr.push_back(id);
+  offset.emplace_back(0);
+  feature.emplace_back({});
+}
+
+void WeightedGraphEdgeBlobWithFeature::add_edge(int64_t id, float weight = 1) {
+  id_arr.push_back(id);
+  weight_arr.push_back((half)weight);
+  offset.emplace_back(0);
+  feature.emplace_back({});
+}
+
 }  // namespace distributed
 }  // namespace paddle

@@ -37,7 +37,7 @@ class GpuPsGraphTable
  public:
   inline int get_table_offset(int gpu_id, GraphTableType type, int idx) const {
     int type_id = type;
-    return gpu_id * (graph_table_num_ + feature_table_num_ + float_feature_table_num_) +
+    return gpu_id * (graph_table_num_ + feature_table_num_ + float_feature_table_num_ + edge_feature_table_num_ + edge_float_feature_table_num_) +
            type_id * graph_table_num_ + idx;
   }
   inline int get_graph_list_offset(int gpu_id, int edge_idx) const {
@@ -49,7 +49,14 @@ class GpuPsGraphTable
   inline int get_graph_float_fea_list_offset(int gpu_id) const {
     return gpu_id * float_feature_table_num_;
   }
-
+  // == edge feature ====
+  inline int get_graph_edge_fea_list_offset(int gpu_id) const {
+    return gpu_id * edge_feature_table_num_;
+  }
+  inline int get_graph_edge_float_fea_list_offset(int gpu_id) const {
+    return gpu_id * edge_float_feature_table_num_;
+  }
+  // == edge feature ====
   GpuPsGraphTable(std::shared_ptr<HeterPsResource> resource,
                   int graph_table_num, int slot_num_for_pull_feature = 0, int float_slot_num = 0)
       : HeterComm<uint64_t, uint64_t, int, CommonFeatureValueAccessor>(
@@ -65,11 +72,21 @@ class GpuPsGraphTable
       VLOG(0) << "float_feature_table_num set to 1";
       this->float_feature_table_num_ = 1;
     }
+    // === edge feature ===
+    if (edge_slot_num > 0) {
+      VLOG(0) << "edge_feature_table_num set to 1";
+      this->edge_feature_table_num_ = 1;
+    }
+    if (edge_float_slot_num > 0) {
+      VLOG(0) << "edge_float_feature_table_num set to 1";
+      this->edge_float_feature_table_num_ = 1;
+    }
+    // === edge feature ===
     gpu_num = resource_->total_device();
     memset(global_device_map, -1, sizeof(global_device_map));
 
     tables_ = std::vector<Table *>(
-        gpu_num * (graph_table_num_ + feature_table_num_ + float_feature_table_num_), NULL);
+        gpu_num * (graph_table_num_ + feature_table_num_ + float_feature_table_num_ + edge_feature_table_num_ + edge_float_feature_table_num_), NULL);
     for (int i = 0; i < gpu_num; i++) {
       global_device_map[resource_->dev_id(i)] = i;
       for (int j = 0; j < graph_table_num_; j++) {
@@ -81,6 +98,14 @@ class GpuPsGraphTable
       for (int j = 0; j < float_feature_table_num_; j++) {
         gpu_graph_float_fea_list_.push_back(GpuPsCommGraphFloatFea());
       }
+      // === edge feature ====
+      for (int j = 0; j < edge_feature_table_num_; j++) {
+        gpu_graph_edge_fea_list_.push_back(GpuPsCommGraphEdgeFea<uint64_t>());
+      }
+      for (int j = 0; j < edge_float_feature_table_num_; j++) {
+        gpu_graph_edge_float_fea_list_.push_back(GpuPsCommGraphEdgeFea<float>());
+      }
+      // === edge feature ====
     }
     cpu_table_status = -1;
     device_mutex_.resize(gpu_num);
@@ -97,6 +122,8 @@ class GpuPsGraphTable
   void build_graph_on_single_gpu(const GpuPsCommGraph &g, int gpu_id, int idx);
   void build_graph_fea_on_single_gpu(const GpuPsCommGraphFea &g, int gpu_id);
   void build_graph_float_fea_on_single_gpu(const GpuPsCommGraphFloatFea &g, int gpu_id);
+  void build_graph_edge_fea_on_single_gpu(const GpuPsCommGraphEdgeFea<uint64_t> &g, int gpu_id);
+  void build_graph_edge_float_fea_on_single_gpu(const GpuPsCommGraphEdgeFea<uint64_t> &g, int gpu_id);
   void clear_graph_info(int gpu_id, int index);
   void clear_graph_info(int index);
   void reset_feature_info(int gpu_id, size_t capacity, size_t feature_size);
@@ -234,6 +261,43 @@ class GpuPsGraphTable
        std::shared_ptr<phi::Allocation> &slot_list,
        bool sage_mode = false);
 
+  int get_edge_feature_info_of_nodes(
+      int gpu_id,
+      uint64_t *edge_src,
+      uint64_t *edge_dst,
+      int node_num,
+      std::shared_ptr<phi::Allocation> &size_list,
+      std::shared_ptr<phi::Allocation> &size_list_prefix_sum,
+      std::shared_ptr<phi::Allocation> &feature_list,  // NOLINT
+      std::shared_ptr<phi::Allocation> &slot_list);    // NOLINT
+  int get_edge_float_feature_info_of_nodes(
+      int gpu_id,
+      uint64_t *edge_src,
+      uint64_t *edge_dst,
+      int node_num,
+      uint32_t *size_list,
+      uint32_t *size_list_prefix_sum,
+      std::shared_ptr<phi::Allocation> &feature_list,  // NOLINT
+      std::shared_ptr<phi::Allocation> &slot_list);    // NOLINT
+
+  int get_edge_feature_info_of_nodes_normal(
+       int gpu_id,
+       uint64_t *edge_src,
+       uint64_t *edge_dst,
+       int node_num,
+       std::shared_ptr<phi::Allocation> &size_list,
+       std::shared_ptr<phi::Allocation> &size_list_prefix_sum,
+       std::shared_ptr<phi::Allocation> &feature_list,
+       std::shared_ptr<phi::Allocation> &slot_list);
+  int get_edge_float_feature_info_of_nodes_normal(
+       int gpu_id,
+       uint64_t *edge_src,
+       uint64_t *edge_dst,
+       int node_num,
+       std::shared_ptr<phi::Allocation> &size_list,
+       std::shared_ptr<phi::Allocation> &size_list_prefix_sum,
+       std::shared_ptr<phi::Allocation> &feature_list,
+       std::shared_ptr<phi::Allocation> &slot_list);
 
   NodeQueryResult query_node_list(int gpu_id,
                                   int idx,
@@ -289,9 +353,12 @@ class GpuPsGraphTable
 
   int gpu_num;
   int graph_table_num_, feature_table_num_{0}, float_feature_table_num_{0};
+  int edge_feature_table_num_{0}, edge_float_feature_table_num_{0};
   std::vector<GpuPsCommGraph> gpu_graph_list_;
   std::vector<GpuPsCommGraphFea> gpu_graph_fea_list_;
   std::vector<GpuPsCommGraphFloatFea> gpu_graph_float_fea_list_;
+  std::vector<GpuPsCommGraphEdgeFea<uint64_t>> gpu_graph_edge_fea_list_;
+  std::vector<GpuPsCommGraphEdgeFea<float>> gpu_graph_edge_float_fea_list_;
   int global_device_map[32];
   const int parallel_sample_size = 1;
   const int dim_y = 256;
