@@ -264,6 +264,14 @@ class CPUWorkerBase : public DeviceWorker {
 };
 
 class HogwildWorker : public CPUWorkerBase {
+  struct OffLoadVarInfo {
+    std::vector<std::string> persistable_inputs;
+    size_t total_param_len = 0;
+    void CopyInputs(const Scope* root,
+                    const platform::Place& place,
+                    Scope* scope);
+    void GCInputsVar(Scope* root, Scope* scope);
+  };
  public:
   HogwildWorker() {}
   virtual ~HogwildWorker() {}
@@ -312,6 +320,9 @@ class HogwildWorker : public CPUWorkerBase {
   std::vector<std::string> shard_dump_fields_;
   std::multiset<std::string> free_param_vars_;
   bool sharding_mode_ = false;
+  // offload vars
+  std::multiset<std::string> offload_names_;
+  std::unordered_map<const OperatorBase*, OffLoadVarInfo> offload_vars_;
 };
 
 class DownpourWorker : public HogwildWorker {

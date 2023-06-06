@@ -186,7 +186,8 @@ class GraphGpuWrapper {
       std::shared_ptr<phi::Allocation>& size_list,
       std::shared_ptr<phi::Allocation>& size_list_prefix_sum,
       std::shared_ptr<phi::Allocation>& feature_list,  // NOLINT
-      std::shared_ptr<phi::Allocation>& slot_list);    // NOLINT
+      std::shared_ptr<phi::Allocation>& slot_list,
+      bool sage_mode = false);    // NOLINT
   int get_float_feature_info_of_nodes(
       int gpu_id,
       uint64_t *d_nodes,
@@ -231,6 +232,7 @@ class GraphGpuWrapper {
   bool conf_initialized_ = false;
   bool type_keys_initialized_ = false;
   std::vector<std::vector<int>> first_node_type_;
+  std::vector<std::vector<int>> all_node_type_;
   std::vector<uint8_t> excluded_train_pair_;
   std::vector<int32_t> pair_label_conf_;
   std::vector<std::vector<std::vector<int>>> meta_path_;

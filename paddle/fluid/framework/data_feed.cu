@@ -1465,7 +1465,8 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num, int te
                                                d_feature_size_list_buf_,
                                                d_feature_size_prefixsum_buf_,
                                                d_feature_list,
-                                               d_slot_list);
+                                               d_slot_list,
+                                               conf_.sage_mode);
   // num of slot feature
   int slot_num = conf_.slot_num - float_slot_num_;
   int64_t *slot_tensor_ptr_[slot_num];
@@ -3414,6 +3415,9 @@ void GraphDataGenerator::DoSageForTrain() {
           ins_buf_pair_len_[tensor_pair_idx] : conf_.batch_size;
       total_instance *= 2;
 
+      if (total_instance == 0) {
+        break;
+      }
       ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_[tensor_pair_idx]->ptr());
       ins_cursor = ins_buf + ins_buf_pair_len_[tensor_pair_idx] * 2 - total_instance;
       auto final_sage_nodes = GenerateSampleGraph(ins_cursor,
@@ -3591,6 +3595,7 @@ int dynamic_adjust_total_row_for_infer(int local_reach_end,
 bool FillInferBuf(const std::vector<uint64_t> &h_device_keys_len, // input
                 const std::vector<std::shared_ptr<phi::Allocation>> &d_device_keys,
                 const GraphDataGeneratorConfig &conf,
+                const std::vector<int> &all_node_type,
                 int tensor_pair_idx,
                 int *total_row_ptr,
                 size_t *infer_node_start_ptr,
@@ -3604,6 +3609,13 @@ bool FillInferBuf(const std::vector<uint64_t> &h_device_keys_len, // input
       gpu_graph_ptr->global_infer_node_type_start_[conf.gpuid];
   auto &infer_cursor = gpu_graph_ptr->infer_cursor_[tensor_pair_idx][conf.thread_id];
   *total_row_ptr = 0;
+
+  auto &type_to_index = gpu_graph_ptr->get_graph_type_to_index();
+  std::set<int> all_node_type_index_set;
+  for (auto& node_type: all_node_type) {
+    all_node_type_index_set.insert(type_to_index[node_type]);
+  }
+
   if (infer_cursor < h_device_keys_len.size()) {
     while (global_infer_node_type_start[infer_cursor] >=
            h_device_keys_len[infer_cursor]) {
@@ -3612,11 +3624,24 @@ bool FillInferBuf(const std::vector<uint64_t> &h_device_keys_len, // input
         return false;
       }
     }
+    while (infer_cursor < h_device_keys_len.size()) {
+      if (all_node_type_index_set.find(infer_cursor) == all_node_type_index_set.end()) {
+        VLOG(2) << "Skip cursor[" << infer_cursor << "], by all_node_type_index_set";
+        infer_cursor++;
+        if (infer_cursor >= h_device_keys_len.size()) {
+          return false;
+        }
+        continue;
+      } else {
+        VLOG(2) << "Not skip cursor[" << infer_cursor << "]";
+        break;
+      }
+    }
     if (!conf.infer_node_type_index_set.empty()) {
       while (infer_cursor < h_device_keys_len.size()) {
         if (conf.infer_node_type_index_set.find(infer_cursor) ==
             conf.infer_node_type_index_set.end()) {
-          VLOG(2) << "Skip cursor[" << infer_cursor << "]";
+          VLOG(2) << "Skip cursor[" << infer_cursor << "], by infer_node_type_index_set";
           infer_cursor++;
           continue;
         } else {
@@ -3680,12 +3705,14 @@ bool FillInferBuf(const std::vector<uint64_t> &h_device_keys_len, // input
 
 bool GraphDataGenerator::DoWalkForInfer() {
   platform::CUDADeviceGuard guard(conf_.gpuid);
+  auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   bool infer_flag = true;
   for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
           ++tensor_pair_idx) {
     infer_flag &= FillInferBuf(h_device_keys_len_[tensor_pair_idx],
                             d_device_keys_[tensor_pair_idx],
                             conf_,
+                            gpu_graph_ptr->all_node_type_[tensor_pair_idx],
                             tensor_pair_idx,
                             &total_row_[tensor_pair_idx],
                             &infer_node_start_[tensor_pair_idx],
@@ -3945,11 +3972,24 @@ void GraphDataGenerator::AllocResource(
   if (!conf_.sage_mode) {
     conf_.slot_num = (feed_vec.size() - id_offset_of_feed_vec_) / 2;
   } else {
-    int offset = conf_.get_degree ? id_offset_of_feed_vec_ + 2
-                                  : id_offset_of_feed_vec_ + 1;
-    int sample_offset = conf_.return_weight ? 6 : 5;
-    conf_.slot_num =
-        (feed_vec.size() - offset - conf_.samples.size() * sample_offset) / 2;
+    conf_.tensor_num_of_one_pair = (feed_vec.size() - 2) / conf_.tensor_pair_num;
+    assert((conf_.tensor_num_of_one_pair * conf_.tensor_pair_num + 2) == feed_vec.size());
+    uint32_t tensor_num_of_one_sample = 5;
+    if (conf_.return_weight) {
+      tensor_num_of_one_sample++;
+    }
+
+    uint32_t tensor_num_of_one_subgraph = tensor_num_of_one_sample * conf_.samples.size();
+    tensor_num_of_one_subgraph++; // final_index
+    if (conf_.get_degree) {
+      tensor_num_of_one_subgraph++; // degree_norm
+    }
+
+    conf_.slot_num = (conf_.tensor_num_of_one_pair - 1 - tensor_num_of_one_subgraph) / 2;
+    assert((1 + conf_.slot_num * 2 + tensor_num_of_one_subgraph) == conf_.tensor_num_of_one_pair);
+    VLOG(1) << "tensor_num_of_one_pair[" << conf_.tensor_num_of_one_pair
+        << "] tensor_num_of_one_sample[" << tensor_num_of_one_sample
+        << "] tensor_num_of_one_subgraph[" << tensor_num_of_one_subgraph << "]";
   }
   VLOG(1) << "slot_num[" << conf_.slot_num << "]";
   conf_.tensor_num_of_one_pair = 1 + conf_.slot_num * 2; // id and slot

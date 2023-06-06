@@ -42,11 +42,55 @@ PADDLE_DEFINE_EXPORTED_bool(
     false,
     "enable force_device_batch_num_equal, default false");
 DECLARE_bool(enable_dump_main_program);
+PADDLE_DEFINE_EXPORTED_int32(
+    gpugraph_offload_param_stat,
+    0,
+    "enable offload param stat, default 0");
 namespace paddle {
 namespace framework {
 
 std::atomic<bool> HogwildWorker::quit_flag_(false);
 Barrier g_barrier;
+
+static void Tensor2Pinned(phi::DenseTensor *self_tensor) {
+#if defined(PADDLE_WITH_CUDA)
+  const size_t need_allocate_size = self_tensor->memory_size();
+  void *data_ptr = self_tensor->data();
+  auto holder = memory::AllocShared(platform::CUDAPinnedPlace(), need_allocate_size);
+  memcpy(holder->ptr(), data_ptr, need_allocate_size);
+  self_tensor->ResetHolderWithType(holder, self_tensor->dtype());
+#endif
+}
+
+void HogwildWorker::OffLoadVarInfo::CopyInputs(const Scope* root,
+                    const platform::Place& place,
+                    Scope* scope) {
+  total_param_len = 0;
+  for (auto& name : persistable_inputs) {
+    auto src_var = root->FindLocalVar(name);
+    CHECK(src_var != nullptr) << "name=" << name << " is nullptr";
+    auto& src_tensor = src_var->Get<phi::DenseTensor>();
+    CHECK(src_tensor.IsInitialized())
+        << "name=" << name << " not IsInitialized";
+    auto dest_var = scope->FindLocalVar(name);
+    CHECK(dest_var != nullptr) << "dest name=" << name << " is nullptr";
+    auto* dest_tensor = dest_var->GetMutable<phi::DenseTensor>();
+    TensorCopy(src_tensor, place, dest_tensor);
+    total_param_len += src_tensor.memory_size();
+  }
+}
+void HogwildWorker::OffLoadVarInfo::GCInputsVar(Scope* root, Scope* scope) {
+  for (auto& name : persistable_inputs) {
+    auto var = scope->FindLocalVar(name);
+    if (var == nullptr) {
+      continue;
+    }
+    auto src_tensor = var->GetMutable<phi::DenseTensor>();
+    auto root_tensor = root->FindLocalVar(name)->GetMutable<phi::DenseTensor>();
+    TensorCopy(*src_tensor, root_tensor->place(), root_tensor);
+    src_tensor->MoveMemoryHolder().reset();
+  }
+}
 
 void HogwildWorker::Initialize(const TrainerDesc &desc) {
   fetch_config_ = desc.fetch_config();
@@ -193,7 +237,7 @@ void HogwildWorker::BuildShardingDepends(const ProgramDesc &program) {
       }
       std::string new_name = name;
       size_t pos = new_name.find("@");
-      if (pos > 0) {
+      if (pos != std::string::npos) {
         new_name = name.substr(0, pos);
       }
       if (persist_param_vars_.find(new_name) == persist_param_vars_.end()) {
@@ -263,6 +307,7 @@ void HogwildWorker::BuildShardingDepends(const ProgramDesc &program) {
           << ", remove op count=" << remove_ops_.size()
           << ", remove var count=" << remove_vars_.size()
           << ", unpersist var count=" << unpersist_vars_.size()
+          << ", persist var count=" << persist_param_vars_.size()
           << ", dump param count=" << shard_dump_params_.size()
           << ", dump fields count=" << shard_dump_fields_.size();
 }
@@ -364,11 +409,32 @@ void HogwildWorker::CreateThreadOperators(const ProgramDesc &program) {
   }
   unused_vars_ =
       GetUnusedVars(block, ops_, skip_vars_, &unpersist_vars_, sharding_mode_);
+  size_t offload_cnt = 0;
+  // offload adam
+  if (!offload_names_.empty()) {
+    for (auto &op : ops_) {
+      // offload
+      for (auto &o : op->Inputs()) {
+        for (auto &name : o.second) {
+          if (offload_names_.find(name) == offload_names_.end()) {
+            continue;
+          }
+          auto dest_var = thread_scope_->Var(name);  // init local var
+          CHECK(dest_var != nullptr);
+          offload_vars_[op.get()].persistable_inputs.push_back(name);
+          ++offload_cnt;
+        }
+      }
+    }
+  }
   // debug
-  VLOG(1) << "device id=" << thread_id_ << "total op count=" << all_desc.size()
+  VLOG(0) << "device id=" << thread_id_
+          << ", total op count=" << all_desc.size()
           << ", create op count=" << ops_.size()
           << ", skip vars count=" << skip_vars_.size()
-          << ", unused vars op count=" << unused_vars_.size();
+          << ", unused vars op count=" << unused_vars_.size()
+          << ", offload op count=" << offload_vars_.size()
+          << ", offload input count=" << offload_cnt;
 }
 inline void PrintTensor(const std::string &name,
                         const std::string &info,
@@ -376,6 +442,18 @@ inline void PrintTensor(const std::string &name,
   std::stringstream ss;
   platform::PrintVar(scope, name, info, &ss);
   std::cout << ss.str() << std::endl;
+}
+static bool IsNeedOffload(const std::string &name) {
+  if (FLAGS_gpugraph_offload_param_stat == 0) {
+    return false;
+  }
+  if (FLAGS_gpugraph_offload_param_stat == 1) {
+    return (name.find(".w_0_moment") != std::string::npos ||
+        name.find(".b_0_moment") != std::string::npos);
+  } else {
+    return (name.find(".w_0") != std::string::npos ||
+            name.find(".b_0") != std::string::npos);
+  }
 }
 void HogwildWorker::CreateThreadScope(const ProgramDesc &program) {
   auto &block = program.Block(0);
@@ -391,6 +469,7 @@ void HogwildWorker::CreateThreadScope(const ProgramDesc &program) {
   int persist_param = 0;
   int persist_share = 0;
   int persist_reset = 0;
+  int pinned_param = 0;
   std::vector<std::string> del_var_names;
   for (auto &var : block.AllVars()) {
     auto name = var->Name();
@@ -441,11 +520,30 @@ void HogwildWorker::CreateThreadScope(const ProgramDesc &program) {
         }
         // reset tensor holder
         if (persist_param_vars_.find(name) != persist_param_vars_.end()) {
-          phi::DenseTensor cpu_tensor;
-          TensorCopy(*root_tensor, platform::CPUPlace(), &cpu_tensor);
-          root_tensor->MoveMemoryHolder();
-          TensorCopy(cpu_tensor, place_, root_tensor);
-          ++persist_reset;
+          // need offload param
+          if (IsNeedOffload(name)) {
+            // add offload names
+            offload_names_.insert(name);
+            // offload moment
+            if (platform::is_gpu_place(root_tensor->place())) {
+              phi::DenseTensor cpu_tensor;
+              TensorCopy(*root_tensor, platform::CPUPlace(), &cpu_tensor);
+              root_tensor->MoveMemoryHolder();
+              auto holder = cpu_tensor.MoveMemoryHolder();
+              root_tensor->ResetHolderWithType(holder, root_tensor->dtype());
+            }
+            // convert pinned memory
+            Tensor2Pinned(root_tensor);
+            ++pinned_param;
+          } else {
+            // copy one device to other device
+            auto stream = static_cast<phi::GPUContext *>(dev_ctx_)->stream();
+            auto src_place = root_tensor->place();
+            auto holder = root_tensor->MoveMemoryHolder();
+            auto dst_ptr = root_tensor->mutable_data(place_, root_tensor->dtype());
+            memory::Copy(place_, dst_ptr, src_place, holder->ptr(), holder->size(), stream);
+            ++persist_reset;
+          }
         } else {
           auto *ptr = thread_scope_->Var(name);
           CHECK(proto::VarType::LOD_TENSOR == var->GetType());
@@ -453,6 +551,7 @@ void HogwildWorker::CreateThreadScope(const ProgramDesc &program) {
           phi::DenseTensor *thread_tensor = ptr->GetMutable<phi::DenseTensor>();
           TensorCopy(*root_tensor, place_, thread_tensor);
           need_copy_vars_.push_back(name);
+          VLOG(0) << "need copy var name=" << name;
         }
       } else {
         if (free_param_vars_.find(name) != free_param_vars_.end()) {
@@ -478,8 +577,11 @@ void HogwildWorker::CreateThreadScope(const ProgramDesc &program) {
   }
   VLOG(0) << "device id=" << thread_id_
           << ", total param count=" << all_param_.size()
-          << ", persist count=" << persist_total << ", param=" << persist_param
-          << ", share=" << persist_share << ", reset=" << persist_reset
+          << ", persist count=" << persist_total
+          << ", param=" << persist_param
+          << ", share=" << persist_share
+          << ", reset=" << persist_reset
+          << ", pinned=" << pinned_param
           << ", need copy param count=" << need_copy_vars_.size()
           << ", delete vars count=" << del_var_names.size();
 }
@@ -683,7 +785,16 @@ void HogwildWorker::TrainFilesWithProfiler() {
     for (size_t i = 0; i < ops_.size(); ++i) {
       timeline.Start();
       VLOG(3) << "Going to run op " << op_names_[i];
-      ops_[i]->Run(*thread_scope_, place_);
+      auto &op = ops_[i];
+      // offload
+      auto it = offload_vars_.find(op.get());
+      if (it != offload_vars_.end()) {
+        it->second.CopyInputs(root_scope_, place_, thread_scope_);
+      }
+      op->Run(*thread_scope_, place_);
+      if (it != offload_vars_.end()) {
+        it->second.GCInputsVar(root_scope_, thread_scope_);
+      }
 #ifdef PADDLE_WITH_HETERPS
       dev_ctx_->Wait();
 #endif
@@ -693,7 +804,7 @@ void HogwildWorker::TrainFilesWithProfiler() {
       total_time += timeline.ElapsedSec();
       if (gc) {
         DeleteUnusedTensors(
-            *thread_scope_, ops_[i].get(), unused_vars_, gc.get());
+            *thread_scope_, op.get(), unused_vars_, gc.get());
       }
     }
 
@@ -830,7 +941,16 @@ void HogwildWorker::TrainFiles() {
       break;
     }
     for (auto &op : ops_) {
+      // offload
+      auto it = offload_vars_.find(op.get());
+      if (it != offload_vars_.end()) {
+        it->second.CopyInputs(root_scope_, place_, thread_scope_);
+      }
       op->Run(*thread_scope_, place_);
+      // offload
+      if (it != offload_vars_.end()) {
+        it->second.GCInputsVar(root_scope_, thread_scope_);
+      }
       if (gc) {
         DeleteUnusedTensors(*thread_scope_, op.get(), unused_vars_, gc.get());
       }
