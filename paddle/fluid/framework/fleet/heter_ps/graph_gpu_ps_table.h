@@ -214,14 +214,6 @@ class GpuPsGraphTable
       uint32_t *size_list_prefix_sum,
       std::shared_ptr<phi::Allocation> &feature_list,  // NOLINT
       std::shared_ptr<phi::Allocation> &slot_list);    // NOLINT
-  int get_float_feature_info_of_nodes(
-      int gpu_id,
-      uint64_t *d_nodes,
-      int node_num,
-      uint32_t *size_list,
-      uint32_t *size_list_prefix_sum,
-      std::shared_ptr<phi::Allocation> &feature_list,  // NOLINT
-      std::shared_ptr<phi::Allocation> &slot_list);    // NOLINT
 
   int get_feature_info_of_nodes_normal(
        int gpu_id,
