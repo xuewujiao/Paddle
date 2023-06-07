@@ -718,7 +718,7 @@ int GraphDataGenerator::FillGraphIdShowClkTensor(int uniq_instance,
                     cudaMemcpyDeviceToDevice,
                     train_stream_);
 
-    if (conf_.enable_pair_label) {
+    if (conf_.enable_pair_label) {  // do not consider about pair label currently.
       pair_label_ptr_ = feed_vec_[feed_vec_idx++]->mutable_data<int32_t>(
               {total_instance / 2}, this->place_);
       int32_t *pair_label_buf =
@@ -1048,9 +1048,18 @@ int GraphDataGenerator::GenerateBatch() {
       if (sage_batch_count_ == sage_batch_num_) {
         return 0;
       }
-      FillGraphIdShowClkTensor(uniq_instance_vec_[sage_batch_count_],
-                               total_instance_vec_[sage_batch_count_],
-                               sage_batch_count_);
+      if (conf_.accumulate_num == 1) {
+        FillGraphIdShowClkTensor(uniq_instance_vec_[sage_batch_count_],
+                                 total_instance_vec_[sage_batch_count_],
+                                 sage_batch_count_);
+      } else {
+        FillGraphIdShowClkTensor(uniq_instance_vec_[sage_batch_count_ * 2 + 1],
+                                 total_instance_vec_[sage_batch_count_ * 2 + 1],
+                                 sage_batch_count_ * 2 + 1);
+        FillGraphIdShowClkTensor(uniq_instance_vec_[sage_batch_count_ * 2],
+                                 total_instance_vec_[sage_batch_count_ * 2],
+                                 sage_batch_count_ * 2);
+      }
     }
   }
 
@@ -3421,8 +3430,10 @@ void GraphDataGenerator::DoSageForTrain() {
 
       ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_[tensor_pair_idx]->ptr());
       ins_cursor = ins_buf + ins_buf_pair_len_[tensor_pair_idx] * 2 - total_instance;
+      int mini_batch_size = total_instance / conf_.accumulate_num;
+      // fill first graph holder
       auto final_sage_nodes = GenerateSampleGraph(ins_cursor,
-                                                  total_instance,
+                                                  mini_batch_size,
                                                   &uniq_instance,
                                                   conf_,
                                                   &inverse_vec_,
@@ -3433,9 +3444,46 @@ void GraphDataGenerator::DoSageForTrain() {
                                                   sample_stream_);
       final_sage_nodes_vec_.emplace_back(final_sage_nodes);
       uniq_instance_vec_.emplace_back(uniq_instance);
-      total_instance_vec_.emplace_back(total_instance);
+      total_instance_vec_.emplace_back(mini_batch_size);
+      cudaStreamSynchronize(sample_stream_);
+      InsertTable(reinterpret_cast<uint64_t *>(final_sage_nodes->ptr()),
+                  uniq_instance,
+                  &d_uniq_node_num_,
+                  conf_,
+                  &copy_unique_len_,
+                  place_,
+                  table_,
+                  &host_vec_,
+                  sample_stream_);
 
-      if (conf_.get_degree) {
+      // fill second graph holder
+      if (mini_batch_size != total_instance) {
+        auto final_sage_nodes_v2 = GenerateSampleGraph(ins_cursor + mini_batch_size,
+                                                       total_instance - mini_batch_size,
+                                                       &uniq_instance,
+                                                       conf_,
+                                                       &inverse_vec_,
+                                                       &graph_edges_vec_,
+                                                       &edges_split_num_vec_,
+                                                       &edge_type_graph_,
+                                                       place_,
+                                                       sample_stream_);
+        final_sage_nodes_vec_.emplace_back(final_sage_nodes_v2);
+        uniq_instance_vec_.emplace_back(uniq_instance);
+        total_instance_vec_.emplace_back(total_instance - mini_batch_size);
+        cudaStreamSynchronize(sample_stream_);
+        InsertTable(reinterpret_cast<uint64_t *>(final_sage_nodes_v2->ptr()),
+                    uniq_instance,
+                    &d_uniq_node_num_,
+                    conf_,
+                    &copy_unique_len_,
+                    place_,
+                    table_,
+                    &host_vec_,
+                    sample_stream_);
+      }
+
+      if (conf_.get_degree) {  // accumulate do not consider about degree currently.
         auto node_degrees = GetNodeDegree(reinterpret_cast<uint64_t *>(final_sage_nodes->ptr()),
                                           uniq_instance,
                                           conf_,
@@ -3444,7 +3492,7 @@ void GraphDataGenerator::DoSageForTrain() {
         node_degree_vec_.emplace_back(node_degrees);
       }
       
-      if (conf_.enable_pair_label) {
+      if (conf_.enable_pair_label) {  // accumulate do not consider about pair label currently.
         auto pair_label = memory::AllocShared(
             place_,
             total_instance / 2 * sizeof(int),
@@ -3462,15 +3510,6 @@ void GraphDataGenerator::DoSageForTrain() {
       }
       
       cudaStreamSynchronize(sample_stream_);
-      InsertTable(reinterpret_cast<uint64_t *>(final_sage_nodes->ptr()),
-                  uniq_instance,
-                  &d_uniq_node_num_,
-                  conf_,
-                  &copy_unique_len_,
-                  place_,
-                  table_,
-                  &host_vec_,
-                  sample_stream_);
       
       ins_buf_pair_len_[tensor_pair_idx] -= total_instance / 2;
     } // end for (int tensor_pair_idx = 0;
@@ -3973,7 +4012,7 @@ void GraphDataGenerator::AllocResource(
   if (!conf_.sage_mode) {
     conf_.slot_num = (feed_vec.size() - id_offset_of_feed_vec_) / 2;
   } else {
-    conf_.tensor_num_of_one_pair = (feed_vec.size() - 2) / conf_.tensor_pair_num;
+    conf_.tensor_num_of_one_pair = (feed_vec.size() - 2) / conf_.tensor_pair_num;  // 2 means show and clk
     assert((conf_.tensor_num_of_one_pair * conf_.tensor_pair_num + 2) == feed_vec.size());
     uint32_t tensor_num_of_one_sample = 5;
     if (conf_.return_weight) {
@@ -3986,6 +4025,17 @@ void GraphDataGenerator::AllocResource(
       tensor_num_of_one_subgraph++; // degree_norm
     }
 
+    // for accumulate
+    if (conf_.gpu_graph_training) {
+      if (conf_.accumulate_num > 2) {
+        tensor_num_of_one_subgraph *= 2;
+      } else {
+        tensor_num_of_one_subgraph *= conf_.accumulate_num;
+      }
+    } else {
+      conf_.accumulate_num = 1;
+    }
+
     conf_.slot_num = (conf_.tensor_num_of_one_pair - 1 - tensor_num_of_one_subgraph) / 2;
     assert((1 + conf_.slot_num * 2 + tensor_num_of_one_subgraph) == conf_.tensor_num_of_one_pair);
     VLOG(1) << "tensor_num_of_one_pair[" << conf_.tensor_num_of_one_pair
@@ -3995,7 +4045,11 @@ void GraphDataGenerator::AllocResource(
   VLOG(1) << "slot_num[" << conf_.slot_num << "]";
   conf_.tensor_num_of_one_pair = 1 + conf_.slot_num * 2; // id and slot
   if (conf_.sage_mode) {
-    conf_.tensor_num_of_one_pair += 5 * conf_.samples.size() + 1; // sage[] and inverse_index
+    if (conf_.accumulate_num > 2) {
+      conf_.tensor_num_of_one_pair += 2 * (5 * conf_.samples.size() + 1); // sage[] and inverse_index
+    } else {
+      conf_.tensor_num_of_one_pair += conf_.accumulate_num * (5 * conf_.samples.size() + 1);
+    }
   }
   if (conf_.enable_pair_label) {
     conf_.tensor_num_of_one_pair++;
@@ -4004,7 +4058,11 @@ void GraphDataGenerator::AllocResource(
     conf_.tensor_num_of_one_pair++;
   }
   if (conf_.return_weight) {
-    conf_.tensor_num_of_one_pair += conf_.samples.size();
+    if (conf_.accumulate_num > 2) {
+      conf_.tensor_num_of_one_pair += 2 * conf_.samples.size();
+    } else {
+      conf_.tensor_num_of_one_pair += conf_.accumulate_num * conf_.samples.size();
+    }
   }
   VLOG(1) << "tensor_num_of_one_pair[" << conf_.tensor_num_of_one_pair << "]";
 
@@ -4097,6 +4155,7 @@ void GraphDataGenerator::SetConfig(
   conf_.get_degree = graph_config.get_degree();
   conf_.weighted_sample = graph_config.weighted_sample();
   conf_.return_weight = graph_config.return_weight();
+  conf_.accumulate_num = graph_config.accumulate_num();
 
   epoch_finish_ = false;
   VLOG(1) << "Confirm GraphConfig, walk_degree : " << conf_.walk_degree
