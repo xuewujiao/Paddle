@@ -38,6 +38,7 @@ DECLARE_bool(graph_get_neighbor_id);
 DECLARE_int32(gpugraph_storage_mode);
 DECLARE_uint64(gpugraph_slot_feasign_max_num);
 DECLARE_bool(graph_metapath_split_opt);
+DECLARE_double(graph_neighbor_size_percent);
 
 PADDLE_DEFINE_EXPORTED_bool(graph_edges_split_only_by_src_id,
                             false,
@@ -3135,6 +3136,8 @@ void GraphTable::calc_edge_type_limit() {
 
   int max_neighbor_size;
   int neighbor_size_limit;
+  size_t size_limit;
+  double neighbor_size_percent = FLAGS_graph_neighbor_size_percent;
   for (auto &it: this->edge_to_id) {
     graph_type_keys_.clear();
     graph_type_keys_neighbor_size_.clear();
@@ -3183,14 +3186,22 @@ void GraphTable::calc_edge_type_limit() {
     }
     std::sort(graph_type_keys_neighbor_size_.begin(), graph_type_keys_neighbor_size_.end());
     max_neighbor_size = graph_type_keys_neighbor_size_[graph_type_keys_neighbor_size_.size() - 1];
-    neighbor_size_limit = graph_type_keys_neighbor_size_[graph_type_keys_neighbor_size_.size() * 0.97];
+    size_limit = graph_type_keys_neighbor_size_.size() * neighbor_size_percent;
+    if (size_limit < (graph_type_keys_neighbor_size_.size() - 1)) {
+      neighbor_size_limit = graph_type_keys_neighbor_size_[size_limit];
+    } else {
+      neighbor_size_limit = max_neighbor_size;
+    }
+    type_to_neighbor_limit_[edge_idx] = neighbor_size_limit;
     VLOG(0) << "edge_type: " << edge_type << ", max neighbor_size: "
               << max_neighbor_size << ", neighbor_size_limit: " << neighbor_size_limit;
-    if ((graph_type_keys_neighbor_size_.size() * 0.97) < (graph_type_keys_neighbor_size_.size() - 1)) {
-      edge_neighbor_limit_size[edge_idx] = graph_type_keys_neighbor_size_[graph_type_keys_neighbor_size_.size() * 0.97];
-    } else {
-      edge_neighbor_limit_size[edge_idx] = graph_type_keys_neighbor_size_[graph_type_keys_neighbor_size_.size() - 1];
-    }
+
+    //if ((graph_type_keys_neighbor_size_.size() * neighbor_size_percent) < (graph_type_keys_neighbor_size_.size() - 1)) {
+    //  edge_neighbor_limit_size[edge_idx] =
+    //      graph_type_keys_neighbor_size_[graph_type_keys_neighbor_size_.size() * neighbor_size_percent];
+    //} else {
+    //  edge_neighbor_limit_size[edge_idx] = graph_type_keys_neighbor_size_[graph_type_keys_neighbor_size_.size() - 1];
+    //}
   }
 }
 

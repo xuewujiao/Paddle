@@ -1942,9 +1942,10 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v3(
 NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample(int gpu_id,
                                                             uint64_t* key,
                                                             int sample_size,
-                                                            int len) {
+                                                            int len,
+                                                            int neighbor_size_limit) {
   return graph_neighbor_sample_v2(
-      gpu_id, 0, key, sample_size, len, 10000, false, true, false);
+      gpu_id, 0, key, sample_size, len, neighbor_size_limit, false, true, false);
 }
 
 NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all(

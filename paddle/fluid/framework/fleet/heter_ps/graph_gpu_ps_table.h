@@ -113,7 +113,8 @@ class GpuPsGraphTable
   NeighborSampleResult graph_neighbor_sample(int gpu_id,
                                              uint64_t *key,
                                              int sample_size,
-                                             int len);
+                                             int len,
+                                             int neighbor_size_limit);
   NeighborSampleResult graph_neighbor_sample_v2(int gpu_id,
                                                 int idx,
                                                 uint64_t *key,

@@ -1115,7 +1115,7 @@ int GraphDataGenerator::GenerateBatch() {
 
   cudaStreamSynchronize(train_stream_);
   if (!conf_.gpu_graph_training) return 1;
-  if (!conf_.sage_mode && ins_buf_pair_len_[0] != 0) {
+  if (!conf_.sage_mode) {
     ins_buf_pair_len_[0] -= total_instance / 2;
   }
   return 1;
@@ -2674,7 +2674,7 @@ int FillWalkBuf(const std::vector<uint64_t> &h_device_keys_len,
   // 获取全局采样状态
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   auto &type_to_index = gpu_graph_ptr->get_graph_type_to_index();
-  auto &edge_neighbor_size_limit = gpu_graph_ptr->get_neighbor_size_limit();
+  auto &edge_neighbor_size_limit = gpu_graph_ptr->get_type_to_neighbor_limit();
   auto &cursor = gpu_graph_ptr->cursor_[conf.thread_id];
   size_t node_type_len = first_node_type.size();
   int remain_size = conf.buf_size - conf.walk_degree *
@@ -3073,7 +3073,7 @@ int FillWalkBufMultiPath(
 
   // 获取全局采样状态
   auto &cur_metapath = gpu_graph_ptr->cur_metapath_;
-  auto &edge_neighbor_size_limit = gpu_graph_ptr->get_neighbor_size_limit();
+  auto &edge_neighbor_size_limit = gpu_graph_ptr->get_type_to_neighbor_limit();
   auto &path = gpu_graph_ptr->cur_parse_metapath_;
   auto &cur_metapath_start = gpu_graph_ptr->cur_metapath_start_[conf.gpuid];
   auto &type_to_index = gpu_graph_ptr->get_graph_type_to_index();

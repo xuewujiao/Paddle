@@ -769,7 +769,7 @@ class GraphTable : public Table {
   std::vector<std::vector<uint64_t>> graph_type_keys_;
   std::unordered_map<int, int> type_to_index_;
   robin_hood::unordered_set<uint64_t> unique_all_edge_keys_;
-  std::unordered_map<int, int> edge_neighbor_limit_size;
+  std::unordered_map<int, int> type_to_neighbor_limit_;
 
   std::vector<std::vector<GraphShard *>> edge_shards, feature_shards,
       node_shards;
