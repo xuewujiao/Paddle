@@ -718,7 +718,7 @@ int GraphDataGenerator::FillGraphIdShowClkTensor(int uniq_instance,
                     cudaMemcpyDeviceToDevice,
                     train_stream_);
 
-    if (conf_.enable_pair_label) {  // do not consider about pair label currently.
+    if (conf_.enable_pair_label) {
       pair_label_ptr_ = feed_vec_[feed_vec_idx++]->mutable_data<int32_t>(
               {total_instance / 2}, this->place_);
       int32_t *pair_label_buf =
@@ -1224,16 +1224,24 @@ int GraphDataGenerator::GenerateBatch() {
     }
     //adapt for float feature 
     if (conf_.slot_num > 0) {
-      int conf_slot_num = conf_.slot_num;
-      int fake_accumulate_num = 1;
-      if (conf_.accumulate_num >= 2) {
-        conf_slot_num /= 2;
-        fake_accumulate_num = 2;
-      }
-      for (int accum = 0; accum < fake_accumulate_num; accum++) {
-        for (int i = 0; i < conf_slot_num; ++i) {
-          if ((*feed_info_)[feed_vec_idx + 2 * i].type[0] == 'u') {
+      if (conf_.accumulate_num == 1) {
+        for (int i = 0; i < conf_.slot_num; ++i) {
+          if ((*feed_info_)[feed_vec_idx + 2 * i ].type[0] == 'u') {
             feed_vec_[feed_vec_idx + 2 * i]->set_lod(lod);
+          }
+        }
+      } else {
+        int fake_accumulate_num = 2;
+        for (int accum = 0; accum < fake_accumulate_num; accum++) {
+          offset_.clear();
+          offset_.push_back(0);
+          offset_.push_back(uniq_instance_vec_[sage_batch_count_ * 2 + 1 - accum]);
+          Lod lod{offset_};
+          feed_vec_idx += accum * conf_.slot_num / 2;
+          for (int i = 0; i < conf_.slot_num / 2; ++i) {
+            if ((*feed_info_)[feed_vec_idx + 2 * i ].type[0] == 'u') {
+              feed_vec_[feed_vec_idx + 2 * i]->set_lod(lod);
+            }
           }
         }
       }
