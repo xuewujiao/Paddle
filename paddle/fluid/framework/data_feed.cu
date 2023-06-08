@@ -1238,6 +1238,7 @@ int GraphDataGenerator::GenerateBatch() {
   }
   LoD lod2{offset_};
 
+  VLOG(0) << "Begin fill lod info";
   if (conf_.accumulate_num == 1) {
     for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
             ++tensor_pair_idx) {
@@ -1273,7 +1274,7 @@ int GraphDataGenerator::GenerateBatch() {
       }
     }
   }
-
+  VLOG(0) << "Finish fill lod info";
   cudaStreamSynchronize(train_stream_);
   if (!conf_.gpu_graph_training) return 1;
   if (!conf_.sage_mode) {
@@ -1675,7 +1676,7 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num, int te
     }
   } else {
     // set tensor_pair_idx = 0
-    feed_vec_idx = fake_accumulate_num * 3 + accum * conf_slot_num;
+    feed_vec_idx = fake_accumulate_num * 3 + accum * conf_.slot_num;
   }
 
   VLOG(0) << "FillSlot, feed_vec_idx: " << feed_vec_idx; 
