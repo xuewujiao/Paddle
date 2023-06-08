@@ -823,12 +823,13 @@ int GraphDataGenerator::FillGraphIdShowClkTensor(int uniq_instance,
 }
 
 int GraphDataGenerator::FillGraphIdShowClkTensorAccum(int index) {
-  VLOG(0) << "feed_vec len: " << feed_vec_.size()
+  VLOG(0) << conf_.gpuid
+          << " feed_vec len: " << feed_vec_.size()
           << " slot_num: " << conf_.slot_num
-          << " tensor_num_of_one_pair: " << conf_.tensor_num_of_one_pair
           << " index: " << index;
 
-  VLOG(0) << "Begin fill show, clk and id";
+  VLOG(0) << conf_.gpuid
+          << "Begin fill show, clk and id";
   int fake_accumulate_num = 2;
   for (int accum = 0; accum < fake_accumulate_num; accum++) {
     int uniq_instance = uniq_instance_vec_[2 * index + 1 - accum];
@@ -853,16 +854,17 @@ int GraphDataGenerator::FillGraphIdShowClkTensorAccum(int index) {
                     cudaMemcpyDeviceToDevice,
                     train_stream_);
     cudaStreamSynchronize(train_stream_);
-    VLOG(0) << "finish fill show clk and id, round: " << accum;
+    VLOG(0) << conf_.gpuid << " finish fill show clk and id, round: " << accum;
   }
 
-  VLOG(0) << "Begin fill graph holder tensor";
+  VLOG(0) << conf_.gpuid << " Begin fill graph holder tensor";
   for (int accum = 0; accum < fake_accumulate_num; accum++) {
     int feed_vec_idx = 3 * fake_accumulate_num + 
                        conf_.slot_num * 2 + 
                        accum * conf_.tensor_num_of_graph_and_index;
-    VLOG(0) << "accum: " << accum
-            << "feed_vec_idx: " << feed_vec_idx;
+    VLOG(0) << conf_.gpuid
+            << " accum: " << accum
+            << " feed_vec_idx: " << feed_vec_idx;
     int new_index = index * 2 + 1 - accum;
     int uniq_instance = uniq_instance_vec_[new_index];
     int total_instance = total_instance_vec_[new_index];
@@ -932,7 +934,8 @@ int GraphDataGenerator::FillGraphIdShowClkTensorAccum(int index) {
       }
     } // end for (int i = 0; i < len_samples; i++) {
 
-    VLOG(0) << "Begin fill final_index, feed_vec_idx: " << feed_vec_idx;
+    VLOG(0) << conf_.gpuid
+            << " Begin fill final_index, feed_vec_idx: " << feed_vec_idx;
     index_tensor_ptr_ = feed_vec_[feed_vec_idx++]->mutable_data<int>(
         {total_instance}, this->place_);
     cudaMemcpyAsync(index_tensor_ptr_,
@@ -940,6 +943,7 @@ int GraphDataGenerator::FillGraphIdShowClkTensorAccum(int index) {
                     sizeof(int) * total_instance,
                     cudaMemcpyDeviceToDevice,
                     train_stream_);
+    cudaStreamSynchronize(train_stream_);
   } // end for (int accum = 0; accum < fake_accumulate_num;
   
   return 0;
@@ -1221,39 +1225,50 @@ int GraphDataGenerator::GenerateBatch() {
     if (conf_.accumulate_num == 1) { 
       offset_.push_back(uniq_instance_vec_[sage_batch_count_]);
     } else {
-      offset_.push_back(uniq_instance_vec_[sage_batch_count_ * 2]);
+      offset_.push_back(uniq_instance_vec_[sage_batch_count_ * 2 + 1]);
     }
     sage_batch_count_ += 1;
   }
   LoD lod{offset_};
-  for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
-          ++tensor_pair_idx) {
-    int feed_vec_idx = 2 + tensor_pair_idx * conf_.tensor_num_of_one_pair;
-    feed_vec_[feed_vec_idx++]->set_lod(lod); // id
-    if (conf_.enable_pair_label) {
-      feed_vec_idx++;
-    }
-    //adapt for float feature 
-    if (conf_.slot_num > 0) {
-      if (conf_.accumulate_num == 1) {
+
+  if (conf_.accumulate_num >= 2) {
+    offset_.clear();
+    offset_.push_back(0);
+    offset_.push_back(uniq_instance_vec_[sage_batch_count_ * 2]);
+  }
+  LoD lod2{offset_};
+
+  if (conf_.accumulate_num == 1) {
+    for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
+            ++tensor_pair_idx) {
+      int feed_vec_idx = 2 + tensor_pair_idx * conf_.tensor_num_of_one_pair;
+      feed_vec_[feed_vec_idx++]->set_lod(lod);
+      if (conf_.enable_pair_label) {
+        feed_vec_idx++;
+      }
+      //adapt for float feature 
+      if (conf_.slot_num > 0) {
         for (int i = 0; i < conf_.slot_num; ++i) {
-          if ((*feed_info_)[feed_vec_idx + 2 * i ].type[0] == 'u') {
+          if ((*feed_info_)[feed_vec_idx + 2 * i].type[0] == 'u') {
             feed_vec_[feed_vec_idx + 2 * i]->set_lod(lod);
           }
         }
-      } else {
-        int fake_accumulate_num = 2;
-        for (int accum = 0; accum < fake_accumulate_num; accum++) {
-          offset_.clear();
-          offset_.push_back(0);
-          offset_.push_back(uniq_instance_vec_[sage_batch_count_ * 2 + 1 - accum]);
-          LoD lod{offset_};
-          feed_vec_idx += accum * conf_.slot_num / 2;
-          for (int i = 0; i < conf_.slot_num / 2; ++i) {
-            if ((*feed_info_)[feed_vec_idx + 2 * i ].type[0] == 'u') {
-              feed_vec_[feed_vec_idx + 2 * i]->set_lod(lod);
-            }
-          }
+      }
+    }
+  } else {
+    feed_vec_[2]->set_lod(lod);  // id0
+    feed_vec_[5]->set_lod(lod2); // id1
+    if (conf_.slot_num > 0) {
+      int feed_vec_idx = 6;
+      for (int i = 0; i < conf_.slot_num / 2; i++) {
+        if ((*feed_info_)[feed_vec_idx + 2 * i].type[0] == 'u') {
+          feed_vec_[feed_vec_idx + 2 * i]->set_lod(lod);
+        }
+      }
+      feed_vec_idx += conf_.slot_num;
+      for (int i = 0; i < conf_.slot_num / 2; i++) {
+        if ((*feed_info_)[feed_vec_idx + 2 * i].type[0] == 'u') {
+          feed_vec_[feed_vec_idx + 2 * i]->set_lod(lod2);
         }
       }
     }
@@ -1614,6 +1629,7 @@ void FillOneStep(
 
 int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num, int tensor_pair_idx,
                                         int accum) {
+  VLOG(0) << conf_.gpuid << " FillSlotFeature";
   platform::CUDADeviceGuard guard(conf_.gpuid);
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   std::shared_ptr<phi::Allocation> d_feature_list;
@@ -1661,6 +1677,8 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num, int te
     // set tensor_pair_idx = 0
     feed_vec_idx = fake_accumulate_num * 3 + accum * conf_slot_num;
   }
+
+  VLOG(0) << "FillSlot, feed_vec_idx: " << feed_vec_idx; 
 
   if (fea_num == 0) {
     int64_t default_lod = 1;
@@ -1931,6 +1949,7 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num, int te
     }
   }
 
+  VLOG(0) << conf_.gpuid << " Finish FillSlotFeature";
   return 0;
 }
 
@@ -4217,8 +4236,12 @@ void GraphDataGenerator::AllocResource(
       }
     }
 
-    conf_.slot_num = (conf_.tensor_num_of_one_pair - 1 - tensor_num_of_one_subgraph) / 2;
-    assert((1 + conf_.slot_num * 2 + tensor_num_of_one_subgraph) == conf_.tensor_num_of_one_pair);
+    if (conf_.accumulate_num == 1) {
+      conf_.slot_num = (conf_.tensor_num_of_one_pair - 1 - tensor_num_of_one_subgraph) / 2;
+      assert((1 + conf_.slot_num * 2 + tensor_num_of_one_subgraph) == conf_.tensor_num_of_one_pair);
+    } else {
+      conf_.slot_num = (feed_vec.size() - tensor_num_of_one_subgraph - 6) / 2;
+    }
     VLOG(1) << "tensor_num_of_one_pair[" << conf_.tensor_num_of_one_pair
         << "] tensor_num_of_one_sample[" << tensor_num_of_one_sample
         << "] tensor_num_of_one_subgraph[" << tensor_num_of_one_subgraph << "]";
