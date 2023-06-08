@@ -1644,7 +1644,7 @@ def _append_backward_vars_(block, start_op_idx, grad_to_var, grad_info_map):
         ]
 
         # If the outputs of grad op is empty, just remove it
-        if not outputs:
+        if not outputs and op_desc.type() != "py_func": 
             ops_to_remove.append(op_idx)
             continue
         else:
