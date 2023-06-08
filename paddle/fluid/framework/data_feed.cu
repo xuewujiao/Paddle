@@ -826,35 +826,45 @@ int GraphDataGenerator::FillGraphIdShowClkTensorAccum(int index) {
   VLOG(0) << "feed_vec len: " << feed_vec_.size()
           << " slot_num: " << conf_.slot_num
           << " tensor_num_of_one_pair: " << conf_.tensor_num_of_one_pair
-          << " index: " << index; 
- 
-  int uniq_instance = uniq_instance_vec_[2 * index];
-  show_tensor_ptr_ =
-      feed_vec_[0]->mutable_data<int64_t>({uniq_instance}, this->place_);
-  GraphFillCVMKernel<<<GET_BLOCKS(uniq_instance),
-                       CUDA_NUM_THREADS,
-                       0,
-                       train_stream_>>>(show_tensor_ptr_, uniq_instance);
-  clk_tensor_ptr_ =
-      feed_vec_[1]->mutable_data<int64_t>({uniq_instance}, this->place_);
-  GraphFillCVMKernel<<<GET_BLOCKS(uniq_instance),
-                       CUDA_NUM_THREADS,
-                       0,
-                       train_stream_>>>(clk_tensor_ptr_, uniq_instance);
+          << " index: " << index;
 
-  id_tensor_ptr_ = feed_vec_[2]->mutable_data<int64_t>(
-                {uniq_instance, 1}, this->place_);
-  cudaMemcpyAsync(id_tensor_ptr_,
-                  final_sage_nodes_vec_[2 * index]->ptr(),
-                  sizeof(int64_t) * uniq_instance,
-                  cudaMemcpyDeviceToDevice,
-                  train_stream_);
-
+  VLOG(0) << "Begin fill show, clk and id";
   int fake_accumulate_num = 2;
   for (int accum = 0; accum < fake_accumulate_num; accum++) {
-    int feed_vec_idx = 3 + conf_.slot_num * 2 + accum * conf_.tensor_num_of_graph_and_index;
+    int uniq_instance = uniq_instance_vec_[2 * index + 1 - accum];
+    show_tensor_ptr_ =
+       feed_vec_[3 * accum]->mutable_data<int64_t>({uniq_instance}, this->place_);
+    GraphFillCVMKernel<<<GET_BLOCKS(uniq_instance),
+                         CUDA_NUM_THREADS,
+                         0,
+                         train_stream_>>>(show_tensor_ptr_, uniq_instance);
+    clk_tensor_ptr_ =
+        feed_vec_[3 * accum + 1]->mutable_data<int64_t>({uniq_instance}, this->place_);
+    GraphFillCVMKernel<<<GET_BLOCKS(uniq_instance),
+                         CUDA_NUM_THREADS,
+                         0,
+                         train_stream_>>>(clk_tensor_ptr_, uniq_instance);
+
+    id_tensor_ptr_ = feed_vec_[3 * accum + 2]->mutable_data<int64_t>(
+                  {uniq_instance, 1}, this->place_);
+    cudaMemcpyAsync(id_tensor_ptr_,
+                    final_sage_nodes_vec_[2 * index + 1 - accum]->ptr(),
+                    sizeof(int64_t) * uniq_instance,
+                    cudaMemcpyDeviceToDevice,
+                    train_stream_);
+    cudaStreamSynchronize(train_stream_);
+    VLOG(0) << "finish fill show clk and id, round: " << accum;
+  }
+
+  VLOG(0) << "Begin fill graph holder tensor";
+  for (int accum = 0; accum < fake_accumulate_num; accum++) {
+    int feed_vec_idx = 3 * fake_accumulate_num + 
+                       conf_.slot_num * 2 + 
+                       accum * conf_.tensor_num_of_graph_and_index;
+    VLOG(0) << "accum: " << accum
+            << "feed_vec_idx: " << feed_vec_idx;
     int new_index = index * 2 + 1 - accum;
-    uniq_instance = uniq_instance_vec_[new_index];
+    int uniq_instance = uniq_instance_vec_[new_index];
     int total_instance = total_instance_vec_[new_index];
     int len_samples = conf_.samples.size();
     int *num_nodes_tensor_ptr_[len_samples];
@@ -922,6 +932,7 @@ int GraphDataGenerator::FillGraphIdShowClkTensorAccum(int index) {
       }
     } // end for (int i = 0; i < len_samples; i++) {
 
+    VLOG(0) << "Begin fill final_index, feed_vec_idx: " << feed_vec_idx;
     index_tensor_ptr_ = feed_vec_[feed_vec_idx++]->mutable_data<int>(
         {total_instance}, this->place_);
     cudaMemcpyAsync(index_tensor_ptr_,
@@ -1182,7 +1193,7 @@ int GraphDataGenerator::GenerateBatch() {
                                  total_instance_vec_[sage_batch_count_],
                                  sage_batch_count_);
       } else {
-        VLOG(0) << "sage_batch_num: " << sage_batch_count_;
+        VLOG(0) << "sage_batch_count: " << sage_batch_count_;
         FillGraphIdShowClkTensorAccum(sage_batch_count_);
       }
     }
@@ -1236,7 +1247,7 @@ int GraphDataGenerator::GenerateBatch() {
           offset_.clear();
           offset_.push_back(0);
           offset_.push_back(uniq_instance_vec_[sage_batch_count_ * 2 + 1 - accum]);
-          Lod lod{offset_};
+          LoD lod{offset_};
           feed_vec_idx += accum * conf_.slot_num / 2;
           for (int i = 0; i < conf_.slot_num / 2; ++i) {
             if ((*feed_info_)[feed_vec_idx + 2 * i ].type[0] == 'u') {
@@ -1630,20 +1641,25 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num, int te
   // num of slot feature
   int slot_num = conf_.slot_num - float_slot_num_;
   int conf_slot_num = conf_.slot_num;
+  int fake_accumulate_num = 1;
   if (conf_.accumulate_num >= 2) {
     slot_num /= 2;
     conf_slot_num /= 2;
+    fake_accumulate_num = 2;
   }
   int64_t *slot_tensor_ptr_[slot_num];
   int64_t *slot_lod_tensor_ptr_[slot_num];
 
-  int feed_vec_idx = 2 + tensor_pair_idx * conf_.tensor_num_of_one_pair;
-  ++feed_vec_idx;
-  if (conf_.accumulate_num >= 2) {
-    feed_vec_idx += accum * conf_slot_num;
-  }
-  if (conf_.enable_pair_label) {
+  int feed_vec_idx = 0;
+  if (fake_accumulate_num == 1) {
+    feed_vec_idx = 2 + tensor_pair_idx * conf_.tensor_num_of_one_pair;
     ++feed_vec_idx;
+    if (conf_.enable_pair_label) {
+      ++feed_vec_idx;
+    }
+  } else {
+    // set tensor_pair_idx = 0
+    feed_vec_idx = fake_accumulate_num * 3 + accum * conf_slot_num;
   }
 
   if (fea_num == 0) {
@@ -3683,6 +3699,9 @@ void GraphDataGenerator::DoSageForTrain() {
       sage_batch_num_ += 1;
     }
   } // end while (is_sage_pass_continue)
+
+  VLOG(0) << "After sample, sage_batch_num: " << sage_batch_num_
+          << " size of uniq_instance_vec: " << uniq_instance_vec_.size();
 }
 
 void GraphDataGenerator::DoSageForInfer() {
