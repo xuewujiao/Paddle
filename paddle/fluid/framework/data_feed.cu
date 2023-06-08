@@ -823,13 +823,6 @@ int GraphDataGenerator::FillGraphIdShowClkTensor(int uniq_instance,
 }
 
 int GraphDataGenerator::FillGraphIdShowClkTensorAccum(int index) {
-  VLOG(0) << conf_.gpuid
-          << " feed_vec len: " << feed_vec_.size()
-          << " slot_num: " << conf_.slot_num
-          << " index: " << index;
-
-  VLOG(0) << conf_.gpuid
-          << "Begin fill show, clk and id";
   int fake_accumulate_num = 2;
   for (int accum = 0; accum < fake_accumulate_num; accum++) {
     int uniq_instance = uniq_instance_vec_[2 * index + 1 - accum];
@@ -854,17 +847,12 @@ int GraphDataGenerator::FillGraphIdShowClkTensorAccum(int index) {
                     cudaMemcpyDeviceToDevice,
                     train_stream_);
     cudaStreamSynchronize(train_stream_);
-    VLOG(0) << conf_.gpuid << " finish fill show clk and id, round: " << accum;
   }
 
-  VLOG(0) << conf_.gpuid << " Begin fill graph holder tensor";
   for (int accum = 0; accum < fake_accumulate_num; accum++) {
     int feed_vec_idx = 3 * fake_accumulate_num + 
                        conf_.slot_num * 2 + 
                        accum * conf_.tensor_num_of_graph_and_index;
-    VLOG(0) << conf_.gpuid
-            << " accum: " << accum
-            << " feed_vec_idx: " << feed_vec_idx;
     int new_index = index * 2 + 1 - accum;
     int uniq_instance = uniq_instance_vec_[new_index];
     int total_instance = total_instance_vec_[new_index];
@@ -934,8 +922,6 @@ int GraphDataGenerator::FillGraphIdShowClkTensorAccum(int index) {
       }
     } // end for (int i = 0; i < len_samples; i++) {
 
-    VLOG(0) << conf_.gpuid
-            << " Begin fill final_index, feed_vec_idx: " << feed_vec_idx;
     index_tensor_ptr_ = feed_vec_[feed_vec_idx++]->mutable_data<int>(
         {total_instance}, this->place_);
     cudaMemcpyAsync(index_tensor_ptr_,
@@ -1197,7 +1183,6 @@ int GraphDataGenerator::GenerateBatch() {
                                  total_instance_vec_[sage_batch_count_],
                                  sage_batch_count_);
       } else {
-        VLOG(0) << "sage_batch_count: " << sage_batch_count_;
         FillGraphIdShowClkTensorAccum(sage_batch_count_);
       }
     }
@@ -1238,7 +1223,6 @@ int GraphDataGenerator::GenerateBatch() {
   }
   LoD lod2{offset_};
 
-  VLOG(0) << "Begin fill lod info";
   if (conf_.accumulate_num == 1) {
     for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
             ++tensor_pair_idx) {
@@ -1274,7 +1258,6 @@ int GraphDataGenerator::GenerateBatch() {
       }
     }
   }
-  VLOG(0) << "Finish fill lod info";
   cudaStreamSynchronize(train_stream_);
   if (!conf_.gpu_graph_training) return 1;
   if (!conf_.sage_mode) {
@@ -1630,7 +1613,6 @@ void FillOneStep(
 
 int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num, int tensor_pair_idx,
                                         int accum) {
-  VLOG(0) << conf_.gpuid << " FillSlotFeature";
   platform::CUDADeviceGuard guard(conf_.gpuid);
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   std::shared_ptr<phi::Allocation> d_feature_list;
@@ -1678,8 +1660,6 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num, int te
     // set tensor_pair_idx = 0
     feed_vec_idx = fake_accumulate_num * 3 + accum * conf_.slot_num;
   }
-
-  VLOG(0) << "FillSlot, feed_vec_idx: " << feed_vec_idx; 
 
   if (fea_num == 0) {
     int64_t default_lod = 1;
@@ -1950,7 +1930,6 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num, int te
     }
   }
 
-  VLOG(0) << conf_.gpuid << " Finish FillSlotFeature";
   return 0;
 }
 
@@ -2644,7 +2623,7 @@ std::shared_ptr<phi::Allocation> GenerateSampleGraph(
     std::vector<std::shared_ptr<phi::Allocation>> *edge_type_graph_ptr,
     const paddle::platform::Place &place,
     cudaStream_t stream) {
-  VLOG(0) << conf.gpuid << " Get Unique Nodes";
+  VLOG(1) << conf.gpuid << " Get Unique Nodes";
 
   auto inverse = memory::AllocShared(place, len * sizeof(uint32_t),
                                 phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
@@ -2661,7 +2640,7 @@ std::shared_ptr<phi::Allocation> GenerateSampleGraph(
                              stream);
   int len_samples = conf.samples.size();
 
-  VLOG(0) << conf.gpuid << " Sample Neighbors and Reindex";
+  VLOG(1) << conf.gpuid << " Sample Neighbors and Reindex";
   std::vector<int> edges_split_num;
   std::vector<std::shared_ptr<phi::Allocation>> final_nodes_vec;
   std::vector<std::shared_ptr<phi::Allocation>> graph_edges;
@@ -3627,6 +3606,7 @@ void GraphDataGenerator::DoSageForTrain() {
       ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_[tensor_pair_idx]->ptr());
       ins_cursor = ins_buf + ins_buf_pair_len_[tensor_pair_idx] * 2 - total_instance;
       int mini_batch_size = total_instance / conf_.accumulate_num;
+      if (mini_batch_size % 2 == 1) { mini_batch_size += 1; }
 
       // fill first graph holder
       auto final_sage_nodes = GenerateSampleGraph(ins_cursor,
@@ -3652,11 +3632,6 @@ void GraphDataGenerator::DoSageForTrain() {
                   table_,
                   &host_vec_,
                   sample_stream_);
-
-      VLOG(0) << "mini_batch_size: " << mini_batch_size
-              << " total_instance: " << total_instance
-              << " accumulate_num: " << conf_.accumulate_num
-              << " uniq_instance: " << uniq_instance;
 
       // fill second graph holder
       if (mini_batch_size != total_instance) {
@@ -3720,8 +3695,6 @@ void GraphDataGenerator::DoSageForTrain() {
     }
   } // end while (is_sage_pass_continue)
 
-  VLOG(0) << "After sample, sage_batch_num: " << sage_batch_num_
-          << " size of uniq_instance_vec: " << uniq_instance_vec_.size();
 }
 
 void GraphDataGenerator::DoSageForInfer() {
@@ -4364,7 +4337,6 @@ void GraphDataGenerator::SetConfig(
   conf_.weighted_sample = graph_config.weighted_sample();
   conf_.return_weight = graph_config.return_weight();
   conf_.accumulate_num = graph_config.accumulate_num();
-  VLOG(0) << "accumulate_num: " << conf_.accumulate_num;
 
   epoch_finish_ = false;
   VLOG(1) << "Confirm GraphConfig, walk_degree : " << conf_.walk_degree
