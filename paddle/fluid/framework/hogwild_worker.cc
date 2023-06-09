@@ -33,6 +33,7 @@ limitations under the License. */
 #if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
 #include "paddle/fluid/framework/fleet/ps_gpu_wrapper.h"
 #endif
+#include "paddle/utils/string/string_helper.h"
 #include "paddle/fluid/framework/program_utils.h"
 
 DECLARE_bool(enable_exit_when_partial_worker);
@@ -46,50 +47,97 @@ PADDLE_DEFINE_EXPORTED_int32(
     gpugraph_offload_param_stat,
     0,
     "enable offload param stat, default 0");
+PADDLE_DEFINE_EXPORTED_string(
+    gpugraph_offload_param_extends,
+    ".w_0_moment,.b_0_moment",
+    "offload param extends list");
+
 namespace paddle {
 namespace framework {
 
 std::atomic<bool> HogwildWorker::quit_flag_(false);
 Barrier g_barrier;
 
-static void Tensor2Pinned(phi::DenseTensor *self_tensor) {
 #if defined(PADDLE_WITH_CUDA)
-  const size_t need_allocate_size = self_tensor->memory_size();
-  void *data_ptr = self_tensor->data();
-  auto holder = memory::AllocShared(platform::CUDAPinnedPlace(), need_allocate_size);
-  memcpy(holder->ptr(), data_ptr, need_allocate_size);
-  self_tensor->ResetHolderWithType(holder, self_tensor->dtype());
-#endif
+template<typename TStream>
+inline void Tensor2Pinned(phi::DenseTensor *tensor, const TStream &stream) {
+  const size_t mem_len = tensor->memory_size();
+  auto place = platform::CUDAPinnedPlace();
+  auto holder = memory::AllocShared(place, mem_len);
+  memory::Copy(place, holder->ptr(), tensor->place(), tensor->data(), mem_len, stream);
+  tensor->ResetHolderWithType(holder, tensor->dtype());
 }
-
+template<typename TStream>
+inline void CopyTensor(const phi::DenseTensor &src_tensor,
+    const platform::Place& place,
+    phi::DenseTensor *dest_tensor,
+    const TStream &stream) {
+  size_t mem_len = src_tensor.memory_size();
+  dest_tensor->Resize(src_tensor.dims());
+  dest_tensor->set_layout(src_tensor.layout());
+  auto dst_ptr = dest_tensor->mutable_data(place, src_tensor.type(), mem_len);
+  memory::Copy(place, dst_ptr, src_tensor.place(), src_tensor.data(), mem_len, stream);
+}
+#endif
+template<typename TStream>
 void HogwildWorker::OffLoadVarInfo::CopyInputs(const Scope* root,
                     const platform::Place& place,
-                    Scope* scope) {
+                    Scope* scope,
+                    const TStream &stream) {
+#if defined(PADDLE_WITH_CUDA)
+  if (!need_copy_inputs) {
+    return;
+  }
   total_param_len = 0;
   for (auto& name : persistable_inputs) {
     auto src_var = root->FindLocalVar(name);
-    CHECK(src_var != nullptr) << "name=" << name << " is nullptr";
+    if (src_var == nullptr) {
+      continue;
+    }
     auto& src_tensor = src_var->Get<phi::DenseTensor>();
-    CHECK(src_tensor.IsInitialized())
-        << "name=" << name << " not IsInitialized";
+    if (!src_tensor.IsInitialized()) {
+      continue;
+    }
     auto dest_var = scope->FindLocalVar(name);
     CHECK(dest_var != nullptr) << "dest name=" << name << " is nullptr";
     auto* dest_tensor = dest_var->GetMutable<phi::DenseTensor>();
-    TensorCopy(src_tensor, place, dest_tensor);
-    total_param_len += src_tensor.memory_size();
+    if (!dest_tensor->IsInitialized()) {
+      CopyTensor(src_tensor, place, dest_tensor, stream);
+      total_param_len += src_tensor.memory_size();
+    }
   }
+#endif
 }
-void HogwildWorker::OffLoadVarInfo::GCInputsVar(Scope* root, Scope* scope) {
+template<typename TStream>
+void HogwildWorker::OffLoadVarInfo::BackUpInputs(
+    Scope* root_scope, Scope* scope,
+    const TStream &stream) {
+#if defined(PADDLE_WITH_CUDA)
+  if (!need_backup_inputs) {
+    platform::GpuStreamSync(stream);
+    return;
+  }
   for (auto& name : persistable_inputs) {
     auto var = scope->FindLocalVar(name);
     if (var == nullptr) {
       continue;
     }
     auto src_tensor = var->GetMutable<phi::DenseTensor>();
-    auto root_tensor = root->FindLocalVar(name)->GetMutable<phi::DenseTensor>();
-    TensorCopy(*src_tensor, root_tensor->place(), root_tensor);
-    src_tensor->MoveMemoryHolder().reset();
+    auto root_var = root_scope->FindLocalVar(name);
+    if (root_var == nullptr) {
+      root_var = root_scope->Var(name);
+      auto root_tensor = root_var->GetMutable<phi::DenseTensor>();
+      CopyTensor(*src_tensor, platform::CUDAPinnedPlace(), root_tensor, stream);
+    } else {
+      auto root_tensor = root_var->GetMutable<phi::DenseTensor>();
+      if (root_tensor->IsInitialized() &&
+          !platform::is_gpu_place(root_tensor->place())) {
+        CopyTensor(*src_tensor, root_tensor->place(), root_tensor, stream);
+      }
+    }
   }
+  platform::GpuStreamSync(stream);
+#endif
 }
 
 void HogwildWorker::Initialize(const TrainerDesc &desc) {
@@ -106,6 +154,13 @@ void HogwildWorker::Initialize(const TrainerDesc &desc) {
     std::string name = param_.stat_var_names(i);
     stat_var_name_map_[name] = 1;
     skip_vars_.push_back(name);
+  }
+  is_offload_communication_ = (FLAGS_gpugraph_offload_param_stat & 0x01);
+  is_offload_param_ = (FLAGS_gpugraph_offload_param_stat & 0x02);
+  // split extends
+  offload_exts_ = paddle::string::split_string(FLAGS_gpugraph_offload_param_extends, ",");
+  if (is_offload_param_ && !offload_exts_.empty()) {
+    VLOG(0) << "need offload extends=" << paddle::string::join_strings(offload_exts_, ",");
   }
 }
 int HogwildWorker::IsParameter(const std::string &name, bool full_match) {
@@ -151,14 +206,20 @@ void HogwildWorker::BuildShardingDepends(const ProgramDesc &program) {
 #if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
   auto gpu_ps = PSGPUWrapper::GetInstance();
   nccl_rank_id_ = gpu_ps->GetNCCLRankId(nccl_rank_id_);
+  is_multi_node_ = (gpu_ps->GetRankNum() > 1);
 #endif
 
   auto &block = program.Block(0);
   auto all_desc = block.AllOps();
 
+  bool is_has_sync_comm_stream = false;
   for (auto &op_desc : all_desc) {
     // broadcast op
     if (op_desc->Type() != "c_broadcast") {
+      // has sync comm stream
+      if (op_desc->Type() == "c_sync_comm_stream") {
+        is_has_sync_comm_stream = true;
+      }
       continue;
     }
     int root_id = op_desc->GetAttrIfExists<int>("root");
@@ -187,6 +248,8 @@ void HogwildWorker::BuildShardingDepends(const ProgramDesc &program) {
       }
     }
   }
+  // adjust op order need sync comm stream op
+  enable_adjust_op_order_ = (is_has_sync_comm_stream && FLAGS_enable_adjust_op_order);
   if (params2rootid_.empty()) {
     return;
   }
@@ -209,22 +272,57 @@ void HogwildWorker::BuildShardingDepends(const ProgramDesc &program) {
       remove_vars_.insert(var->Name());
     }
   }
+  int total_broadcast = 0;
+  int remove_broadcast = 0;
+  std::multiset<std::string> param2refs;
   for (auto &op_desc : all_desc) {
     bool find = false;
-    for (auto &o : op_desc->Inputs()) {
-      for (auto &name : o.second) {
-        if (remove_vars_.find(name) == remove_vars_.end()) {
-          continue;
-        }
+    if (is_offload_communication_ && op_desc->Type() == "c_broadcast") {
+      ++total_broadcast;
+      // single node p2p copy
+      if (!is_multi_node_) {
         find = true;
-        break;
+        ++remove_broadcast;
+      } else {
+        for (auto &o : op_desc->Inputs()) {
+          for (auto &name : o.second) {
+            if (param2refs.find(name) != param2refs.end()) {
+              find = true;
+              continue;
+            }
+            param2refs.insert(name);
+          }
+          if (find) {
+            ++remove_broadcast;
+            break;
+          }
+        }
       }
-      if (find) {
-        break;
+    } else {
+      for (auto &o : op_desc->Inputs()) {
+        for (auto &name : o.second) {
+          if (remove_vars_.find(name) == remove_vars_.end()) {
+            continue;
+          }
+          find = true;
+          break;
+        }
+        if (find) {
+          break;
+        }
       }
     }
     if (find) {
       remove_ops_.insert(op_desc);
+    }
+  }
+  // add offload
+  if (is_offload_communication_) {
+    for (auto &it : params2rootid_) {
+      if (it.second == nccl_rank_id_) {
+        continue;
+      }
+      offload_names_.insert(it.first);
     }
   }
 
@@ -261,46 +359,6 @@ void HogwildWorker::BuildShardingDepends(const ProgramDesc &program) {
     }
     dump_fields_ = &shard_dump_fields_;
   }
-  // debug proto
-  if (FLAGS_enable_dump_main_program) {
-    ProgramDesc desc(program);
-    auto new_block = desc.MutableBlock(0);
-    for (auto &name : remove_vars_) {
-      new_block->RemoveVar(name);
-    }
-    for (auto &name : unpersist_vars_) {
-      auto var = new_block->FindVar(name);
-      var->SetPersistable(false);
-      var->SetIsParameter(false);
-    }
-    std::vector<OpDesc *> remove_ops;
-    for (auto &op_desc : new_block->AllOps()) {
-      bool find = false;
-      for (auto &o : op_desc->Inputs()) {
-        for (auto &name : o.second) {
-          if (remove_vars_.find(name) == remove_vars_.end()) {
-            continue;
-          }
-          find = true;
-          break;
-        }
-        if (find) {
-          break;
-        }
-      }
-      if (find) {
-        remove_ops.push_back(op_desc);
-      }
-    }
-    for (auto &op : remove_ops) {
-      new_block->RemoveOpInternal(op);
-    }
-    desc.Flush();
-    char name[512];
-    snprintf(name, sizeof(name), "thread_program_%d", nccl_rank_id_);
-    DumpProgramDescFile(name, desc);
-  }
-
   VLOG(0) << "device id=" << int(place_.GetDeviceId())
           << ", nccl rank=" << nccl_rank_id_
           << ", total param count=" << params2rootid_.size()
@@ -309,7 +367,10 @@ void HogwildWorker::BuildShardingDepends(const ProgramDesc &program) {
           << ", unpersist var count=" << unpersist_vars_.size()
           << ", persist var count=" << persist_param_vars_.size()
           << ", dump param count=" << shard_dump_params_.size()
-          << ", dump fields count=" << shard_dump_fields_.size();
+          << ", dump fields count=" << shard_dump_fields_.size()
+          << ", offload var name count=" << offload_names_.size()
+          << ", total_broadcast=" << total_broadcast
+          << ", remove_broadcast=" << remove_broadcast;
 }
 void HogwildWorker::CreateThreadOperators(const ProgramDesc &program) {
   auto &block = program.Block(0);
@@ -319,7 +380,8 @@ void HogwildWorker::CreateThreadOperators(const ProgramDesc &program) {
   size_t op_index = 0;
   for (auto &op_desc : all_desc) {
     // skip feed fetch op
-    if (op_desc->Type() == "feed" || op_desc->Type() == "fetch") {
+    std::string op_name = op_desc->Type();
+    if (op_name == "feed" || op_name == "fetch") {
       for (auto &o : op_desc->Inputs()) {
         skip_vars_.insert(skip_vars_.end(), o.second.begin(), o.second.end());
       }
@@ -337,20 +399,26 @@ void HogwildWorker::CreateThreadOperators(const ProgramDesc &program) {
     if (need_skip) {
       continue;
     }
-    // skip remove ops
-    if (remove_ops_.find(op_desc) != remove_ops_.end()) {
-      if (FLAGS_enable_adjust_op_order) {
+    // skip remove ops, remove sync
+    if (remove_ops_.find(op_desc) != remove_ops_.end()
+        || op_name == "c_sync_comm_stream") {
+      if (enable_adjust_op_order_) {
         remove_ids.insert(op_index);
       } else {
         continue;
       }
     }
-
-    op_names_.push_back(op_desc->Type());
+    op_names_.push_back(op_name);
     ops_.emplace_back(OpRegistry::CreateOp(*op_desc));
+    // change to device stream
+    if (op_name == "c_broadcast"
+        || op_name == "c_reduce_sum"
+        || op_name == "c_allreduce_sum") {
+      ops_[op_index]->SetAttr("use_calc_stream", true);
+    }
     op_index++;
   }
-  if (FLAGS_enable_adjust_op_order) {
+  if (enable_adjust_op_order_) {
     std::vector<size_t> new_order;
     size_t start_index = 0;
     for (auto &op : ops_) {
@@ -366,6 +434,8 @@ void HogwildWorker::CreateThreadOperators(const ProgramDesc &program) {
     }
 
     if (start_index < ops_.size()) {
+      platform::Timer tm;
+      tm.Start();
       interpreter::DependencyBuilderSimplify depend_builder;
       // depend_builder.Build(ops_, start_index, sharding_mode_);  hbm not safe
       // shoud run in debug model need to fix
@@ -373,14 +443,24 @@ void HogwildWorker::CreateThreadOperators(const ProgramDesc &program) {
       new_order = depend_builder.get_new_exexutor_order();
       std::vector<std::unique_ptr<OperatorBase>> new_ops;
       std::vector<size_t> final_order;
-      for (auto index : new_order) {
+      std::vector<std::string> new_op_names;
+      for (auto &index : new_order) {
         if (remove_ids.count(index) == 0) {
           new_ops.push_back(std::move(ops_[index]));
           final_order.push_back(index);
+          new_op_names.push_back(op_names_[index]);
         }
       }
-      new_order = final_order;
       ops_ = std::move(new_ops);
+      op_names_ = std::move(new_op_names);
+      tm.Pause();
+      // add log
+      VLOG(0) << "device id=" << thread_id_
+              << ", total op size=" << all_desc.size()
+              << ", remove op size=" << remove_ids.size()
+              << ", adjust op size=" << new_order.size()
+              << ", final op size=" << final_order.size()
+              << ", span time=" << tm.ElapsedSec() << "sec";
     }
   }
   operators::PrepareSafeEagerDeletionOnConditionalOpAndConditionalGradOp(
@@ -409,11 +489,19 @@ void HogwildWorker::CreateThreadOperators(const ProgramDesc &program) {
   }
   unused_vars_ =
       GetUnusedVars(block, ops_, skip_vars_, &unpersist_vars_, sharding_mode_);
+  // offload
   size_t offload_cnt = 0;
   // offload adam
   if (!offload_names_.empty()) {
+    std::ostringstream offload_os;
+    std::multiset<std::string> param2refs;
     for (auto &op : ops_) {
+      if (op->Type() == "c_broadcast") {
+        continue;
+      }
       // offload
+      int cnt = 0;
+      bool is_first = false;
       for (auto &o : op->Inputs()) {
         for (auto &name : o.second) {
           if (offload_names_.find(name) == offload_names_.end()) {
@@ -422,10 +510,81 @@ void HogwildWorker::CreateThreadOperators(const ProgramDesc &program) {
           auto dest_var = thread_scope_->Var(name);  // init local var
           CHECK(dest_var != nullptr);
           offload_vars_[op.get()].persistable_inputs.push_back(name);
-          ++offload_cnt;
+          // nccl broadcast param
+          if (is_offload_communication_) {
+            if (param2refs.find(name) == param2refs.end()) {
+              param2refs.insert(name);
+              is_first = true;
+            }
+          }
+          ++cnt;
+        }
+      }
+      offload_cnt += cnt;
+      if (cnt > 0) {
+        int op_role = op->Attr<int>("op_role");
+        auto &op_offload = offload_vars_[op.get()];
+        if (is_first) {
+          // first used single node used p2p copy, multi node used nccl broadcast
+          op_offload.need_copy_inputs = (!is_multi_node_);
+          op_offload.need_backup_inputs = is_multi_node_;
+        } else {
+          // offload adam need backup param to pinned memory
+          if (op_role == static_cast<int>(OpRole::kOptimize)) {
+            op_offload.need_backup_inputs = true;
+          }
+        }
+        // add gc
+        auto it = unused_vars_.find(op.get());
+        if (it != unused_vars_.end()) {
+          for (auto &name : op_offload.persistable_inputs) {
+            if (std::find(it->second.begin(), it->second.end(), name) != it->second.end()) {
+              continue;
+            }
+            it->second.push_back(name);
+          }
+        } else {
+          unused_vars_.insert(std::make_pair(op.get(), op_offload.persistable_inputs));
+        }
+        if (FLAGS_enable_dump_main_program) {
+          offload_os << "count=" << cnt
+              << ", first=" << is_first
+              << ", need copy input=" << op_offload.need_copy_inputs
+              << ", need backup input=" << op_offload.need_backup_inputs
+              << ", " << op->DebugStringEx(thread_scope_) << "\n";
         }
       }
     }
+    if (FLAGS_enable_dump_main_program) {
+      char filename[512] = {0};
+      snprintf(filename, sizeof(filename), "./device_%d_offload.txt", thread_id_);
+      WriteToFile(filename, offload_os.str());
+    }
+  }
+  // debug str
+  if (FLAGS_enable_dump_main_program) {
+    std::ostringstream debug_os;
+    std::ostringstream gc_os;
+    for (auto &op : ops_) {
+      std::string op_str = op->DebugStringEx(thread_scope_);
+      debug_os << op_str << "\n";
+      // add gc
+      auto it = unused_vars_.find(op.get());
+      if (it != unused_vars_.end()) {
+        gc_os << "gc names=[";
+        for (auto &name : it->second) {
+          gc_os << name << ",";
+        }
+        gc_os << "], ";
+        gc_os << op_str << "\n";
+      }
+    }
+    char filename[512] = {0};
+    snprintf(filename, sizeof(filename), "./device_%d_ops.txt", thread_id_);
+    WriteToFile(filename, debug_os.str());
+
+    snprintf(filename, sizeof(filename), "./device_%d_gc.txt", thread_id_);
+    WriteToFile(filename, gc_os.str());
   }
   // debug
   VLOG(0) << "device id=" << thread_id_
@@ -443,17 +602,20 @@ inline void PrintTensor(const std::string &name,
   platform::PrintVar(scope, name, info, &ss);
   std::cout << ss.str() << std::endl;
 }
-static bool IsNeedOffload(const std::string &name) {
-  if (FLAGS_gpugraph_offload_param_stat == 0) {
+bool HogwildWorker::IsNeedOffload(const std::string &name) {
+  if (!is_offload_param_) {
     return false;
   }
-  if (FLAGS_gpugraph_offload_param_stat == 1) {
-    return (name.find(".w_0_moment") != std::string::npos ||
-        name.find(".b_0_moment") != std::string::npos);
-  } else {
-    return (name.find(".w_0") != std::string::npos ||
-            name.find(".b_0") != std::string::npos);
+  if (offload_exts_.empty()) {
+    return false;
   }
+  for (auto &ext : offload_exts_) {
+    if (name.find(ext) == std::string::npos) {
+      continue;
+    }
+    return true;
+  }
+  return false;
 }
 void HogwildWorker::CreateThreadScope(const ProgramDesc &program) {
   auto &block = program.Block(0);
@@ -521,27 +683,20 @@ void HogwildWorker::CreateThreadScope(const ProgramDesc &program) {
         // reset tensor holder
         if (persist_param_vars_.find(name) != persist_param_vars_.end()) {
           // need offload param
+          auto stream = static_cast<phi::GPUContext *>(dev_ctx_)->stream();
           if (IsNeedOffload(name)) {
             // add offload names
             offload_names_.insert(name);
             // offload moment
-            if (platform::is_gpu_place(root_tensor->place())) {
-              phi::DenseTensor cpu_tensor;
-              TensorCopy(*root_tensor, platform::CPUPlace(), &cpu_tensor);
-              root_tensor->MoveMemoryHolder();
-              auto holder = cpu_tensor.MoveMemoryHolder();
-              root_tensor->ResetHolderWithType(holder, root_tensor->dtype());
-            }
-            // convert pinned memory
-            Tensor2Pinned(root_tensor);
+            Tensor2Pinned(root_tensor, stream);
             ++pinned_param;
           } else {
             // copy one device to other device
-            auto stream = static_cast<phi::GPUContext *>(dev_ctx_)->stream();
             auto src_place = root_tensor->place();
             auto holder = root_tensor->MoveMemoryHolder();
-            auto dst_ptr = root_tensor->mutable_data(place_, root_tensor->dtype());
+            auto dst_ptr = root_tensor->mutable_data(place_, root_tensor->dtype(), holder->size());
             memory::Copy(place_, dst_ptr, src_place, holder->ptr(), holder->size(), stream);
+            CHECK(platform::is_gpu_place(root_tensor->place()));
             ++persist_reset;
           }
         } else {
@@ -551,12 +706,12 @@ void HogwildWorker::CreateThreadScope(const ProgramDesc &program) {
           phi::DenseTensor *thread_tensor = ptr->GetMutable<phi::DenseTensor>();
           TensorCopy(*root_tensor, place_, thread_tensor);
           need_copy_vars_.push_back(name);
-          VLOG(0) << "need copy var name=" << name;
+//          VLOG(0) << "need copy var name=" << name;
         }
       } else {
         if (free_param_vars_.find(name) != free_param_vars_.end()) {
           del_var_names.push_back(name);
-          VLOG(0) << "unpersist need delete var name=" << name;
+//          VLOG(0) << "unpersist need delete var name=" << name;
         }
         // sharding vars
         auto *ptr = thread_scope_->Var(name);
@@ -745,7 +900,9 @@ void HogwildWorker::TrainFilesWithProfiler() {
   if (max_memory_size >= 0) {
     gc = CreateGarbageCollector(place_, max_memory_size);
   }
-
+#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
+  auto stream = static_cast<phi::GPUContext *>(dev_ctx_)->stream();
+#endif
   while (1) {
     cur_batch = device_reader_->Next();
 #if defined(PADDLE_WITH_GPU_GRAPH)
@@ -786,15 +943,19 @@ void HogwildWorker::TrainFilesWithProfiler() {
       timeline.Start();
       VLOG(3) << "Going to run op " << op_names_[i];
       auto &op = ops_[i];
+#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
       // offload
       auto it = offload_vars_.find(op.get());
       if (it != offload_vars_.end()) {
-        it->second.CopyInputs(root_scope_, place_, thread_scope_);
+        it->second.CopyInputs(root_scope_, place_, thread_scope_, stream);
       }
+#endif
       op->Run(*thread_scope_, place_);
+#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
       if (it != offload_vars_.end()) {
-        it->second.GCInputsVar(root_scope_, thread_scope_);
+        it->second.BackUpInputs(root_scope_, thread_scope_, stream);
       }
+#endif
 #ifdef PADDLE_WITH_HETERPS
       dev_ctx_->Wait();
 #endif
@@ -905,6 +1066,9 @@ void HogwildWorker::TrainFiles() {
   if (max_memory_size >= 0) {
     gc = CreateGarbageCollector(place_, max_memory_size);
   }
+#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
+  auto stream = static_cast<phi::GPUContext *>(dev_ctx_)->stream();
+#endif
   while (1) {
     cur_batch = device_reader_->Next();
 #if defined(PADDLE_WITH_GPU_GRAPH)
@@ -941,16 +1105,20 @@ void HogwildWorker::TrainFiles() {
       break;
     }
     for (auto &op : ops_) {
+#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
       // offload
       auto it = offload_vars_.find(op.get());
       if (it != offload_vars_.end()) {
-        it->second.CopyInputs(root_scope_, place_, thread_scope_);
+        it->second.CopyInputs(root_scope_, place_, thread_scope_, stream);
       }
+#endif
       op->Run(*thread_scope_, place_);
+#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
       // offload
       if (it != offload_vars_.end()) {
-        it->second.GCInputsVar(root_scope_, thread_scope_);
+        it->second.BackUpInputs(root_scope_, thread_scope_, stream);
       }
+#endif
       if (gc) {
         DeleteUnusedTensors(*thread_scope_, op.get(), unused_vars_, gc.get());
       }

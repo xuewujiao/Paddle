@@ -267,10 +267,16 @@ class HogwildWorker : public CPUWorkerBase {
   struct OffLoadVarInfo {
     std::vector<std::string> persistable_inputs;
     size_t total_param_len = 0;
+    bool need_copy_inputs = true;
+    bool need_backup_inputs = false;
+    template<typename TStream>
     void CopyInputs(const Scope* root,
                     const platform::Place& place,
-                    Scope* scope);
-    void GCInputsVar(Scope* root, Scope* scope);
+                    Scope* scope,
+                    const TStream &stream);
+    template<typename TStream>
+    void BackUpInputs(Scope* root, Scope* scope,
+        const TStream &stream);
   };
  public:
   HogwildWorker() {}
@@ -294,6 +300,7 @@ class HogwildWorker : public CPUWorkerBase {
   // build thread sharding depends
   void BuildShardingDepends(const ProgramDesc& program);
   int IsParameter(const std::string& name, bool full_match);
+  bool IsNeedOffload(const std::string &name);
 
   std::vector<std::string> op_names_;
   std::vector<std::unique_ptr<OperatorBase>> ops_;
@@ -319,8 +326,13 @@ class HogwildWorker : public CPUWorkerBase {
   std::vector<std::string> shard_dump_params_;
   std::vector<std::string> shard_dump_fields_;
   std::multiset<std::string> free_param_vars_;
+  bool is_multi_node_ = false;
   bool sharding_mode_ = false;
+  bool enable_adjust_op_order_ = false;
   // offload vars
+  bool is_offload_communication_ = false;
+  bool is_offload_param_ = false;
+  std::vector<std::string> offload_exts_;
   std::multiset<std::string> offload_names_;
   std::unordered_map<const OperatorBase*, OffLoadVarInfo> offload_vars_;
 };
