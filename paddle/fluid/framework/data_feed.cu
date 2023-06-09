@@ -3606,11 +3606,20 @@ void GraphDataGenerator::DoSageForTrain() {
       ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_[tensor_pair_idx]->ptr());
       ins_cursor = ins_buf + ins_buf_pair_len_[tensor_pair_idx] * 2 - total_instance;
       int mini_batch_size = total_instance / conf_.accumulate_num;
-      if (mini_batch_size % 2 == 1) { mini_batch_size += 1; }
+      if (conf_.accumulate_num >= 2) {
+        if (mini_batch_size == 0) {
+          break;
+        } else if (mini_batch_size % 2 == 1) {
+          mini_batch_size += 1;
+        }
+        if (total_instance - mini_batch_size == 0) {
+          break;
+        }
+      }
 
       // fill first graph holder
       auto final_sage_nodes = GenerateSampleGraph(ins_cursor,
-                                                  mini_batch_size, // todo: 是否需考虑奇偶
+                                                  mini_batch_size,
                                                   &uniq_instance,
                                                   conf_,
                                                   &inverse_vec_,
@@ -3622,6 +3631,7 @@ void GraphDataGenerator::DoSageForTrain() {
       final_sage_nodes_vec_.emplace_back(final_sage_nodes);
       uniq_instance_vec_.emplace_back(uniq_instance);
       total_instance_vec_.emplace_back(mini_batch_size);
+
       cudaStreamSynchronize(sample_stream_);
       InsertTable(reinterpret_cast<uint64_t *>(final_sage_nodes->ptr()),
                   uniq_instance,
