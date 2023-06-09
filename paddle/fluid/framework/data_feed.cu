@@ -3663,39 +3663,6 @@ void GraphDataGenerator::clear_gpu_mem() {
   delete table_;
 }
 
-int dynamic_adjust_total_row_for_infer(int local_reach_end,
-                                    const paddle::platform::Place &place,
-                                    cudaStream_t stream) {
-  auto send_buff = memory::Alloc(
-      place,
-      2 * sizeof(int),
-      phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
-  int *send_buff_ptr = reinterpret_cast<int *>(send_buff->ptr());
-  cudaMemcpyAsync(send_buff_ptr,
-                  &local_reach_end,
-                  sizeof(int),
-                  cudaMemcpyHostToDevice,
-                  stream);
-  cudaStreamSynchronize(stream);
-  auto comm =
-      platform::NCCLCommContext::Instance().Get(0, place.GetDeviceId());
-  PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllReduce(&send_buff_ptr[0],
-                                                              &send_buff_ptr[1],
-                                                              1,
-                                                              ncclInt,
-                                                              ncclProd,
-                                                              comm->comm(),
-                                                              stream));
-  int global_reach_end = 0;
-  cudaMemcpyAsync(&global_reach_end,
-                  &send_buff_ptr[1],
-                  sizeof(int),
-                  cudaMemcpyDeviceToHost,
-                  stream);
-  cudaStreamSynchronize(stream);
-  return global_reach_end;
-}
-
 bool FillInferBuf(const std::vector<uint64_t> &h_device_keys_len, // input
                 const std::vector<std::shared_ptr<phi::Allocation>> &d_device_keys,
                 const GraphDataGeneratorConfig &conf,
