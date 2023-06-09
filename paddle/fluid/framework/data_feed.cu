@@ -4282,7 +4282,10 @@ void GraphDataGenerator::DumpWalkPath(std::string dump_path, size_t dump_rate) {
 void GraphDataGenerator::DumpSampleNeighbors(std::string dump_path) {
 #ifdef _LINUX
   int err_no = 0;
-  std::shared_ptr<FILE> fp = fs_open_append_write(dump_path, &err_no, "");
+  int part_num = rand() % 100;  // set 100 part files
+  std::string part_path =
+      string::format_string("%s-%03d", dump_path.c_str(), part_num);
+  std::shared_ptr<FILE> fp = fs_open_append_write(part_path, &err_no, "");
   for (int i = 0; i < sage_batch_num_; i++) {
     int uniq_instance = uniq_instance_vec_[i];
     uint64_t *h_id_tensor = new uint64_t[uniq_instance];
