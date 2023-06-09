@@ -2464,7 +2464,7 @@ std::shared_ptr<phi::Allocation> GenerateSampleGraph(
     std::vector<std::shared_ptr<phi::Allocation>> *edge_type_graph_ptr,
     const paddle::platform::Place &place,
     cudaStream_t stream) {
-  VLOG(1) << conf.gpuid << " Get Unique Nodes";
+  VLOG(2) << conf.gpuid << " Get Unique Nodes";
 
   auto inverse = memory::AllocShared(place, len * sizeof(uint32_t),
                                 phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
@@ -2481,7 +2481,7 @@ std::shared_ptr<phi::Allocation> GenerateSampleGraph(
                              stream);
   int len_samples = conf.samples.size();
 
-  VLOG(1) << conf.gpuid << " Sample Neighbors and Reindex";
+  VLOG(2) << conf.gpuid << " Sample Neighbors and Reindex";
   std::vector<int> edges_split_num;
   std::vector<std::shared_ptr<phi::Allocation>> final_nodes_vec;
   std::vector<std::shared_ptr<phi::Allocation>> graph_edges;
