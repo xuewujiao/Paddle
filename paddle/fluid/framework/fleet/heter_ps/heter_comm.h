@@ -605,10 +605,6 @@ class HeterComm {
           bool sage = false,
           bool slot = false) {
 
-    if (slot) {
-      VLOG(0) << "Enter scatter_inter_vals_by_all2all_common";
-    }
-
     auto &cache = storage_[gpu_id];
     auto &res = cache.shard_res;
 
