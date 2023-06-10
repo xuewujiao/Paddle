@@ -852,7 +852,7 @@ int GraphDataGenerator::FillGraphIdShowClkTensorAccum(int index) {
   for (int accum = 0; accum < fake_accumulate_num; accum++) {
     int feed_vec_idx = 3 * fake_accumulate_num + 
                        conf_.slot_num * 2 + 
-                       accum * conf_.tensor_num_of_graph_and_index;
+                       accum * conf_.tensor_num_of_one_subgraph;
     int new_index = index * 2 + 1 - accum;
     int uniq_instance = uniq_instance_vec_[new_index];
     int total_instance = total_instance_vec_[new_index];
@@ -2607,6 +2607,8 @@ std::shared_ptr<phi::Allocation> GetReindexResult(
           reindex_table_size,
           d_reindex_table_key_ptr,
           d_reindex_table_value_ptr);
+
+  cudaStreamSynchronize(stream);
   return final_nodes;
 }
 
@@ -3632,7 +3634,6 @@ void GraphDataGenerator::DoSageForTrain() {
       uniq_instance_vec_.emplace_back(uniq_instance);
       total_instance_vec_.emplace_back(mini_batch_size);
 
-      cudaStreamSynchronize(sample_stream_);
       InsertTable(reinterpret_cast<uint64_t *>(final_sage_nodes->ptr()),
                   uniq_instance,
                   &d_uniq_node_num_,
@@ -3658,7 +3659,6 @@ void GraphDataGenerator::DoSageForTrain() {
         final_sage_nodes_vec_.emplace_back(final_sage_nodes_v2);
         uniq_instance_vec_.emplace_back(uniq_instance);
         total_instance_vec_.emplace_back(total_instance - mini_batch_size);
-        cudaStreamSynchronize(sample_stream_);
         InsertTable(reinterpret_cast<uint64_t *>(final_sage_nodes_v2->ptr()),
                     uniq_instance,
                     &d_uniq_node_num_,
@@ -4213,18 +4213,11 @@ void GraphDataGenerator::AllocResource(
       tensor_num_of_one_subgraph++; // degree_norm
     }
 
-    // for accumulate
-    if (conf_.gpu_graph_training) {
-      if (conf_.accumulate_num >= 2) {
-        tensor_num_of_one_subgraph *= 2;
-      }
-    }
-
     if (conf_.accumulate_num == 1) {
       conf_.slot_num = (conf_.tensor_num_of_one_pair - 1 - tensor_num_of_one_subgraph) / 2;
       assert((1 + conf_.slot_num * 2 + tensor_num_of_one_subgraph) == conf_.tensor_num_of_one_pair);
     } else {
-      conf_.slot_num = (feed_vec.size() - tensor_num_of_one_subgraph - 6) / 2;
+      conf_.slot_num = (feed_vec.size() - 2 * tensor_num_of_one_subgraph - 6) / 2;
     }
     VLOG(1) << "tensor_num_of_one_pair[" << conf_.tensor_num_of_one_pair
         << "] tensor_num_of_one_sample[" << tensor_num_of_one_sample
@@ -4232,14 +4225,12 @@ void GraphDataGenerator::AllocResource(
   }
   VLOG(1) << "slot_num[" << conf_.slot_num << "]";
   conf_.tensor_num_of_one_pair = 1 + conf_.slot_num * 2; // id and slot
-  conf_.tensor_num_of_graph_and_index = 0; 
   if (conf_.sage_mode) {
     if (conf_.accumulate_num >= 2) {
       conf_.tensor_num_of_one_pair += 2 * (5 * conf_.samples.size() + 1);
     } else {
       conf_.tensor_num_of_one_pair += 5 * conf_.samples.size() + 1;
     }
-    conf_.tensor_num_of_graph_and_index += 5 * conf_.samples.size() + 1;
   }
   if (conf_.enable_pair_label) {
     conf_.tensor_num_of_one_pair++;
@@ -4253,7 +4244,6 @@ void GraphDataGenerator::AllocResource(
     } else {
       conf_.tensor_num_of_one_pair += conf_.samples.size();
     }
-    conf_.tensor_num_of_graph_and_index += conf_.samples.size();
   }
   VLOG(1) << "tensor_num_of_one_pair[" << conf_.tensor_num_of_one_pair << "]";
 

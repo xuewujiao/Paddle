@@ -923,7 +923,6 @@ struct GraphDataGeneratorConfig {
   int edge_to_id_len;
   int tensor_pair_num;
   uint32_t tensor_num_of_one_pair;
-  int tensor_num_of_graph_and_index;
   size_t buf_size;
   size_t once_max_sample_keynum;
   int64_t reindex_table_size;
