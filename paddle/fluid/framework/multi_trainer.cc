@@ -132,9 +132,6 @@ GetThreadPool(int thread_num) {
 // call only after all resources are set in current trainer
 void MultiTrainer::InitTrainerEnv(const ProgramDesc& main_program,
                                   const platform::Place& place) {
-  if (FLAGS_enable_dump_main_program) {
-    DumpProgramDescFile("main_program", main_program);
-  }
   // multi thread load
   auto pool = GetThreadPool(thread_num_);
   std::vector<std::future<void>> wait_futures;

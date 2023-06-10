@@ -265,10 +265,8 @@ class CPUWorkerBase : public DeviceWorker {
 
 class HogwildWorker : public CPUWorkerBase {
   struct OffLoadVarInfo {
-    std::vector<std::string> persistable_inputs;
-    size_t total_param_len = 0;
-    bool need_copy_inputs = true;
-    bool need_backup_inputs = false;
+    std::vector<std::string> copy_vars;
+    std::vector<std::string> backup_vars;
     template<typename TStream>
     void CopyInputs(const Scope* root,
                     const platform::Place& place,
@@ -301,6 +299,7 @@ class HogwildWorker : public CPUWorkerBase {
   void BuildShardingDepends(const ProgramDesc& program);
   int IsParameter(const std::string& name, bool full_match);
   bool IsNeedOffload(const std::string &name);
+  size_t AdjustOffloadOps(const ProgramDesc &program);
 
   std::vector<std::string> op_names_;
   std::vector<std::unique_ptr<OperatorBase>> ops_;
