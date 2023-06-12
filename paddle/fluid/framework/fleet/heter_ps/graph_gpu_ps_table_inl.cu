@@ -3610,8 +3610,8 @@ int GpuPsGraphTable::get_feature_info_of_nodes(
     std::shared_ptr<phi::Allocation>& size_list_prefix_sum,
     std::shared_ptr<phi::Allocation>& feature_list,
     std::shared_ptr<phi::Allocation>& slot_list,
-    std::vector<robin_hood::unordered_set<uint64_t>>& total_keys bool
-        sage_mode) {
+    std::vector<robin_hood::unordered_set<uint64_t>>& total_keys,
+    bool sage_mode) {
   if (node_num == 0) {
     return 0;
   }
@@ -3635,6 +3635,7 @@ int GpuPsGraphTable::get_feature_info_of_nodes(
                                                         size_list_prefix_sum,
                                                         feature_list,
                                                         slot_list,
+                                                        total_keys,
                                                         sage_mode);
       }
     }
@@ -3659,6 +3660,7 @@ int GpuPsGraphTable::get_feature_info_of_nodes_all2all(
     std::shared_ptr<phi::Allocation>& size_list_prefix_sum,
     std::shared_ptr<phi::Allocation>& feature_list,
     std::shared_ptr<phi::Allocation>& slot_list,
+    std::vector<robin_hood::unordered_set<uint64_t>>& total_keys,
     bool sage_mode) {
   if (node_num == 0) {
     return 0;

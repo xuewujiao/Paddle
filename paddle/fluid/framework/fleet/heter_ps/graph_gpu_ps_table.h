@@ -224,8 +224,8 @@ class GpuPsGraphTable
       std::shared_ptr<phi::Allocation> &size_list_prefix_sum,
       std::shared_ptr<phi::Allocation> &feature_list,  // NOLINT
       std::shared_ptr<phi::Allocation> &slot_list,
-      std::vector<robin_hood::unordered_set<uint64_t>> &total_keys),
-      bool sage_mode = false);    // NOLINT
+      std::vector<robin_hood::unordered_set<uint64_t>> &total_keys,
+      bool sage_mode = false);
   int get_float_feature_info_of_nodes(
       int gpu_id,
       uint64_t *d_nodes,
@@ -252,8 +252,8 @@ class GpuPsGraphTable
       std::shared_ptr<phi::Allocation> &size_list_prefix_sum,
       std::shared_ptr<phi::Allocation> &feature_list,
       std::shared_ptr<phi::Allocation> &slot_list,
-      std::vector<robin_hood::unordered_set<uint64_t>>
-          &total_keys bool sage_mode = false);
+      std::vector<robin_hood::unordered_set<uint64_t>> &total_keys,
+      bool sage_mode = false);
 
   NodeQueryResult query_node_list(int gpu_id,
                                   int idx,

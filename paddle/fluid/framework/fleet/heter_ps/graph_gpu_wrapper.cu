@@ -48,7 +48,6 @@ void GraphGpuWrapper::init_conf(const std::string &first_node_type_str,
 
     std::vector<std::string> first_node_type_vec;
     if (first_node_type_str[0] == '[') {
-<<<<<<< HEAD
       assert(first_node_type_str[first_node_type_str.size() - 1] == ']');
       std::string tmp_first_node_type_str(
           first_node_type_str, 1, first_node_type_str.size() - 2);
@@ -56,28 +55,14 @@ void GraphGpuWrapper::init_conf(const std::string &first_node_type_str,
           tmp_first_node_type_str, ",");
       first_node_type_vec.assign(tmp_first_node_types.begin(),
                                  tmp_first_node_types.end());
-=======
-      assert(first_node_type_str[first_node_type_str.size() - 1] == ']');
-      std::string tmp_first_node_type_str(
-          first_node_type_str, 1, first_node_type_str.size() - 2);
-      auto tmp_first_node_types = paddle::string::split_string<std::string>(
-          tmp_first_node_type_str, ",");
-      first_node_type_vec.assign(tmp_first_node_types.begin(),
-                                 tmp_first_node_types.end());
->>>>>>> ee0f24f8062c3bbddcb4f3bbad4d6f96271b79af
     } else {
       first_node_type_vec.push_back(first_node_type_str);
     }
     tensor_pair_num_ = first_node_type_vec.size();
     first_node_type_.resize(tensor_pair_num_);
-<<<<<<< HEAD
-    for (int tensor_pair_idx = 0; tensor_pair_idx < tensor_pair_num_;
-         ++tensor_pair_idx) {
-=======
     all_node_type_.resize(tensor_pair_num_);
     for (int tensor_pair_idx = 0; tensor_pair_idx < tensor_pair_num_;
          ++tensor_pair_idx) {
->>>>>>> ee0f24f8062c3bbddcb4f3bbad4d6f96271b79af
       auto &first_node_type = first_node_type_vec[tensor_pair_idx];
       auto node_types =
           paddle::string::split_string<std::string>(first_node_type, ";");
@@ -90,14 +75,6 @@ void GraphGpuWrapper::init_conf(const std::string &first_node_type_str,
                               "(%s) is not found in node_to_id.", type));
         VLOG(2) << "node_to_id[" << type << "] = " << iter->second;
         first_node_type_[tensor_pair_idx].push_back(iter->second);
-<<<<<<< HEAD
-      }  // end for (auto &type : node_types)
-    }  // end for (int tensor_pair_idx = 0; tensor_pair_idx < tensor_pair_num_;
-
-    std::vector<std::string> meta_path_vec;
-    if (meta_path_str[0] == '[') {
-      assert(meta_path_str[meta_path_str.size() - 1] == ']');
-=======
         all_node_type_[tensor_pair_idx].push_back(iter->second);
       }  // end for (auto &type : node_types)
     }  // end for (int tensor_pair_idx = 0; tensor_pair_idx < tensor_pair_num_;
@@ -105,7 +82,6 @@ void GraphGpuWrapper::init_conf(const std::string &first_node_type_str,
     std::vector<std::string> meta_path_vec;
     if (meta_path_str[0] == '[') {
       assert(meta_path_str[meta_path_str.size() - 1] == ']');
->>>>>>> ee0f24f8062c3bbddcb4f3bbad4d6f96271b79af
       std::string tmp_meta_path(meta_path_str, 1, meta_path_str.size() - 2);
       auto tmp_meta_paths =
           paddle::string::split_string<std::string>(tmp_meta_path, ",");
@@ -118,17 +94,10 @@ void GraphGpuWrapper::init_conf(const std::string &first_node_type_str,
     for (int tensor_pair_idx = 0; tensor_pair_idx < tensor_pair_num_;
          ++tensor_pair_idx) {
       auto &meta_path = meta_path_vec[tensor_pair_idx];
-<<<<<<< HEAD
       meta_path_[tensor_pair_idx].resize(
           first_node_type_[tensor_pair_idx].size());
       auto meta_paths =
           paddle::string::split_string<std::string>(meta_path, ";");
-=======
-      meta_path_[tensor_pair_idx].resize(
-          first_node_type_[tensor_pair_idx].size());
-      auto meta_paths =
-          paddle::string::split_string<std::string>(meta_path, ";");
->>>>>>> ee0f24f8062c3bbddcb4f3bbad4d6f96271b79af
 
       for (size_t i = 0; i < meta_paths.size(); i++) {
         auto path = meta_paths[i];
@@ -277,13 +246,8 @@ void GraphGpuWrapper::init_type_keys(
     }
     keys[f_idx].resize(thread_num);
     auto &type_total_key = graph_all_type_total_keys[f_idx];
-<<<<<<< HEAD
-    VLOG(0) << "graph_all_type_total_keys[ " << f_idx
-            << "] =" << graph_all_type_total_keys[f_idx].size();
-=======
     VLOG(0) << "graph_all_type_total_keys[" << f_idx
             << "] = " << graph_all_type_total_keys[f_idx].size();
->>>>>>> ee0f24f8062c3bbddcb4f3bbad4d6f96271b79af
     for (size_t j = 0; j < type_total_key.size(); j++) {
       uint64_t shard = type_total_key[j] % thread_num;
       tmp_keys[shard].push_back(type_total_key[j]);
@@ -1122,11 +1086,8 @@ int GraphGpuWrapper::get_feature_info_of_nodes(
                                   size_list_prefix_sum,
                                   feature_list,
                                   slot_list,
-<<<<<<< HEAD
-                                  all_type_keys);
-=======
+                                  all_type_keys,
                                   sage_mode);
->>>>>>> ee0f24f8062c3bbddcb4f3bbad4d6f96271b79af
 }
 
 int GraphGpuWrapper::get_float_feature_info_of_nodes(
@@ -1202,17 +1163,6 @@ std::vector<uint64_t> GraphGpuWrapper::graph_neighbor_sample(
              key.size() * sizeof(uint64_t),
              cudaMemcpyHostToDevice);
   VLOG(0) << "key_size: " << key.size();
-<<<<<<< HEAD
-  auto neighbor_sample_res = reinterpret_cast<GpuPsGraphTable *>(graph_table)
-                                 ->graph_neighbor_sample_v2(gpu_id,
-                                                            idx,
-                                                            cuda_key,
-                                                            sample_size,
-                                                            key.size(),
-                                                            false,
-                                                            true,
-                                                            false);
-=======
   auto &edge_neighbor_size_limit = get_type_to_neighbor_limit();
   auto neighbor_size_limit = edge_neighbor_size_limit[idx];
   auto neighbor_sample_res = reinterpret_cast<GpuPsGraphTable *>(graph_table)
@@ -1225,7 +1175,6 @@ std::vector<uint64_t> GraphGpuWrapper::graph_neighbor_sample(
                                                             false,
                                                             true,
                                                             false);
->>>>>>> ee0f24f8062c3bbddcb4f3bbad4d6f96271b79af
   int *actual_sample_size = new int[key.size()];
   cudaMemcpy(actual_sample_size,
              neighbor_sample_res.actual_sample_size,
@@ -1306,16 +1255,15 @@ std::vector<std::vector<uint64_t>> &GraphGpuWrapper::get_graph_type_keys() {
       ->cpu_graph_table_->graph_type_keys_;
 }
 
-<<<<<<< HEAD
 std::vector<robin_hood::unordered_set<uint64_t>>
     &GraphGpuWrapper::get_graph_type_keys_set() {
   return reinterpret_cast<GpuPsGraphTable *>(graph_table)
       ->cpu_graph_table_->graph_type_keys_set_;
-=======
+}
+
 std::unordered_map<int, int> &GraphGpuWrapper::get_type_to_neighbor_limit() {
   return reinterpret_cast<GpuPsGraphTable *>(graph_table)
       ->cpu_graph_table_->type_to_neighbor_limit_;
->>>>>>> ee0f24f8062c3bbddcb4f3bbad4d6f96271b79af
 }
 
 std::unordered_map<int, int> &GraphGpuWrapper::get_graph_type_to_index() {
