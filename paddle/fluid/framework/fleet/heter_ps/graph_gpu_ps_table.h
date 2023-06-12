@@ -192,6 +192,14 @@ class GpuPsGraphTable
                        int edge_idx,
                        uint64_t *key,
                        int len);
+  std::shared_ptr<phi::Allocation> get_node_degree_all2all(int gpu_id,
+                       int edge_idx,
+                       uint64_t *key,
+                       int len);
+  std::shared_ptr<phi::Allocation> get_node_degree_single(int gpu_id,
+                       int edge_idx,
+                       uint64_t *key,
+                       int len);
   int get_feature_of_nodes(int gpu_id,
                            uint64_t *d_walk,
                            uint64_t *d_offset,
