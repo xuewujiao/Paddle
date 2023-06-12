@@ -643,7 +643,7 @@ void HogwildWorker::TrainFilesWithProfiler() {
   if (max_memory_size >= 0) {
     gc = CreateGarbageCollector(place_, max_memory_size);
   }
-
+  bool infer_without_ins = false;
   while (1) {
     cur_batch = device_reader_->Next();
 #if defined(PADDLE_WITH_GPU_GRAPH)
@@ -661,6 +661,16 @@ void HogwildWorker::TrainFilesWithProfiler() {
         VLOG(1) << "get all pass end, train pass will exit";
         break;
       }
+    } else if (!train_mode && sharding_mode_) {
+      auto pass_end = cur_batch <= 0;
+      bool all_pass_end = GetPassEnd(pass_end);
+      if (all_pass_end) {
+        break;
+      }
+      if (pass_end) {
+        infer_without_ins = true;
+        VLOG(0) << " card " << thread_id_ << " infer_without_ins ";
+      }
     } else {
       if (FLAGS_enable_exit_when_partial_worker && train_mode) {
         if (cur_batch <= 0) {
@@ -673,7 +683,7 @@ void HogwildWorker::TrainFilesWithProfiler() {
       }
     }
 #endif
-    if (cur_batch <= 0) {
+    if (cur_batch <= 0 && !infer_without_ins) {
       break;
     }
     VLOG(3) << "read a batch in thread " << thread_id_;
@@ -683,7 +693,9 @@ void HogwildWorker::TrainFilesWithProfiler() {
     for (size_t i = 0; i < ops_.size(); ++i) {
       timeline.Start();
       VLOG(3) << "Going to run op " << op_names_[i];
-      ops_[i]->Run(*thread_scope_, place_);
+      if (!infer_without_ins || ops_[i]->Type() == std::string("c_broadcast")) {
+        ops_[i]->Run(*thread_scope_, place_);
+      }
 #ifdef PADDLE_WITH_HETERPS
       dev_ctx_->Wait();
 #endif
@@ -794,6 +806,8 @@ void HogwildWorker::TrainFiles() {
   if (max_memory_size >= 0) {
     gc = CreateGarbageCollector(place_, max_memory_size);
   }
+
+  bool infer_without_ins = false;
   while (1) {
     cur_batch = device_reader_->Next();
 #if defined(PADDLE_WITH_GPU_GRAPH)
@@ -811,8 +825,18 @@ void HogwildWorker::TrainFiles() {
         if (res) {
           device_reader_->reset_pass_end();
           VLOG(1) << "get all pass end, train pass will exit";
-         break;
+          break;
         }
+      }
+    } else if (!train_mode && sharding_mode_) {
+      auto pass_end = cur_batch <= 0;
+      bool res = GetPassEnd(pass_end);
+      if (res) {
+        break;
+      }
+      if (pass_end) {
+        infer_without_ins = true;
+        VLOG(0) << " card " << thread_id_ << " infer_without_ins ";
       }
     } else {
       if (FLAGS_enable_exit_when_partial_worker && train_mode) {
@@ -826,11 +850,13 @@ void HogwildWorker::TrainFiles() {
       }
     }
 #endif
-    if (cur_batch <= 0) {
+    if (cur_batch <= 0 && !infer_without_ins) {
       break;
     }
     for (auto &op : ops_) {
-      op->Run(*thread_scope_, place_);
+      if (!infer_without_ins || op->Type() == std::string("c_broadcast")) {
+        op->Run(*thread_scope_, place_);
+      }
       if (gc) {
         DeleteUnusedTensors(*thread_scope_, op.get(), unused_vars_, gc.get());
       }

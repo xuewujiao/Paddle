@@ -21,6 +21,7 @@ limitations under the License. */
 #include <thrust/device_ptr.h>
 #include <thrust/random.h>
 #include <thrust/shuffle.h>
+#include <cstdlib>
 #include <sstream>
 #include "cub/cub.cuh"
 #if defined(PADDLE_WITH_PSCORE) && defined(PADDLE_WITH_GPU_GRAPH)
@@ -3726,7 +3727,7 @@ bool FillInferBuf(const std::vector<uint64_t> &h_device_keys_len, // input
     }
 
     size_t device_key_size = h_device_keys_len[infer_cursor];
-    if (conf.is_multi_node) {
+    if (conf.is_multi_node || conf.is_thread_sharding) {
       int local_reach_end = global_infer_node_type_start[infer_cursor] + conf.buf_size >=
                             device_key_size;
       int global_reach_end = get_multi_node_global_flag(local_reach_end, ncclProd,
@@ -3870,7 +3871,12 @@ void GraphDataGenerator::AllocResource(
   VLOG(1) << "AllocResource gpuid " << conf_.gpuid
           << " feed_vec.size: " << feed_vec.size()
           << " table cap: " << conf_.train_table_cap;
-
+  conf_.is_thread_sharding = false;        
+  const char *tmp = getenv("PADDLE_THREAD_SHARDING");
+  std::string is_thread_sharding(tmp ? tmp : "");   
+  if (is_thread_sharding == std::string("1")) {
+    conf_.is_thread_sharding = true;
+  }   
   conf_.is_multi_node = false;
 #if defined(PADDLE_WITH_GLOO)
   auto gloo = paddle::framework::GlooWrapper::GetInstance();
