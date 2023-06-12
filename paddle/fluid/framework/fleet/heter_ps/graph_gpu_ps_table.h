@@ -19,10 +19,12 @@
 
 #include "paddle/fluid/distributed/ps/table/common_graph_table.h"
 #include "paddle/fluid/framework/fleet/heter_ps/gpu_graph_node.h"
-#include "paddle/fluid/framework/fleet/ps_gpu_wrapper.h"
 #include "paddle/fluid/framework/fleet/heter_ps/heter_comm.h"
 #include "paddle/fluid/framework/fleet/heter_ps/heter_comm_kernel.h"
+#include "paddle/fluid/framework/fleet/ps_gpu_wrapper.h"
 #include "paddle/fluid/platform/enforce.h"
+// #include "paddle/fluid/framework/threadpool.h"
+
 #ifdef PADDLE_WITH_HETERPS
 
 DECLARE_double(gpugraph_hbm_table_load_factor);
@@ -37,7 +39,8 @@ class GpuPsGraphTable
  public:
   inline int get_table_offset(int gpu_id, GraphTableType type, int idx) const {
     int type_id = type;
-    return gpu_id * (graph_table_num_ + feature_table_num_ + float_feature_table_num_) +
+    return gpu_id * (graph_table_num_ + feature_table_num_ +
+                     float_feature_table_num_) +
            type_id * graph_table_num_ + idx;
   }
   inline int get_graph_list_offset(int gpu_id, int edge_idx) const {
@@ -51,7 +54,9 @@ class GpuPsGraphTable
   }
 
   GpuPsGraphTable(std::shared_ptr<HeterPsResource> resource,
-                  int graph_table_num, int slot_num_for_pull_feature = 0, int float_slot_num = 0)
+                  int graph_table_num,
+                  int slot_num_for_pull_feature = 0,
+                  int float_slot_num = 0)
       : HeterComm<uint64_t, uint64_t, int, CommonFeatureValueAccessor>(
             0, resource) {
     load_factor_ = FLAGS_gpugraph_hbm_table_load_factor;
@@ -68,8 +73,10 @@ class GpuPsGraphTable
     gpu_num = resource_->total_device();
     memset(global_device_map, -1, sizeof(global_device_map));
 
-    tables_ = std::vector<Table *>(
-        gpu_num * (graph_table_num_ + feature_table_num_ + float_feature_table_num_), NULL);
+    tables_ =
+        std::vector<Table *>(gpu_num * (graph_table_num_ + feature_table_num_ +
+                                        float_feature_table_num_),
+                             NULL);
     for (int i = 0; i < gpu_num; i++) {
       global_device_map[resource_->dev_id(i)] = i;
       for (int j = 0; j < graph_table_num_; j++) {
@@ -96,20 +103,25 @@ class GpuPsGraphTable
   }
   void build_graph_on_single_gpu(const GpuPsCommGraph &g, int gpu_id, int idx);
   void build_graph_fea_on_single_gpu(const GpuPsCommGraphFea &g, int gpu_id);
-  void build_graph_float_fea_on_single_gpu(const GpuPsCommGraphFloatFea &g, int gpu_id);
+  void build_graph_float_fea_on_single_gpu(const GpuPsCommGraphFloatFea &g,
+                                           int gpu_id);
   void clear_graph_info(int gpu_id, int index);
   void clear_graph_info(int index);
   void reset_feature_info(int gpu_id, size_t capacity, size_t feature_size);
-  void reset_float_feature_info(int gpu_id, size_t capacity, size_t feature_size);
+  void reset_float_feature_info(int gpu_id,
+                                size_t capacity,
+                                size_t feature_size);
   void clear_feature_info(int gpu_id, int index);
   void clear_feature_info(int index);
   void build_graph_from_cpu(const std::vector<GpuPsCommGraph> &cpu_node_list,
                             int idx);
   NodeQueryResult graph_node_sample(int gpu_id, int sample_size);
-  NeighborSampleResult graph_neighbor_sample_v3(NeighborSampleQuery q,
-                                                bool cpu_switch,
-                                                bool compress,
-                                                bool weighted);
+  NeighborSampleResult graph_neighbor_sample_v3(
+      NeighborSampleQuery q,
+      bool cpu_switch,
+      bool compress,
+      bool weighted,
+      std::vector<robin_hood::unordered_set<uint64_t>> &total_keys);
   NeighborSampleResult graph_neighbor_sample(int gpu_id,
                                              uint64_t *key,
                                              int sample_size,
@@ -122,24 +134,27 @@ class GpuPsGraphTable
                                                 bool cpu_query_switch,
                                                 bool compress,
                                                 bool weighted);
-  NeighborSampleResult graph_neighbor_sample_all2all(int gpu_id,
-                                                int sample_step,
-                                                int idx,
-                                                uint64_t *key,
-                                                int sample_size,
-                                                int len,
-                                                bool cpu_query_switch,
-                                                bool compress,
-                                                bool weighted);
+  NeighborSampleResult graph_neighbor_sample_all2all(
+      int gpu_id,
+      int sample_step,
+      int idx,
+      uint64_t *key,
+      int sample_size,
+      int len,
+      bool cpu_query_switch,
+      bool compress,
+      bool weighted,
+      std::vector<robin_hood::unordered_set<uint64_t>> &total_keys);
   NeighborSampleResultV2 graph_neighbor_sample_sage(
       int gpu_id,
       int edge_type_len,
-      uint64_t* key,
+      uint64_t *key,
       int sample_size,
       int len,
       std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,
       bool weighted,
-      bool return_weight);
+      bool return_weight,
+      std::vector<robin_hood::unordered_set<uint64_t>> &total_keys);
   NeighborSampleResultV2 graph_neighbor_sample_all_edge_type(
       int gpu_id,
       int edge_type_len,
@@ -158,30 +173,31 @@ class GpuPsGraphTable
       int len,
       std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,
       bool weighted,
-      bool return_weight);
-  void weighted_sample(GpuPsCommGraph& graph,
-                       GpuPsNodeInfo* node_info_list,
-                       int* actual_size_array,
-                       uint64_t* sample_array,
-                       int* neighbor_count_ptr,
+      bool return_weight,
+      std::vector<robin_hood::unordered_set<uint64_t>> &total_keys);
+  void weighted_sample(GpuPsCommGraph &graph,
+                       GpuPsNodeInfo *node_info_list,
+                       int *actual_size_array,
+                       uint64_t *sample_array,
+                       int *neighbor_count_ptr,
                        int cur_gpu_id,
                        int remote_gpu_id,
                        int sample_size,
                        int shard_len,
                        bool need_neighbor_count,
                        unsigned long long random_seed,
-                       float* weight_array,
+                       float *weight_array,
                        bool return_weight);
-  void unweighted_sample(GpuPsCommGraph& graph,
-                         GpuPsNodeInfo* node_info_list,
-                         int* actual_size_array,
-                         uint64_t* sample_array,
+  void unweighted_sample(GpuPsCommGraph &graph,
+                         GpuPsNodeInfo *node_info_list,
+                         int *actual_size_array,
+                         uint64_t *sample_array,
                          int cur_gpu_id,
                          int remote_gpu_id,
                          int sample_size,
                          int shard_len,
                          unsigned long long random_seed,
-                         float* weight_array,
+                         float *weight_array,
                          bool return_weight);
   std::vector<std::shared_ptr<phi::Allocation>> get_edge_type_graph(
       int gpu_id, int edge_type_len);
@@ -204,7 +220,8 @@ class GpuPsGraphTable
       std::shared_ptr<phi::Allocation> &size_list,
       std::shared_ptr<phi::Allocation> &size_list_prefix_sum,
       std::shared_ptr<phi::Allocation> &feature_list,  // NOLINT
-      std::shared_ptr<phi::Allocation> &slot_list);    // NOLINT
+      std::shared_ptr<phi::Allocation> &slot_list,
+      std::vector<robin_hood::unordered_set<uint64_t>> &total_keys);  // NOLINT
   int get_float_feature_info_of_nodes(
       int gpu_id,
       uint64_t *d_nodes,
@@ -215,23 +232,23 @@ class GpuPsGraphTable
       std::shared_ptr<phi::Allocation> &slot_list);    // NOLINT
 
   int get_feature_info_of_nodes_normal(
-       int gpu_id,
-       uint64_t *d_nodes,
-       int node_num,
-       std::shared_ptr<phi::Allocation> &size_list,
-       std::shared_ptr<phi::Allocation> &size_list_prefix_sum,
-       std::shared_ptr<phi::Allocation> &feature_list,
-       std::shared_ptr<phi::Allocation> &slot_list);
+      int gpu_id,
+      uint64_t *d_nodes,
+      int node_num,
+      std::shared_ptr<phi::Allocation> &size_list,
+      std::shared_ptr<phi::Allocation> &size_list_prefix_sum,
+      std::shared_ptr<phi::Allocation> &feature_list,
+      std::shared_ptr<phi::Allocation> &slot_list);
 
   int get_feature_info_of_nodes_all2all(
-       int gpu_id,
-       uint64_t *d_nodes,
-       int node_num,
-       std::shared_ptr<phi::Allocation> &size_list,
-       std::shared_ptr<phi::Allocation> &size_list_prefix_sum,
-       std::shared_ptr<phi::Allocation> &feature_list,
-       std::shared_ptr<phi::Allocation> &slot_list);
-
+      int gpu_id,
+      uint64_t *d_nodes,
+      int node_num,
+      std::shared_ptr<phi::Allocation> &size_list,
+      std::shared_ptr<phi::Allocation> &size_list_prefix_sum,
+      std::shared_ptr<phi::Allocation> &feature_list,
+      std::shared_ptr<phi::Allocation> &slot_list,
+      std::vector<robin_hood::unordered_set<uint64_t>> &total_keys);
 
   NodeQueryResult query_node_list(int gpu_id,
                                   int idx,
@@ -259,9 +276,9 @@ class GpuPsGraphTable
                                        int *h_left,
                                        int *h_right,
                                        int *fea_left,
-                                       uint32_t* fea_num_list,
-                                       uint32_t* actual_feature_size,
-                                       float* feature_list,
+                                       uint32_t *fea_num_list,
+                                       uint32_t *actual_feature_size,
+                                       float *feature_list,
                                        uint8_t *slot_list);
   void move_degree_to_source_gpu(
       int gpu_id, int gpu_num, int *h_left, int *h_right, int *node_degree);
@@ -281,9 +298,7 @@ class GpuPsGraphTable
   gpuStream_t get_local_stream(int gpu_id) {
     return resource_->local_stream(gpu_id, 0);
   }
-  void set_infer_mode(bool infer_mode) {
-    infer_mode_ = infer_mode;
-  }
+  void set_infer_mode(bool infer_mode) { infer_mode_ = infer_mode; }
 
   int gpu_num;
   int graph_table_num_, feature_table_num_{0}, float_feature_table_num_{0};
@@ -300,6 +315,7 @@ class GpuPsGraphTable
   std::condition_variable cv_;
   int cpu_table_status;
   bool infer_mode_ = false;
+  int task_pool_size_ = 2;
 };
 
 };  // namespace framework

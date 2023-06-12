@@ -777,6 +777,7 @@ class GraphTable : public Table {
   std::unordered_map<int, int> type_to_index_;
   robin_hood::unordered_set<uint64_t> unique_all_edge_keys_;
   std::vector<robin_hood::unordered_set<uint64_t>> egde_node_ids_;  // fennel
+  std::vector<robin_hood::unordered_set<uint64_t>> graph_type_keys_set_;
 
   std::vector<std::vector<GraphShard *>> edge_shards, feature_shards,
       node_shards;
