@@ -3611,11 +3611,13 @@ void GraphDataGenerator::DoSageForTrain() {
       if (conf_.accumulate_num >= 2) {
         if (mini_batch_size == 0) {
           break;
+          ins_buf_pair_len_[tensor_pair_idx] -= total_instance / 2;
         } else if (mini_batch_size % 2 == 1) {
           mini_batch_size += 1;
         }
         if (total_instance - mini_batch_size == 0) {
           break;
+          ins_buf_pair_len_[tensor_pair_idx] -= total_instance / 2;
         }
       }
 
@@ -4207,21 +4209,21 @@ void GraphDataGenerator::AllocResource(
       tensor_num_of_one_sample++;
     }
 
-    uint32_t tensor_num_of_one_subgraph = tensor_num_of_one_sample * conf_.samples.size();
-    tensor_num_of_one_subgraph++; // final_index
+    conf_.tensor_num_of_one_subgraph = tensor_num_of_one_sample * conf_.samples.size();
+    conf_.tensor_num_of_one_subgraph++; // final_index
     if (conf_.get_degree) {
-      tensor_num_of_one_subgraph++; // degree_norm
+      conf_.tensor_num_of_one_subgraph++; // degree_norm
     }
 
     if (conf_.accumulate_num == 1) {
-      conf_.slot_num = (conf_.tensor_num_of_one_pair - 1 - tensor_num_of_one_subgraph) / 2;
-      assert((1 + conf_.slot_num * 2 + tensor_num_of_one_subgraph) == conf_.tensor_num_of_one_pair);
+      conf_.slot_num = (conf_.tensor_num_of_one_pair - 1 - conf_.tensor_num_of_one_subgraph) / 2;
+      assert((1 + conf_.slot_num * 2 + conf_.tensor_num_of_one_subgraph) == conf_.tensor_num_of_one_pair);
     } else {
-      conf_.slot_num = (feed_vec.size() - 2 * tensor_num_of_one_subgraph - 6) / 2;
+      conf_.slot_num = (feed_vec.size() - 2 * conf_.tensor_num_of_one_subgraph - 6) / 2;
     }
     VLOG(1) << "tensor_num_of_one_pair[" << conf_.tensor_num_of_one_pair
         << "] tensor_num_of_one_sample[" << tensor_num_of_one_sample
-        << "] tensor_num_of_one_subgraph[" << tensor_num_of_one_subgraph << "]";
+        << "] tensor_num_of_one_subgraph[" << conf_.tensor_num_of_one_subgraph << "]";
   }
   VLOG(1) << "slot_num[" << conf_.slot_num << "]";
   conf_.tensor_num_of_one_pair = 1 + conf_.slot_num * 2; // id and slot
