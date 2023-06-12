@@ -2922,18 +2922,31 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
   return result;
 }
 
-void GpuPsGraphTable::get_node_degree(
+/*void GpuPsGraphTable::get_node_degree_all2all(
     int gpu_id,
     int edge_idx,
     uint64_t* key,
     int len,
     std::shared_ptr<phi::Allocation> node_degree) {
-  int* node_degree_ptr =
-      reinterpret_cast<int*>(node_degree->ptr()) + edge_idx * len;
+  
+}*/
+
+std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree(
+    int gpu_id,
+    int edge_idx,
+    uint64_t* key,
+    int len) {
   int total_gpu = resource_->total_device();
   platform::CUDAPlace place = platform::CUDAPlace(resource_->dev_id(gpu_id));
   platform::CUDADeviceGuard guard(resource_->dev_id(gpu_id));
   auto stream = resource_->local_stream(gpu_id, 0);
+
+  auto node_degree =
+      memory::AllocShared(place,
+                          len * sizeof(int),
+                          phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  int* node_degree_ptr = reinterpret_cast<int*>(node_degree->ptr());
+
   int grid_size = (len - 1) / block_size_ + 1;
   int h_left[total_gpu];   // NOLINT
   int h_right[total_gpu];  // NOLINT
@@ -3048,6 +3061,7 @@ void GpuPsGraphTable::get_node_degree(
     destroy_storage(gpu_id, i);
   }
   device_mutex_[gpu_id]->unlock();
+  return node_degree;
 }
 
 NodeQueryResult GpuPsGraphTable::graph_node_sample(int gpu_id,
