@@ -1125,6 +1125,7 @@ void HogwildWorker::TrainFilesWithProfiler() {
   std::unique_ptr<GPUParallelCopyer> copyer(
       new GPUParallelCopyer(stream, thread_id_, FLAGS_gpugraph_parallel_stream_num));
 #endif
+  bool infer_out_of_ins = false;
   while (1) {
     cur_batch = device_reader_->Next();
 #if defined(PADDLE_WITH_GPU_GRAPH)
@@ -1142,6 +1143,16 @@ void HogwildWorker::TrainFilesWithProfiler() {
         VLOG(1) << "get all pass end, train pass will exit";
         break;
       }
+    } else if (!train_mode && sharding_mode_) {
+      auto pass_end = cur_batch <= 0;
+      bool all_pass_end = GetPassEnd(pass_end);
+      if (all_pass_end) {
+        break;
+      }
+      if (pass_end) {
+        infer_out_of_ins = true;
+        VLOG(0) << " card " << thread_id_ << " infer_out_of_ins ";
+      }
     } else {
       if (FLAGS_enable_exit_when_partial_worker && train_mode) {
         if (cur_batch <= 0) {
@@ -1154,40 +1165,60 @@ void HogwildWorker::TrainFilesWithProfiler() {
       }
     }
 #endif
-    if (cur_batch <= 0) {
+    if (cur_batch <= 0 && !infer_out_of_ins) {
       break;
     }
     VLOG(3) << "read a batch in thread " << thread_id_;
     timeline.Pause();
     read_time += timeline.ElapsedSec();
     total_time += timeline.ElapsedSec();
-    for (size_t i = 0; i < ops_.size(); ++i) {
-      timeline.Start();
-      VLOG(3) << "Going to run op " << op_names_[i];
-      auto &op = ops_[i];
-#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
-      // offload
-      auto it = offload_vars_.find(op.get());
-      if (it != offload_vars_.end()) {
-        it->second.CopyInputs(root_scope_, place_, thread_scope_, copyer.get());
-      }
+    if (infer_out_of_ins) {
+      for (size_t i = 0; i < ops_.size(); ++i) {
+        timeline.Start();
+        VLOG(3) << "Going to run op " << op_names_[i];
+        if (ops_[i]->Type() == std::string("c_broadcast")) {
+          ops_[i]->Run(*thread_scope_, place_);
+        }
+#ifdef PADDLE_WITH_HETERPS
+        dev_ctx_->Wait();
 #endif
-      op->Run(*thread_scope_, place_);
-#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
-      if (it != offload_vars_.end()) {
-        it->second.BackUpInputs(root_scope_, thread_scope_, copyer.get());
+        VLOG(3) << "Op " << op_names_[i] << " Finished";
+        timeline.Pause();
+        op_total_time[i] += timeline.ElapsedSec();
+        total_time += timeline.ElapsedSec();
+        if (gc) {
+          DeleteUnusedTensors(
+              *thread_scope_, ops_[i].get(), unused_vars_, gc.get());
+        }
       }
+    } else {
+      for (size_t i = 0; i < ops_.size(); ++i) {
+        timeline.Start();
+        VLOG(3) << "Going to run op " << op_names_[i];
+#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
+        // offload
+        auto it = offload_vars_.find(op.get());
+        if (it != offload_vars_.end()) {
+          it->second.CopyInputs(root_scope_, place_, thread_scope_, copyer.get());
+        }
+#endif
+        ops_[i]->Run(*thread_scope_, place_);
+#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
+        if (it != offload_vars_.end()) {
+          it->second.BackUpInputs(root_scope_, thread_scope_, copyer.get());
+        }
 #endif
 #ifdef PADDLE_WITH_HETERPS
-      dev_ctx_->Wait();
+        dev_ctx_->Wait();
 #endif
-      VLOG(3) << "Op " << op_names_[i] << " Finished";
-      timeline.Pause();
-      op_total_time[i] += timeline.ElapsedSec();
-      total_time += timeline.ElapsedSec();
-      if (gc) {
-        DeleteUnusedTensors(
-            *thread_scope_, op.get(), unused_vars_, gc.get());
+        VLOG(3) << "Op " << op_names_[i] << " Finished";
+        timeline.Pause();
+        op_total_time[i] += timeline.ElapsedSec();
+        total_time += timeline.ElapsedSec();
+        if (gc) {
+          DeleteUnusedTensors(
+              *thread_scope_, ops_[i].get(), unused_vars_, gc.get());
+        }
       }
     }
 
@@ -1293,6 +1324,7 @@ void HogwildWorker::TrainFiles() {
   std::unique_ptr<GPUParallelCopyer> copyer(
       new GPUParallelCopyer(stream, thread_id_, FLAGS_gpugraph_parallel_stream_num));
 #endif
+  bool infer_out_of_ins = false;
   while (1) {
     cur_batch = device_reader_->Next();
 #if defined(PADDLE_WITH_GPU_GRAPH)
@@ -1310,8 +1342,18 @@ void HogwildWorker::TrainFiles() {
         if (res) {
           device_reader_->reset_pass_end();
           VLOG(1) << "get all pass end, train pass will exit";
-         break;
+          break;
         }
+      }
+    } else if (!train_mode && sharding_mode_) {
+      auto pass_end = cur_batch <= 0;
+      bool res = GetPassEnd(pass_end);
+      if (res) {
+        break;
+      }
+      if (pass_end) {
+        infer_out_of_ins = true;
+        VLOG(0) << " card " << thread_id_ << " infer_out_of_ins ";
       }
     } else {
       if (FLAGS_enable_exit_when_partial_worker && train_mode) {
@@ -1325,27 +1367,37 @@ void HogwildWorker::TrainFiles() {
       }
     }
 #endif
-    if (cur_batch <= 0) {
+    if (cur_batch <= 0 && !infer_out_of_ins) {
       break;
     }
-    for (auto &op : ops_) {
-#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
-      // offload
-      auto it = offload_vars_.find(op.get());
-      if (it != offload_vars_.end()) {
-        it->second.CopyInputs(root_scope_, place_, thread_scope_, copyer.get());
+    if (infer_out_of_ins) {
+      for (auto &op : ops_) {
+        if (op->Type() == std::string("c_broadcast")) {
+          op->Run(*thread_scope_, place_);
+        }
+        if (gc) {
+          DeleteUnusedTensors(*thread_scope_, op.get(), unused_vars_, gc.get());
+        }
       }
-#endif
-//      VLOG(0) << place_ << "," << op->DebugStringEx(thread_scope_);
-      op->Run(*thread_scope_, place_);
+    } else {
+      for (auto &op : ops_) {
 #if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
-      // offload
-      if (it != offload_vars_.end()) {
-        it->second.BackUpInputs(root_scope_, thread_scope_, copyer.get());
-      }
+        // offload
+        auto it = offload_vars_.find(op.get());
+        if (it != offload_vars_.end()) {
+          it->second.CopyInputs(root_scope_, place_, thread_scope_, copyer.get());
+        }
 #endif
-      if (gc) {
-        DeleteUnusedTensors(*thread_scope_, op.get(), unused_vars_, gc.get());
+        op->Run(*thread_scope_, place_);
+#if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
+        // offload
+        if (it != offload_vars_.end()) {
+          it->second.BackUpInputs(root_scope_, thread_scope_, copyer.get());
+        }
+#endif
+        if (gc) {
+          DeleteUnusedTensors(*thread_scope_, op.get(), unused_vars_, gc.get());
+        }
       }
     }
 
