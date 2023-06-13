@@ -2865,6 +2865,8 @@ int FillWalkBuf(const std::vector<uint64_t> &h_device_keys_len,
                 HashTable<uint64_t, uint64_t> *table,
                 BufState *buf_state,
                 cudaStream_t stream) {
+  VLOG(1) << "gpuid: " << conf.gpuid 
+          << " Enter FillWalkBuf";
   platform::CUDADeviceGuard guard(conf.gpuid);
 
   ////////
@@ -3527,6 +3529,7 @@ int FillWalkBufMultiPath(
 }
 
 void GraphDataGenerator::DoWalkandSage() {
+  VLOG(1) << "Begin DoWalkandSage";
   int device_id = place_.GetDeviceId();
   debug_gpu_memory_info(device_id, "DoWalkandSage start");
   platform::CUDADeviceGuard guard(conf_.gpuid);
@@ -3563,6 +3566,8 @@ void GraphDataGenerator::DoWalkandSage() {
 }
 
 bool GraphDataGenerator::DoWalkForTrain() {
+  VLOG(1) << "gpuid: " << conf_.gpuid 
+          << " Begin DoWalkForTrain";
   bool train_flag = true;
   for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
           ++tensor_pair_idx) {
@@ -3627,6 +3632,8 @@ bool GraphDataGenerator::DoWalkForTrain() {
 }
 
 void GraphDataGenerator::DoSageForTrain() {
+  VLOG(1) << "gpuid: " << conf_.gpuid
+          << " Enter DoSageForTrain";
   int total_instance = 0, uniq_instance = 0;
   bool is_sage_pass_continue = true;
   int sage_pass_end = 0;
@@ -3637,6 +3644,8 @@ void GraphDataGenerator::DoSageForTrain() {
             tensor_pair_idx < conf_.tensor_pair_num && is_sage_pass_continue;
             ++tensor_pair_idx) {
       while (ins_buf_pair_len_[tensor_pair_idx] < conf_.batch_size) {
+        // VLOG(0) << "gpuid: " << conf_.gpuid
+        //        << " Begin FillInsBuf";
         int32_t *pair_label_buf = NULL;
         if (conf_.enable_pair_label) {
           pair_label_buf =
@@ -3705,23 +3714,27 @@ void GraphDataGenerator::DoSageForTrain() {
         break;
       }
 
+      VLOG(1) << "gpuid: " << conf_.gpuid
+              << " get mini_batch_size";
       ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_[tensor_pair_idx]->ptr());
       ins_cursor = ins_buf + ins_buf_pair_len_[tensor_pair_idx] * 2 - total_instance;
       int mini_batch_size = total_instance / conf_.accumulate_num;
       if (conf_.accumulate_num >= 2) {
         if (mini_batch_size == 0) {
-          break;
           ins_buf_pair_len_[tensor_pair_idx] -= total_instance / 2;
+          break;
         } else if (mini_batch_size % 2 == 1) {
           mini_batch_size += 1;
         }
         if (total_instance - mini_batch_size == 0) {
-          break;
           ins_buf_pair_len_[tensor_pair_idx] -= total_instance / 2;
+          break;
         }
       }
 
       // fill first graph holder
+      // VLOG(0) << "gpuid: " << conf_.gpuid
+      //         << " fill first graph holder";
       auto final_sage_nodes = GenerateSampleGraph(ins_cursor,
                                                   mini_batch_size,
                                                   &uniq_instance,
@@ -3748,6 +3761,8 @@ void GraphDataGenerator::DoSageForTrain() {
 
       // fill second graph holder
       if (mini_batch_size != total_instance) {
+        // VLOG(0) << "gpuid: " << conf_.gpuid
+        //         << " fill second graph holder";
         auto final_sage_nodes_v2 = GenerateSampleGraph(ins_cursor + mini_batch_size,
                                                        total_instance - mini_batch_size,
                                                        &uniq_instance,
@@ -3805,6 +3820,8 @@ void GraphDataGenerator::DoSageForTrain() {
   } // end while (is_sage_pass_continue)
   VLOG(1) << "gpuid: " << conf_.gpuid
           << " train_sage_batch_num: " << sage_batch_num_;
+  VLOG(1) << "gpuid: " << conf_.gpuid
+          << " Finish DoSageForTrain";
 }
 
 void GraphDataGenerator::DoSageForInfer() {
