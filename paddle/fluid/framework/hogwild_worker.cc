@@ -53,8 +53,16 @@ PADDLE_DEFINE_EXPORTED_string(
     "offload param extends list");
 PADDLE_DEFINE_EXPORTED_int32(
     gpugraph_offload_gather_copy_maxsize,
-    4,
-    "offload gather copy max size , default 1M");
+    16,
+    "offload gather copy max size , default 16M");
+PADDLE_DEFINE_EXPORTED_int32(
+    gpugraph_parallel_copyer_split_maxsize,
+    64,
+    "offload gather copy max size , default 64M");
+PADDLE_DEFINE_EXPORTED_int32(
+    gpugraph_parallel_stream_num,
+    8,
+    "offload parallel copy stream num");
 
 namespace paddle {
 namespace framework {
@@ -62,18 +70,95 @@ namespace framework {
 std::atomic<bool> HogwildWorker::quit_flag_(false);
 Barrier g_barrier;
 
+#if defined(PADDLE_WITH_CUDA)
+class GPUParallelCopyer {
+public:
+  GPUParallelCopyer(const phi::gpuStream_t &stream,
+      const int device_id, const int stream_num) :
+        dev_stream_(stream), device_id_(device_id), max_stream_(stream_num) {
+    streams_.resize(max_stream_);
+    platform::CUDADeviceGuard guard(device_id_);
+    for (size_t i = 0; i < max_stream_; ++i) {
+      PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamCreate(&streams_[i]));
+    }
+  }
+  ~GPUParallelCopyer() {
+    platform::CUDADeviceGuard guard(device_id_);
+    for (size_t i = 0; i < max_stream_; ++i) {
+      PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamDestroy(streams_[i]));
+    }
+  }
+  void Copy(const phi::DenseTensor &src_tensor,
+    const phi::Place& dest_place, phi::DenseTensor *dest_tensor) {
+    size_t mem_len = src_tensor.memory_size();
+    if (!dest_tensor->IsInitialized()) {
+      dest_tensor->Resize(src_tensor.dims());
+      dest_tensor->set_layout(src_tensor.layout());
+    }
+
+    const char *src_ptr = (const char *)src_tensor.data();
+    char *dest_ptr = (char *)dest_tensor->mutable_data(
+        dest_place, src_tensor.dtype(), mem_len);
+    if (copy_count_ == 0) {
+      platform::GpuStreamSync(dev_stream_);
+    }
+    size_t pos = 0;
+    auto &src_place = src_tensor.place();
+    while (pos < mem_len) {
+      size_t data_len = mem_len - pos;
+      if (data_len > split_max_len_) {
+        data_len = split_max_len_;
+      }
+      auto &cur_stream = streams_[copy_count_ % max_stream_];
+      const char *src = src_ptr + pos;
+      char *dst = dest_ptr + pos;
+      memory::Copy(dest_place, dst, src_place, src, data_len, cur_stream);
+      pos = pos + split_max_len_;
+      ++copy_count_;
+    }
+  }
+  void Wait(void) {
+    if (copy_count_ == 0) {
+      return;
+    }
+    if (copy_count_ > max_stream_) {
+      for (auto &ss : streams_) {
+        platform::GpuStreamSync(ss);
+      }
+    } else {
+      for (size_t i = 0; i < copy_count_; ++i) {
+        platform::GpuStreamSync(streams_[i]);
+      }
+    }
+    copy_count_ = 0;
+  }
+  void SyncDevStream(void) {
+    platform::GpuStreamSync(dev_stream_);
+  }
+private:
+  phi::gpuStream_t  dev_stream_ = nullptr;
+  int device_id_ = -1;
+  size_t max_stream_ = 0;
+  std::vector<phi::gpuStream_t> streams_;
+  size_t copy_count_ = 0;
+  size_t split_max_len_ = FLAGS_gpugraph_parallel_copyer_split_maxsize * 1024 * 1024;
+};
+#endif
 template<typename TStream>
 inline void Tensor2Pinned(phi::DenseTensor *tensor, const TStream &stream) {
+#if defined(PADDLE_WITH_CUDA)
   const size_t mem_len = tensor->memory_size();
   auto place = platform::CUDAPinnedPlace();
   auto holder = memory::AllocShared(place, mem_len);
   memory::Copy(place, holder->ptr(),
       tensor->place(), tensor->data(), mem_len, stream);
   tensor->ResetHolderWithType(holder, tensor->dtype());
+#endif
 }
 template<typename TStream>
 inline void CopyTensor(const phi::DenseTensor &src_tensor,
     const phi::Place& place, phi::DenseTensor *dest_tensor, const TStream &stream) {
+#if defined(PADDLE_WITH_CUDA)
   size_t mem_len = src_tensor.memory_size();
   if (!dest_tensor->IsInitialized()) {
     dest_tensor->Resize(src_tensor.dims());
@@ -81,12 +166,14 @@ inline void CopyTensor(const phi::DenseTensor &src_tensor,
   }
   auto ptr = dest_tensor->mutable_data(place, src_tensor.dtype(), mem_len);
   memory::Copy(place, ptr, src_tensor.place(), src_tensor.data(), mem_len, stream);
+#endif
 }
-template<typename TStream>
+template<typename TCopyer>
 void HogwildWorker::OffLoadVarInfo::CopyInputs(const Scope* root,
                     const platform::Place& place,
                     Scope* scope,
-                    const TStream &stream) {
+                    TCopyer *copyer) {
+#if defined(PADDLE_WITH_CUDA)
   if (copy_vars.empty()) {
     return;
   }
@@ -97,18 +184,18 @@ void HogwildWorker::OffLoadVarInfo::CopyInputs(const Scope* root,
     auto dest_var = scope->FindLocalVar(name);
     PADDLE_ENFORCE(dest_var != nullptr, "dest name=%s is nullptr", name.c_str());
     auto* dest_tensor = dest_var->GetMutable<phi::DenseTensor>();
-    CopyTensor(src_tensor, place, dest_tensor, stream);
+    copyer->Copy(src_tensor, place, dest_tensor);
   }
-  platform::GpuStreamSync(stream);
+  copyer->Wait();
+#endif
 }
-template<typename TStream>
+template<typename TCopyer>
 void HogwildWorker::OffLoadVarInfo::BackUpInputs(
-    Scope* root_scope, Scope* scope,
-    const TStream &stream) {
+    Scope* root_scope, Scope* scope, TCopyer *copyer) {
+#if defined(PADDLE_WITH_CUDA)
   if (backup_vars.empty()) {
     return;
   }
-  platform::GpuStreamSync(stream);
   for (auto& name : backup_vars) {
     auto var = scope->FindLocalVar(name);
     if (var == nullptr) {
@@ -120,16 +207,17 @@ void HogwildWorker::OffLoadVarInfo::BackUpInputs(
       root_var = root_scope->Var(name);
       auto root_tensor = root_var->GetMutable<phi::DenseTensor>();
       auto place = platform::CUDAPinnedPlace();
-      CopyTensor(src_tensor, place, root_tensor, stream);
+      copyer->Copy(src_tensor, place, root_tensor);
     } else {
       auto root_tensor = root_var->GetMutable<phi::DenseTensor>();
       if (root_tensor->IsInitialized() &&
           !platform::is_gpu_place(root_tensor->place())) {
-        CopyTensor(src_tensor, root_tensor->place(), root_tensor, stream);
+        copyer->Copy(src_tensor, root_tensor->place(), root_tensor);
       }
     }
   }
-  platform::GpuStreamSync(stream);
+  copyer->Wait();
+#endif
 }
 
 void HogwildWorker::Initialize(const TrainerDesc &desc) {
@@ -372,12 +460,9 @@ size_t HogwildWorker::AdjustOffloadOps(const ProgramDesc &program) {
   }
   // offload adam
   std::multiset<std::string> param2refs;
-  size_t last_op_idx = 0;
   for (size_t op_id = 0; op_id < ops_.size(); ++op_id) {
     auto &op = ops_[op_id];
     if (op->Type() == "c_broadcast") {
-      // record last broadcast op id for begin gather
-      last_op_idx = op_id;
       continue;
     }
     // offload
@@ -511,7 +596,16 @@ size_t HogwildWorker::AdjustOffloadOps(const ProgramDesc &program) {
     }
   };
 
-  size_t op_idx = last_op_idx;
+  size_t op_idx = 0;
+  if (is_multi_node_) {
+    while (op_idx < ops_.size()) {
+      int op_role = ops_[op_idx]->Attr<int>("op_role");
+      if (op_role == static_cast<int>(OpRole::kBackward)) {
+        break;
+      }
+      ++op_idx;
+    }
+  }
   size_t start_op_idx = 0;
   int64_t total_len = 0;
   std::vector<std::string> *out_vars = nullptr;
@@ -1028,6 +1122,8 @@ void HogwildWorker::TrainFilesWithProfiler() {
   }
 #if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
   auto stream = static_cast<phi::GPUContext *>(dev_ctx_)->stream();
+  std::unique_ptr<GPUParallelCopyer> copyer(
+      new GPUParallelCopyer(stream, thread_id_, FLAGS_gpugraph_parallel_stream_num));
 #endif
   while (1) {
     cur_batch = device_reader_->Next();
@@ -1073,13 +1169,13 @@ void HogwildWorker::TrainFilesWithProfiler() {
       // offload
       auto it = offload_vars_.find(op.get());
       if (it != offload_vars_.end()) {
-        it->second.CopyInputs(root_scope_, place_, thread_scope_, stream);
+        it->second.CopyInputs(root_scope_, place_, thread_scope_, copyer.get());
       }
 #endif
       op->Run(*thread_scope_, place_);
 #if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
       if (it != offload_vars_.end()) {
-        it->second.BackUpInputs(root_scope_, thread_scope_, stream);
+        it->second.BackUpInputs(root_scope_, thread_scope_, copyer.get());
       }
 #endif
 #ifdef PADDLE_WITH_HETERPS
@@ -1194,6 +1290,8 @@ void HogwildWorker::TrainFiles() {
   }
 #if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
   auto stream = static_cast<phi::GPUContext *>(dev_ctx_)->stream();
+  std::unique_ptr<GPUParallelCopyer> copyer(
+      new GPUParallelCopyer(stream, thread_id_, FLAGS_gpugraph_parallel_stream_num));
 #endif
   while (1) {
     cur_batch = device_reader_->Next();
@@ -1235,7 +1333,7 @@ void HogwildWorker::TrainFiles() {
       // offload
       auto it = offload_vars_.find(op.get());
       if (it != offload_vars_.end()) {
-        it->second.CopyInputs(root_scope_, place_, thread_scope_, stream);
+        it->second.CopyInputs(root_scope_, place_, thread_scope_, copyer.get());
       }
 #endif
 //      VLOG(0) << place_ << "," << op->DebugStringEx(thread_scope_);
@@ -1243,7 +1341,7 @@ void HogwildWorker::TrainFiles() {
 #if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
       // offload
       if (it != offload_vars_.end()) {
-        it->second.BackUpInputs(root_scope_, thread_scope_, stream);
+        it->second.BackUpInputs(root_scope_, thread_scope_, copyer.get());
       }
 #endif
       if (gc) {

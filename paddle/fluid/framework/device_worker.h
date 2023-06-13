@@ -262,19 +262,17 @@ class CPUWorkerBase : public DeviceWorker {
  protected:
   int thread_id_;
 };
-
 class HogwildWorker : public CPUWorkerBase {
   struct OffLoadVarInfo {
     std::vector<std::string> copy_vars;
     std::vector<std::string> backup_vars;
-    template<typename TStream>
+    template<typename TCopyer>
     void CopyInputs(const Scope* root,
                     const platform::Place& place,
                     Scope* scope,
-                    const TStream &stream);
-    template<typename TStream>
-    void BackUpInputs(Scope* root, Scope* scope,
-        const TStream &stream);
+                    TCopyer *copyer);
+    template<typename TCopyer>
+    void BackUpInputs(Scope* root, Scope* scope, TCopyer *copyer);
   };
  public:
   HogwildWorker() {}
