@@ -17,7 +17,6 @@ limitations under the License. */
 
 #include "paddle/fluid/framework/fleet/heter_ps/hashtable.h"
 #include "paddle/fluid/framework/fleet/heter_ps/optimizer.cuh.h"
-
 namespace paddle {
 namespace framework {
 
@@ -255,7 +254,7 @@ void HashTable<KeyType, ValType>::set_sparse_sgd(
              &optimizer_config,
              sizeof(OptimizerConfig),
              cudaMemcpyHostToDevice,
-			 stream_);
+       stream_);
   cudaStreamSynchronize(stream_);
 }
 
@@ -267,7 +266,7 @@ void HashTable<KeyType, ValType>::set_embedx_sgd(
              &optimizer_config,
              sizeof(OptimizerConfig),
              cudaMemcpyHostToDevice,
-			 stream_);
+       stream_);
   cudaStreamSynchronize(stream_);
 }
 
@@ -460,7 +459,6 @@ template void HashTable<int64_t, unsigned int>::get<cudaStream_t>(
 // HashTable<uint64_t, paddle::framework::FeatureValue>::get<cudaStream_t>(
 //    const uint64_t* d_keys, char* d_vals, size_t len, cudaStream_t
 //    stream);
-
 template void HashTable<uint64_t, float>::insert<cudaStream_t>(
     const uint64_t* d_keys,
     const float* d_vals,
@@ -529,6 +527,15 @@ template void HashTable<uint64_t, float*>::update<
                   size_t len,
                   SparseAdagradOptimizer<CommonFeatureValueAccessor> sgd,
                   cudaStream_t stream);
+
+template void HashTable<uint64_t, float*>::update<
+    SparseAdagradV2Optimizer<CommonFeatureValueAccessor>,
+    cudaStream_t>(const uint64_t* d_keys,
+                  const char* d_grads,
+                  size_t len,
+                  SparseAdagradV2Optimizer<CommonFeatureValueAccessor> sgd,
+                  cudaStream_t stream);
+
 template void HashTable<uint64_t, float*>::update<
     SparseAdamOptimizer<CommonFeatureValueAccessor>,
     cudaStream_t>(const uint64_t* d_keys,

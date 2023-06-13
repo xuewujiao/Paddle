@@ -217,6 +217,7 @@ class DeviceWorker {
 
   virtual Scope* GetThreadScope() { return thread_scope_; }
   DataFeed* device_reader_ = nullptr;
+  virtual void Finalize() {}
 
  protected:
   virtual void DumpParam(const Scope& scope, const int batch_id);
@@ -265,31 +266,29 @@ class CPUWorkerBase : public DeviceWorker {
 class HogwildWorker : public CPUWorkerBase {
  public:
   HogwildWorker() {}
-  virtual ~HogwildWorker() {
-    for (OperatorBase* op : ops_) {
-      delete op;
-    }
-    std::vector<OperatorBase*>().swap(ops_);
-  }
+  virtual ~HogwildWorker() {}
   virtual void Initialize(const TrainerDesc& desc);
   virtual void TrainFiles();
   virtual void TrainFilesWithProfiler();
   virtual void PrintFetchVars();
   virtual void CreateDeviceResource(const ProgramDesc& main_prog);
   virtual void BindingDataFeedMemory();
+  virtual void Finalize();
   template <typename T>
-  void SetZero(phi::DenseTensor* tensor,
-               phi::DenseTensor* root_tensor,
-               int tensor_dim);
+  void SetZero(phi::DenseTensor* tensor, const phi::DenseTensor& root_tensor);
 
  protected:
   void CreateThreadOperators(const ProgramDesc& program);
   void CreateThreadScope(const ProgramDesc& program);
   // check batch num
   bool CheckBatchNum(int flag);
+  bool GetPassEnd(int flag);
+  // build thread sharding depends
+  void BuildShardingDepends(const ProgramDesc& program);
+  int IsParameter(const std::string& name, bool full_match);
 
   std::vector<std::string> op_names_;
-  std::vector<OperatorBase*> ops_;
+  std::vector<std::unique_ptr<OperatorBase>> ops_;
   bool thread_barrier_;
   // Scope* thread_scope_;
   HogwildWorkerParameter param_;
@@ -297,6 +296,22 @@ class HogwildWorker : public CPUWorkerBase {
   std::map<std::string, int> stat_var_name_map_;
   static std::atomic<bool> quit_flag_;
   phi::DenseTensor sync_stat_;
+  // skip vars
+  std::vector<std::string> skip_vars_;
+  std::unordered_map<const OperatorBase*, std::vector<std::string>>
+      unused_vars_;
+  int ring_id_ = 0;
+  int nccl_rank_id_ = 0;
+  std::unordered_map<std::string, int> params2rootid_;
+  std::multiset<std::string> remove_vars_;
+  std::multiset<std::string> unpersist_vars_;
+  std::multiset<std::string> persist_param_vars_;
+  std::multiset<OpDesc*> remove_ops_;
+  std::vector<std::string> need_copy_vars_;
+  std::vector<std::string> shard_dump_params_;
+  std::vector<std::string> shard_dump_fields_;
+  std::multiset<std::string> free_param_vars_;
+  bool sharding_mode_ = false;
 };
 
 class DownpourWorker : public HogwildWorker {

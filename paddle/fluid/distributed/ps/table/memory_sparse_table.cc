@@ -368,6 +368,14 @@ int32_t MemorySparseTable::Save(const std::string &dirname,
     int retry_num = 0;
     int err_no = 0;
     auto &shard = _local_shards[i];
+#ifdef PADDLE_WITH_GPU_GRAPH
+    // for incremental training, batch_model increase unseenday before save
+    if (save_param == 3) {
+      for (auto it = shard.begin(); it != shard.end(); ++it) {
+        _value_accesor->UpdateStatAfterSave(it.value().data(), save_param);
+      }
+    }
+#endif
     do {
       err_no = 0;
       feasign_size = 0;
@@ -414,9 +422,17 @@ int32_t MemorySparseTable::Save(const std::string &dirname,
       }
     } while (is_write_failed);
     feasign_size_all += feasign_size;
+#ifndef PADDLE_WITH_GPU_GRAPH
     for (auto it = shard.begin(); it != shard.end(); ++it) {
       _value_accesor->UpdateStatAfterSave(it.value().data(), save_param);
     }
+#else
+    if (save_param != 3) {
+      for (auto it = shard.begin(); it != shard.end(); ++it) {
+        _value_accesor->UpdateStatAfterSave(it.value().data(), save_param);
+      }
+    }
+#endif
     LOG(INFO) << "MemorySparseTable save prefix success, path: "
               << channel_config.path << " feasign_size: " << feasign_size;
   }
@@ -1050,18 +1066,26 @@ int32_t MemorySparseTable::Flush() { return 0; }
 
 int32_t MemorySparseTable::Shrink(const std::string &param) {
   VLOG(0) << "MemorySparseTable::Shrink";
-  // TODO(zhaocaibei123): implement with multi-thread
+  std::atomic<uint32_t> shrink_size_all{0};
+  int thread_num = _real_local_shard_num;
+  omp_set_num_threads(thread_num);
+#pragma omp parallel for schedule(dynamic)
   for (int shard_id = 0; shard_id < _real_local_shard_num; ++shard_id) {
     // Shrink
+    int feasign_size = 0;
     auto &shard = _local_shards[shard_id];
     for (auto it = shard.begin(); it != shard.end();) {
       if (_value_accesor->Shrink(it.value().data())) {
         it = shard.erase(it);
+        ++feasign_size;
       } else {
         ++it;
       }
     }
+    shrink_size_all += feasign_size;
   }
+  VLOG(0) << "MemorySparseTable::Shrink success, shrink size:"
+          << shrink_size_all;
   return 0;
 }
 

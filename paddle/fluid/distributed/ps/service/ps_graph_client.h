@@ -28,6 +28,7 @@ struct RpcMessageHead;
 
 struct SparsePassValues {
   paddle::framework::WaitGroup wg;
+  std::mutex *shard_mutex;
   SparseShardValues *values;
 };
 class PsGraphClient : public PsLocalClient {
@@ -37,6 +38,7 @@ class PsGraphClient : public PsLocalClient {
     uint32_t shard_num;
     std::mutex pass_mutex;
     SparseFeasReferedMap refered_feas;
+    paddle::framework::Semaphore sem_wait;
   };
 
  public:

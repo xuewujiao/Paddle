@@ -19,6 +19,7 @@
 #include <set>
 #include <sstream>
 #include <vector>
+#include <cuda_fp16.h>
 
 #include "glog/logging.h"
 #include "paddle/fluid/distributed/ps/table/graph/graph_weighted_sampler.h"
@@ -46,7 +47,7 @@ class Node {
     return std::vector<int>();
   }
   virtual uint64_t get_neighbor_id(int idx) { return 0; }
-  virtual float get_neighbor_weight(int idx) { return 1.; }
+  virtual half get_neighbor_weight(int idx) { return 1.; }
 
   virtual int get_size(bool need_feature);
   virtual void to_buffer(char *buffer, bool need_feature);
@@ -61,11 +62,17 @@ class Node {
                               std::vector<uint8_t> &slot_id) const {  // NOLINT
     return 0;
   }
+  virtual int get_float_feature(int slot_idx,
+                              std::vector<float> &feature_id,      // NOLINT
+                              std::vector<uint8_t> &slot_id) const {  // NOLINT
+    return 0;
+  }
   virtual void set_feature(int idx, const std::string &str) {}
   virtual void set_feature_size(int size) {}
   virtual void shrink_to_fit() {}
   virtual int get_feature_size() { return 0; }
   virtual size_t get_neighbor_size() { return 0; }
+  virtual bool get_is_weighted() { return is_weighted; }
 
  protected:
   uint64_t id;
@@ -88,7 +95,7 @@ class GraphNode : public Node {
     return sampler->sample_k(k, rng);
   }
   virtual uint64_t get_neighbor_id(int idx) { return edges->get_id(idx); }
-  virtual float get_neighbor_weight(int idx) { return edges->get_weight(idx); }
+  virtual half get_neighbor_weight(int idx) { return edges->get_weight(idx); }
   virtual size_t get_neighbor_size() { return edges->size(); }
 
  protected:
@@ -186,6 +193,12 @@ class FeatureNode : public Node {
     return num;
   }
 
+  virtual int get_float_feature(int slot_idx,
+                                std::vector<float> &float_feature,      // NOLINT
+                                std::vector<uint8_t> &slot_id) const {  // NOLINT
+    return 0;
+  }
+
   virtual std::string *mutable_feature(int idx) {
     if (idx >= static_cast<int>(this->feature.size())) {
       this->feature.resize(idx + 1);
@@ -193,14 +206,22 @@ class FeatureNode : public Node {
     return &(this->feature[idx]);
   }
 
+  virtual std::string *mutable_float_feature(int idx) { return NULL; }
+
   virtual void set_feature(int idx, const std::string &str) {
     if (idx >= static_cast<int>(this->feature.size())) {
       this->feature.resize(idx + 1);
     }
     this->feature[idx] = str;
   }
-  virtual void set_feature_size(int size) { this->feature.resize(size); }
-  virtual int get_feature_size() { return this->feature.size(); }
+  virtual void set_feature_size(int size) { 
+    this->feature.resize(size);
+  }
+  virtual void set_float_feature_size(int size) {}
+  virtual int get_feature_size() { 
+    return this->feature.size();
+  }
+  virtual int get_float_feature_size() { return 0; }
   virtual void shrink_to_fit() {
     feature.shrink_to_fit();
     for (auto &slot : feature) {
@@ -281,6 +302,234 @@ class FeatureNode : public Node {
 
  protected:
   std::vector<std::string> feature;
+};
+
+class FloatFeatureNode : public FeatureNode {
+ public:
+  FloatFeatureNode() : FeatureNode() {}
+  explicit FloatFeatureNode(uint64_t id) : FeatureNode(id) {}
+  virtual ~FloatFeatureNode() {}
+  virtual std::string get_feature(int idx) {
+    if (idx < static_cast<int>(float_feature_start_idx)) {
+      return this->feature[idx];
+    } else {
+      return std::string("");
+    }
+  }
+
+  virtual int get_feature_ids(std::vector<uint64_t> *res) const {
+    PADDLE_ENFORCE_NOT_NULL(res,
+                            paddle::platform::errors::InvalidArgument(
+                                "get_feature_ids res should not be null"));
+    errno = 0;
+    for (int slot_idx = 0; slot_idx < float_feature_start_idx; slot_idx++) {
+      auto& feature_item = this->feature[slot_idx];
+    // for (auto &feature_item : feature) {
+      const uint64_t *feas = (const uint64_t *)(feature_item.c_str());
+      size_t num = feature_item.length() / sizeof(uint64_t);
+      CHECK((feature_item.length() % sizeof(uint64_t)) == 0)
+          << "bad feature_item: [" << feature_item << "]";
+      size_t n = res->size();
+      res->resize(n + num);
+      for (size_t i = 0; i < num; ++i) {
+        (*res)[n + i] = feas[i];
+      }
+    }
+    PADDLE_ENFORCE_EQ(
+        errno,
+        0,
+        paddle::platform::errors::InvalidArgument(
+            "get_feature_ids get errno should be 0, but got %d.", errno));
+    return 0;
+  }
+
+  virtual int get_feature_ids(int slot_idx, std::vector<uint64_t> *res) const {
+    PADDLE_ENFORCE_NOT_NULL(res,
+                            paddle::platform::errors::InvalidArgument(
+                                "get_feature_ids res should not be null"));
+    res->clear();
+    errno = 0;
+    if (slot_idx < static_cast<int>(float_feature_start_idx)) {
+      const std::string &s = this->feature[slot_idx];
+      const uint64_t *feas = (const uint64_t *)(s.c_str());
+
+      size_t num = s.length() / sizeof(uint64_t);
+      CHECK((s.length() % sizeof(uint64_t)) == 0)
+          << "bad feature_item: [" << s << "]";
+      res->resize(num);
+      for (size_t i = 0; i < num; ++i) {
+        (*res)[i] = feas[i];
+      }
+    }
+    PADDLE_ENFORCE_EQ(
+        errno,
+        0,
+        paddle::platform::errors::InvalidArgument(
+            "get_feature_ids get errno should be 0, but got %d.", errno));
+    return 0;
+  }
+
+  virtual int get_feature_ids(int slot_idx,
+                              std::vector<uint64_t> &feature_id,      // NOLINT
+                              std::vector<uint8_t> &slot_id) const {  // NOLINT
+    errno = 0;
+    size_t num = 0;
+    if (slot_idx < static_cast<int>(float_feature_start_idx)) {
+      const std::string &s = this->feature[slot_idx];
+      const uint64_t *feas = (const uint64_t *)(s.c_str());
+      num = s.length() / sizeof(uint64_t);
+      CHECK((s.length() % sizeof(uint64_t)) == 0)
+          << "bad feature_item: [" << s << "]";
+      for (size_t i = 0; i < num; ++i) {
+        feature_id.push_back(feas[i]);
+        slot_id.push_back(slot_idx);
+      }
+    }
+    PADDLE_ENFORCE_EQ(
+        errno,
+        0,
+        paddle::platform::errors::InvalidArgument(
+            "get_feature_ids get errno should be 0, but got %d.", errno));
+    return num;
+  }
+
+  virtual int get_float_feature(int slot_idx,
+                                std::vector<float> &float_feature,      // NOLINT
+                                std::vector<uint8_t> &slot_id) const {  // NOLINT
+    errno = 0;
+    size_t num = 0;
+    if (float_feature_start_idx + slot_idx < static_cast<int>(this->feature.size())) {
+      const std::string &s = this->feature[float_feature_start_idx + slot_idx];
+      const float *feas = (const float *)(s.c_str());
+      num = s.length() / sizeof(float);
+      CHECK((s.length() % sizeof(float)) == 0)
+          << "bad feature_item: [" << s << "]";
+      for (size_t i = 0; i < num; ++i) {
+        float_feature.push_back(feas[i]);
+        slot_id.push_back(slot_idx);
+      }
+    }
+    PADDLE_ENFORCE_EQ(
+        errno,
+        0,
+        paddle::platform::errors::InvalidArgument(
+             "get_feature_ids get errno should be 0, but got %d.", errno));
+    return num;
+  }
+
+  virtual std::string *mutable_feature(int idx) {
+    if (idx >= static_cast<int>(this->feature.size())) {
+      this->feature.resize(idx + 1);
+    }
+    if (idx + 1 > float_feature_start_idx) float_feature_start_idx = idx + 1;
+    return &(this->feature[idx]);
+  }
+
+  virtual std::string *mutable_float_feature(int idx) {
+    if (float_feature_start_idx + idx >= static_cast<int>(this->feature.size())) {
+      this->feature.resize(float_feature_start_idx + idx + 1);
+    }
+    return &(this->feature[float_feature_start_idx + idx]);
+  }
+
+  virtual void set_feature(int idx, const std::string &str) {
+    if (idx >= static_cast<int>(this->feature.size())) {
+      this->feature.resize(idx + 1);
+    }
+    this->feature[idx] = str;
+  }
+  virtual void set_feature_size(int size) { 
+    this->feature.resize(size);
+    float_feature_start_idx = size;
+  }
+  virtual void set_float_feature_size(int size) { this->feature.resize(float_feature_start_idx + size); }
+  virtual int get_feature_size() { 
+    return float_feature_start_idx;
+  }
+  virtual int get_float_feature_size() { 
+    return this->feature.size() - float_feature_start_idx;
+  }
+  virtual void shrink_to_fit() {
+    feature.shrink_to_fit();
+    for (auto &slot : feature) {
+      slot.shrink_to_fit();
+    }
+  }
+
+  template <typename T>
+  static std::string parse_value_to_bytes(std::vector<std::string> feat_str) {
+    T v;
+    size_t Tsize = sizeof(T) * feat_str.size();
+    char buffer[Tsize];
+    for (size_t i = 0; i < feat_str.size(); i++) {
+      std::stringstream ss(feat_str[i]);
+      ss >> v;
+      std::memcpy(
+          buffer + sizeof(T) * i, reinterpret_cast<char *>(&v), sizeof(T));
+    }
+    return std::string(buffer, Tsize);
+  }
+
+  template <typename T>
+  static void parse_value_to_bytes(
+      std::vector<std::string>::iterator feat_str_begin,
+      std::vector<std::string>::iterator feat_str_end,
+      std::string *output) {
+    T v;
+    size_t feat_str_size = feat_str_end - feat_str_begin;
+    size_t Tsize = sizeof(T) * feat_str_size;
+    char buffer[Tsize] = {'\0'};
+    for (size_t i = 0; i < feat_str_size; i++) {
+      std::stringstream ss(*(feat_str_begin + i));
+      ss >> v;
+      std::memcpy(
+          buffer + sizeof(T) * i, reinterpret_cast<char *>(&v), sizeof(T));
+    }
+    output->assign(buffer);
+  }
+
+  template <typename T>
+  static std::vector<T> parse_bytes_to_array(std::string feat_str) {
+    T v;
+    std::vector<T> out;
+    size_t start = 0;
+    const char *buffer = feat_str.data();
+    while (start < feat_str.size()) {
+      std::memcpy(reinterpret_cast<char *>(&v), buffer + start, sizeof(T));
+      start += sizeof(T);
+      out.push_back(v);
+    }
+    return out;
+  }
+
+  template <typename T>
+  static int parse_value_to_bytes(
+      std::vector<paddle::string::str_ptr>::iterator feat_str_begin,
+      std::vector<paddle::string::str_ptr>::iterator feat_str_end,
+      std::string *output) {
+    size_t feat_str_size = feat_str_end - feat_str_begin;
+    size_t Tsize = sizeof(T) * feat_str_size;
+    size_t num = output->length();
+    output->resize(num + Tsize);
+
+    T *fea_ptrs = reinterpret_cast<T *>(&(*output)[num]);
+
+    thread_local paddle::string::str_ptr_stream ss;
+    for (size_t i = 0; i < feat_str_size; i++) {
+      ss.reset(*(feat_str_begin + i));
+      int len = ss.end - ss.ptr;
+      char *old_ptr = ss.ptr;
+      ss >> fea_ptrs[i];
+      if (ss.ptr - old_ptr != len) {
+        return -1;
+      }
+    }
+    return 0;
+  }
+
+ protected:
+  std::vector<std::string> feature;
+  uint8_t float_feature_start_idx = 0;
 };
 
 }  // namespace distributed

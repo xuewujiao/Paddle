@@ -62,7 +62,8 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::HeterComm(
 #endif
   enable_gpu_direct_access_ =
       (topo_aware_) ? false : FLAGS_gpugraph_enable_gpu_direct_access;
-  VLOG(0) << "device_num = " << device_num_ << ", multi_node = " << multi_node_
+  VLOG(0) << "device_num = " << device_num_
+          << ", multi_node = " << multi_node_
           << ", multi_mf_dim = " << multi_mf_dim_
           << ", topo_aware = " << topo_aware_
           << ", enable_gpu_direct_access = " << enable_gpu_direct_access_
@@ -251,7 +252,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::init_path() {
         node.out_stream = resource_->remote_stream(j, transfer_id);
         node.key_storage = NULL;
         node.val_storage = NULL;
-        node.sync = 0;
+        node.sync = 1;
         node.dev_num = j;
       }
     }
@@ -2591,12 +2592,12 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_all2all(
     loc.inner_span_.Resume();
     // gather keys of all gpu and select shard key
     gather_inner_size =
-        gather_inter_keys_by_copy(gpu_id, fea_num, d_keys, stream);
+        gather_inner_keys_by_copy(gpu_id, fea_num, d_keys, stream);
     loc.inner_span_.Pause();
 
     loc.node_span_.Resume();
     // all2all mode begins. init resource, partition keys, pull vals by all2all
-    pull_size = gather_sparse_keys_by_all2all(
+    pull_size = gather_inter_keys_by_all2all(
         gpu_id, gather_inner_size, loc.d_merged_keys, stream);
     loc.node_span_.Pause();
 
@@ -2620,7 +2621,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_all2all(
           max_value_bound_,
           stream);
 
-      scatter_sparse_vals_by_all2all(gpu_id,
+      scatter_inter_vals_by_all2all(gpu_id,
                                      gather_inner_size,
                                      loc.d_merged_push_vals,
                                      loc.d_merged_push_vals,
@@ -2651,7 +2652,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_all2all(
 
       PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
     } else {
-      scatter_sparse_vals_by_all2all(gpu_id,
+      scatter_inter_vals_by_all2all(gpu_id,
                                      gather_inner_size,
                                      loc.d_merged_vals,
                                      loc.d_merged_vals,
@@ -2670,7 +2671,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_all2all(
     loc.alloc(fea_num, max_type_size_);
     loc.node_span_.Resume();
     // all2all mode begins. init resource, partition keys, pull vals by all2all
-    pull_size = gather_sparse_keys_by_all2all(gpu_id, fea_num, d_keys, stream);
+    pull_size = gather_inter_keys_by_all2all(gpu_id, fea_num, d_keys, stream);
 
     loc.node_span_.Pause();
     // get all tables
@@ -2690,8 +2691,8 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_all2all(
           max_mf_dim_,
           max_value_bound_,
           stream);
-      scatter_sparse_vals_by_all2all(gpu_id,
-                                     pull_size,
+      scatter_inter_vals_by_all2all(gpu_id,
+                                     fea_num,
                                      loc.d_merged_push_vals,
                                      loc.d_merged_push_vals,
                                      value_bytes,
@@ -2707,8 +2708,8 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_all2all(
           stream);
       PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
     } else {
-      scatter_sparse_vals_by_all2all(gpu_id,
-                                     pull_size,
+      scatter_inter_vals_by_all2all(gpu_id,
+                                     fea_num,
                                      loc.d_merged_vals,
                                      d_vals,
                                      pull_type_size_,
@@ -2849,7 +2850,7 @@ template <typename KeyType,
           typename GradType,
           typename GPUAccessor>
 size_t
-HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_inter_keys_by_copy(
+HeterComm<KeyType, ValType, GradType, GPUAccessor>::gather_inner_keys_by_copy(
     const int &gpu_id,
     const size_t &fea_size,
     const KeyType *d_keys,
@@ -2948,6 +2949,13 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::partition_shard_keys(
     const cudaStream_t &stream) {
   DevPlace place = DevPlace(gpu_id);
   AnyDeviceGuard guard(gpu_id);
+
+  if (len <= 0) {
+    for (int i = 0; i < shard_num; ++i) {
+      h_part_sizes[i] = 0;
+    }
+    return;
+  }
 
   thread_local std::shared_ptr<memory::Allocation> d_offset_tmp = nullptr;
   uint32_t *d_left = AllocCache<uint32_t>(
@@ -3085,7 +3093,7 @@ template <typename KeyType,
           typename GradType,
           typename GPUAccessor>
 size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
-    gather_sparse_keys_by_all2all(const int &gpu_id,
+    gather_inter_keys_by_all2all(const int &gpu_id,
                                   const size_t &fea_size,
                                   const KeyType *d_in_keys,
                                   const cudaStream_t &stream) {
@@ -3105,8 +3113,6 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
                        h_local_part_sizes,
                        node_size_,
                        stream);
-  // barrier
-  //  barrier_.wait();
 
   int all_shard_part_size = node_size_ * node_size_;
   int rank_offset = rank_id_ * node_size_;
@@ -3156,8 +3162,6 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
   }
   size_t &remote_size = h_remote_part_offsets[node_size_];
   cache.alloc(remote_size, max_type_size_, HeterCommType::COPY_KEY);
-  // barrier
-  //  barrier_.wait();
 
   size_t total_fea_num = 0;
   if (rdma_checker_->need_rdma_trans()) {
@@ -3191,7 +3195,7 @@ template <typename KeyType,
           typename GradType,
           typename GPUAccessor>
 void HeterComm<KeyType, ValType, GradType, GPUAccessor>::
-    scatter_sparse_vals_by_all2all(const int &gpu_id,
+    scatter_inter_vals_by_all2all(const int &gpu_id,
                                    const size_t &fea_size,
                                    const char *d_in_vals,
                                    void *d_out_vals,
@@ -3230,6 +3234,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::
                                          stream);
   }
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
+
   // fill vals
   heter_comm_kernel_->scatter_vals(
       reinterpret_cast<const float *>(d_tmp_vals),  // in
@@ -3240,6 +3245,74 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::
       stream);
   CUDA_CHECK(cudaStreamSynchronize(stream));
 }
+
+template <typename KeyType,
+          typename ValType,
+          typename GradType,
+          typename GPUAccessor>
+void HeterComm<KeyType, ValType, GradType, GPUAccessor>::
+recalc_local_and_remote_size(const int& gpu_id,
+                             const size_t& pull_size,
+                             const size_t& node_num,
+                             const uint32_t* d_tmp_size_list,
+                             const uint32_t* d_inter_size_list,
+                             const cudaStream_t &stream) {
+  auto &cache = storage_[gpu_id];
+  auto &res = cache.shard_res;
+  auto h_local_part_sizes = res.h_local_part_sizes.data();
+  auto h_local_part_offsets = res.h_local_part_offsets.data();
+  auto h_remote_part_sizes = res.h_remote_part_sizes.data();
+  auto h_remote_part_offsets = res.h_remote_part_offsets.data();
+
+  std::vector<uint32_t> h_before_scatter_size_list(pull_size, 0);
+  std::vector<uint32_t> h_end_scatter_size_list(node_num, 0);
+  CUDA_CHECK(cudaMemcpyAsync(
+            reinterpret_cast<char *>(h_before_scatter_size_list.data()),
+            d_tmp_size_list,
+            sizeof(uint32_t) * pull_size,
+            cudaMemcpyDeviceToHost,
+            stream));
+  CUDA_CHECK(cudaMemcpyAsync(
+            reinterpret_cast<char *>(h_end_scatter_size_list.data()),
+            d_inter_size_list,
+            sizeof(uint32_t) * node_num,
+            cudaMemcpyDeviceToHost,
+            stream));
+  std::vector<size_t> vari_local_part_sizes(node_size_, 0);
+  std::vector<size_t> vari_local_part_offsets(node_size_ + 1, 0);
+  std::vector<size_t> vari_remote_part_sizes(node_size_, 0);
+  std::vector<size_t> vari_remote_part_offsets(node_size_ + 1, 0);
+
+  //local use end scatter(len is node num), reote use before scatter(len is pull size)
+  //recompute offsets and parts
+  VLOG(2) << "begin recalc local and remote size and offets";
+  for (int i = 0; i < node_size_; i++) {
+    size_t local_size = 0;
+    size_t remote_size = 0;
+    for (int j = h_local_part_offsets[i]; j < h_local_part_offsets[i + 1]; j++) {
+      local_size += h_end_scatter_size_list[j];
+    }
+    vari_local_part_sizes[i] = local_size;
+    vari_local_part_offsets[i + 1] =
+      vari_local_part_offsets[i] + vari_local_part_sizes[i];
+    VLOG(2) << "gpu id: "<< gpu_id << ", before calc, local size:" << h_local_part_sizes[i] << ", local offset: "  << h_local_part_offsets[i + 1] << ", end calc, local part size:" << vari_local_part_sizes[i] << ", local offsets: " << vari_local_part_offsets[i + 1];
+
+    for (int k = h_remote_part_offsets[i]; k < h_remote_part_offsets[i + 1]; k++) {
+      remote_size += h_before_scatter_size_list[k];
+    }
+    vari_remote_part_sizes[i] = remote_size;
+    vari_remote_part_offsets[i + 1] =
+      vari_remote_part_offsets[i] + vari_remote_part_sizes[i];
+    VLOG(2) << "gpu id: "<< gpu_id << ", before cal, remote size:" << h_remote_part_sizes[i] << ", remote offset: " <<                h_remote_part_offsets[i + 1] << ", end calc, remote part size: " << vari_remote_part_sizes[i] << ", remote offsets: " << vari_remote_part_offsets[i + 1];
+  }
+  VLOG(2) << "end recalc remote size and offsets";
+  //send 前把当前gpuid 的size 和 offset 替换成 vari size 和offset
+  res.h_local_part_sizes = std::move(vari_local_part_sizes);
+  res.h_local_part_offsets = std::move(vari_local_part_offsets);
+  res.h_remote_part_sizes = std::move(vari_remote_part_sizes);
+  res.h_remote_part_offsets = std::move(vari_remote_part_offsets);
+}
+
 template <typename KeyType,
           typename ValType,
           typename GradType,
@@ -4041,6 +4114,7 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_keys_by_all2all_trans(
   }
   return total_fea_num;
 }
+
 template <typename KeyType,
           typename ValType,
           typename GradType,
@@ -4054,6 +4128,7 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::send_vals_by_all2all_trans(
     char *d_out_vals,
     const size_t &value_bytes,
     const cudaStream_t &stream) {
+
   auto &my_cache = storage_[gpu_id];
   auto h_local_part_sizes = my_cache.shard_res.h_local_part_sizes.data();
   auto h_local_part_offsets = my_cache.shard_res.h_local_part_offsets.data();
@@ -4147,8 +4222,8 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
     auto &trans = storage_[trans_id];
 
     // wait node alloc hbm
-    //    trans.sem_wait->post();
-    //    my_cache.sem_wait->wait();
+    // trans.sem_wait->post();
+    // my_cache.sem_wait->wait();
     const size_t &recv_total_size =
         my_cache.shard_res.h_remote_part_offsets[nccl_node_size];
     size_t need_len = std::max(fea_size, recv_total_size);

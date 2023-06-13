@@ -970,6 +970,9 @@ class InMemoryDataset(DatasetBase):
     def get_epoch_finish(self):
         return self.dataset.get_epoch_finish()
 
+    def clear_sample_state(self):
+        self.dataset.clear_sample_state()
+
     @deprecated(
         since="2.0.0",
         update_to="paddle.distributed.InMemoryDataset.get_memory_data_size",
@@ -1132,6 +1135,15 @@ class InMemoryDataset(DatasetBase):
         )
         self.proto_desc.graph_config.get_degree = config.get(
             "get_degree", False
+        )
+        self.proto_desc.graph_config.weighted_sample = config.get(
+            "weighted_sample", False
+        )
+        self.proto_desc.graph_config.return_weight = config.get(
+            "return_weight", False
+        )
+        self.proto_desc.graph_config.pair_label = config.get(
+            "pair_label", ""
         )
         self.dataset.set_gpu_graph_mode(True)
 

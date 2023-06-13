@@ -42,6 +42,7 @@
 #include "paddle/fluid/distributed/ps/table/common_table.h"
 #include "paddle/fluid/distributed/ps/table/graph/class_macro.h"
 #include "paddle/fluid/distributed/ps/table/graph/graph_node.h"
+#include "paddle/fluid/distributed/ps/thirdparty/round_robin.h"
 #include "paddle/fluid/string/string_helper.h"
 #include "paddle/phi/core/utils/rw_lock.h"
 
@@ -121,7 +122,7 @@ class GraphShard {
   }
   GraphNode *add_graph_node(uint64_t id);
   GraphNode *add_graph_node(Node *node);
-  FeatureNode *add_feature_node(uint64_t id, bool is_overlap = true);
+  FeatureNode *add_feature_node(uint64_t id, bool is_overlap = true, int float_fea_num = 0);
   Node *find_node(uint64_t id);
   void delete_node(uint64_t id);
   void clear();
@@ -567,12 +568,14 @@ class GraphTable : public Table {
                                   std::string graph_data_local_path,
                                   int part_num,
                                   bool reverse,
-                                  const std::vector<bool> &is_reverse_edge_map);
+                                  const std::vector<bool> &is_reverse_edge_map,
+                                  bool use_weight);
   int32_t parse_edge_and_load(std::string etype2files,
                               std::string graph_data_local_path,
                               int part_num,
                               bool reverse,
-                              const std::vector<bool> &is_reverse_edge_map);
+                              const std::vector<bool> &is_reverse_edge_map,
+                              bool use_weight);
   int32_t parse_node_and_load(std::string ntype2files,
                               std::string graph_data_local_path,
                               int part_num,
@@ -585,7 +588,8 @@ class GraphTable : public Table {
       std::unordered_map<std::string, std::string> &res_type2path);  // NOLINT
   int32_t load_edges(const std::string &path,
                      bool reverse,
-                     const std::string &edge_type);
+                     const std::string &edge_type,
+                     bool use_weight = false);
   int get_all_id(GraphTableType table_type,
                  int slice_num,
                  std::vector<std::vector<uint64_t>> *output);
@@ -611,7 +615,8 @@ class GraphTable : public Table {
                      bool load_slot = true);
   std::pair<uint64_t, uint64_t> parse_edge_file(const std::string &path,
                                                 int idx,
-                                                bool reverse);
+                                                bool reverse,
+                                                bool use_weight);
   std::pair<uint64_t, uint64_t> parse_node_file(const std::string &path,
                                                 const std::string &node_type,
                                                 int idx,
@@ -720,6 +725,8 @@ class GraphTable : public Table {
       int idx, const std::vector<uint64_t> &ids);
   virtual paddle::framework::GpuPsCommGraphFea make_gpu_ps_graph_fea(
       int gpu_id, std::vector<uint64_t> &node_ids, int slot_num);  // NOLINT
+  virtual paddle::framework::GpuPsCommGraphFloatFea make_gpu_ps_graph_float_fea(
+      int gpu_id, std::vector<uint64_t> &node_ids, int float_slot_num);  // NOLINT
   int32_t Load_to_ssd(const std::string &path, const std::string &param);
   int64_t load_graph_to_memory_from_ssd(int idx,
                                         std::vector<uint64_t> &ids);  // NOLINT
@@ -753,10 +760,14 @@ class GraphTable : public Table {
   void build_graph_type_keys();
   void build_node_iter_type_keys();
   bool is_key_for_self_rank(const uint64_t &id);
+  void graph_partition(bool is_edge);
+  void dbh_graph_edge_partition();
+  void dbh_graph_feature_partition();
 
   std::vector<uint64_t> graph_total_keys_;
   std::vector<std::vector<uint64_t>> graph_type_keys_;
   std::unordered_map<int, int> type_to_index_;
+  robin_hood::unordered_set<uint64_t> unique_all_edge_keys_;
 
   std::vector<std::vector<GraphShard *>> edge_shards, feature_shards,
       node_shards;
@@ -770,7 +781,13 @@ class GraphTable : public Table {
   std::vector<std::vector<std::string>> feat_name;
   std::vector<std::vector<std::string>> feat_dtype;
   std::vector<std::vector<int32_t>> feat_shape;
+  std::vector<std::vector<std::string>> float_feat_name;
+  std::vector<std::vector<std::string>> float_feat_dtype;
+  std::vector<std::vector<int32_t>> float_feat_shape;
+  // int slot_fea_num_{-1};
+  // int float_fea_num_{-1};
   std::vector<std::unordered_map<std::string, int32_t>> feat_id_map;
+  std::vector<std::unordered_map<std::string, int32_t>> float_feat_id_map;
   std::unordered_map<std::string, int> feature_to_id, edge_to_id;
   std::vector<std::string> id_to_feature, id_to_edge;
   std::string table_name;
@@ -804,6 +821,7 @@ class GraphTable : public Table {
   bool is_parse_node_fail_ = false;
   int node_num_ = 1;
   int node_id_ = 0;
+  bool is_weighted_ = false;
 };
 
 /*

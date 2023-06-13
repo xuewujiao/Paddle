@@ -426,6 +426,13 @@ class PSGPUWrapper {
       config[prefix + "ada_epsilon"] = sgd_param.adam().ada_epsilon();
       config[prefix + "min_bound"] = sgd_param.adam().weight_bounds()[0];
       config[prefix + "max_bound"] = sgd_param.adam().weight_bounds()[1];
+    } else if (optimizer_name == "SparseAdaGradV2SGDRule") {
+      config[prefix + "optimizer_type"] = 5;
+      config[prefix + "learning_rate"] = sgd_param.adagrad().learning_rate();
+      config[prefix + "initial_range"] = sgd_param.adagrad().initial_range();
+      config[prefix + "initial_g2sum"] = sgd_param.adagrad().initial_g2sum();
+      config[prefix + "min_bound"] = sgd_param.adagrad().weight_bounds()[0];
+      config[prefix + "max_bound"] = sgd_param.adagrad().weight_bounds()[1];
     }
   }
 
@@ -523,6 +530,15 @@ class PSGPUWrapper {
       if (sgd_param.adam().weight_bounds_size() == 2) {
         config[prefix + "min_bound"] = sgd_param.adam().weight_bounds()[0];
         config[prefix + "max_bound"] = sgd_param.adam().weight_bounds()[1];
+      }
+    } else if (optimizer_name == "adagrad_v2") {
+      config[prefix + "optimizer_type"] = 5;
+      config[prefix + "learning_rate"] = sgd_param.adagrad().learning_rate();
+      config[prefix + "initial_range"] = sgd_param.adagrad().initial_range();
+      config[prefix + "initial_g2sum"] = sgd_param.adagrad().initial_g2sum();
+      if (sgd_param.adagrad().weight_bounds_size() == 2) {
+        config[prefix + "min_bound"] = sgd_param.adagrad().weight_bounds()[0];
+        config[prefix + "max_bound"] = sgd_param.adagrad().weight_bounds()[1];
       }
     }
   }
@@ -782,9 +798,12 @@ class PSGPUWrapper {
     slot_vector_ = slot_vector;
     VLOG(0) << "slot_vector size is " << slot_vector_.size();
   }
-  void SetPullFeatureSlotNum(int slot_num) {
-    slot_num_for_pull_feature_ = slot_num;
-    VLOG(0) << "slot_num_for_pull_feature_ is " << slot_num_for_pull_feature_;
+  void SetPullFeatureSlotNum(int sparse_slot_num, int float_slot_num) {
+    slot_num_for_pull_feature_ = sparse_slot_num;
+    float_slot_num_ = float_slot_num;
+    auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
+    gpu_graph_ptr->set_feature_info(slot_num_for_pull_feature_, float_slot_num_);
+    VLOG(0) << "slot_num_for_pull_feature_ is " << slot_num_for_pull_feature_ << ", float_slot_num is " << float_slot_num_;
   }
   void SetSlotOffsetVector(const std::vector<int>& slot_offset_vector) {
     slot_offset_vector_ = slot_offset_vector;
@@ -896,6 +915,10 @@ class PSGPUWrapper {
   int GetRankId(void) { return rank_id_; }
   // rank size
   int GetRankNum(void) { return node_size_; }
+  // rank id
+  int GetNCCLRankId(const int &device_id) {
+    return (rank_id_ * device_num_ + device_id);
+  }
 
  private:
   static std::shared_ptr<PSGPUWrapper> s_instance_;
@@ -922,6 +945,7 @@ class PSGPUWrapper {
   int multi_mf_dim_{0};
   int max_mf_dim_{0};
   int slot_num_for_pull_feature_{0};
+  int float_slot_num_{0};
   size_t val_type_size_{0};
   size_t grad_type_size_{0};
   size_t pull_type_size_{0};

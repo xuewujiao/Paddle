@@ -21,6 +21,11 @@ limitations under the License. */
 #if defined PADDLE_WITH_PSCORE
 #include "paddle/fluid/distributed/ps/service/communicator/communicator.h"
 #endif
+#include "paddle/fluid/framework/program_utils.h"
+
+PADDLE_DEFINE_EXPORTED_bool(enable_dump_main_program,
+                            false,
+                            "enable dump main program, default false");
 
 namespace paddle {
 namespace framework {
@@ -115,6 +120,9 @@ void MultiTrainer::InitDumpEnv() {
 // call only after all resources are set in current trainer
 void MultiTrainer::InitTrainerEnv(const ProgramDesc& main_program,
                                   const platform::Place& place) {
+  if (FLAGS_enable_dump_main_program) {
+    DumpProgramDescFile("main_program", main_program);
+  }
   for (int i = 0; i < thread_num_; ++i) {
 #ifdef PADDLE_WITH_HETERPS
     workers_[i]->SetPlace(places_[i]);
@@ -130,6 +138,7 @@ void MultiTrainer::InitTrainerEnv(const ProgramDesc& main_program,
     workers_[i]->BindingDataFeedMemory();
     workers_[i]->CacheProgram(main_program);
   }
+#ifndef PADDLE_WITH_GPU_GRAPH
 #ifdef PADDLE_WITH_HETERPS
   for (int num = 0; num < thread_num_; ++num) {
     auto place = places_[num];
@@ -147,6 +156,9 @@ void MultiTrainer::InitTrainerEnv(const ProgramDesc& main_program,
         }
         phi::DenseTensor* root_tensor =
             root_var->GetMutable<phi::DenseTensor>();
+        if (place == root_tensor->place()) {
+          continue;
+        }
         auto* ptr = scope->Var(name);
         InitializeVariable(ptr, proto::VarType::LOD_TENSOR);
         phi::DenseTensor* thread_tensor = ptr->GetMutable<phi::DenseTensor>();
@@ -167,6 +179,7 @@ void MultiTrainer::InitTrainerEnv(const ProgramDesc& main_program,
       }
     }
   }
+#endif
 }
 
 void MultiTrainer::InitOtherEnv(const ProgramDesc& main_program) {
@@ -222,6 +235,8 @@ void MultiTrainer::Run() {
   for (auto& th : wait_futures) {
     th.get();
   }
+  // merge worker vars
+  MergeWorkerVars();
 }
 
 #ifdef PADDLE_WITH_HETERPS
@@ -271,18 +286,13 @@ void MultiTrainer::MergeToRootScope(phi::DenseTensor* root_tensor,
   }
   TensorCopy(tmp_root, platform::CPUPlace(), root_tensor);
 }
-
-void MultiTrainer::Finalize() {
-  if (need_dump_field_ || need_dump_param_) {
-    FinalizeDumpEnv();
-  }
+void MultiTrainer::MergeWorkerVars(void) {
   for (size_t i = 0; i < need_merge_var_names_.size(); i++) {
     Variable* root_var = root_scope_->FindVar(need_merge_var_names_[i]);
     if (root_var == nullptr) {
       continue;
     }
     phi::DenseTensor* root_tensor = root_var->GetMutable<phi::DenseTensor>();
-
     for (int j = 1; j < thread_num_; j++) {
       Scope* cur_thread_scope = workers_[j]->GetThreadScope();
       Variable* thread_var =
@@ -309,10 +319,20 @@ void MultiTrainer::Finalize() {
       _ForEachDataType_(MergeCallback);
     }
   }
-#ifdef PADDLE_WITH_HETERPS
+}
+
+void MultiTrainer::Finalize() {
+  if (need_dump_field_ || need_dump_param_) {
+    FinalizeDumpEnv();
+  }
+#ifdef PADDLE_WITH_GPU_GRAPH
+  // graph copy dense param to root scope
+  for (int i = 0; i < thread_num_; ++i) {
+    workers_[i]->Finalize();
+  }
+#elif PADDLE_WITH_HETERPS
   MergeDenseParam();
 #endif
-
 #if defined PADDLE_WITH_PSCORE
   auto communicator = paddle::distributed::Communicator::GetInstance();
   // for unittest which does not call fleet.init_worker() first
@@ -329,6 +349,25 @@ void MultiTrainer::Finalize() {
 #endif
   root_scope_->DropKids();
 }
+#ifdef PADDLE_WITH_HETERPS
+void MultiTrainer::ResetDataset(Dataset* dataset) {
+  SetDataset(dataset);
+  const std::vector<paddle::framework::DataFeed*> readers =
+      dataset->GetReaders();
+  VLOG(3) << "readers num: " << readers.size();
+  // change thread num is not supported
+  PADDLE_ENFORCE_EQ(thread_num_,
+                    readers.size(),
+                    platform::errors::InvalidArgument(
+                        "change Dataset thread_num is not supported"));
+  for (int i = 0; i < thread_num_; ++i) {
+    workers_[i]->SetDataFeed(readers[i]);
+    workers_[i]->SetPlace(places_[i]);
+    workers_[i]->SetReaderPlace(places_[i]);
+    workers_[i]->BindingDataFeedMemory();
+  }
+}
+#endif
 
 }  // end namespace framework
 }  // end namespace paddle
