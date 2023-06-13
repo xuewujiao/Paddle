@@ -1326,7 +1326,8 @@ int32_t GraphTable::parse_edge_and_load(
           bool only_load_reverse_edge = false;
           if (!reverse) {
             only_load_reverse_edge = (i < is_reverse_edge_map.size())
-            		? is_reverse_edge_map[i] : false;
+                                         ? is_reverse_edge_map[i]
+                                         : false;
           }
           if (only_load_reverse_edge) {
             VLOG(1) << "only_load_reverse_edge is True, etype[" << etypes[i]
@@ -1591,7 +1592,9 @@ bool GraphTable::is_key_for_self_rank(const uint64_t &id) {
 #endif
 }
 std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
-    const std::string &path, const std::string &node_type, int idx,
+    const std::string &path,
+    const std::string &node_type,
+    int idx,
     bool load_slot) {
   std::ifstream file(path);
   std::string line;
@@ -1716,7 +1719,8 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
 }
 
 // // TODO(danleifeng): opt load all node_types in once reading
-int32_t GraphTable::load_nodes(const std::string &path, std::string node_type,
+int32_t GraphTable::load_nodes(const std::string &path,
+                               std::string node_type,
                                bool load_slot) {
   auto paths = paddle::string::split_string<std::string>(path, ";");
   uint64_t count = 0;
@@ -1822,8 +1826,8 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_edge_file(
       continue;
     }
     // dst id
-    if (!FLAGS_graph_edges_split_only_by_src_id
-              && !is_key_for_self_rank(dst_id)) {
+    if (!FLAGS_graph_edges_split_only_by_src_id &&
+        !is_key_for_self_rank(dst_id)) {
       VLOG(2) << " dest node num :" << dst_id
               << " will not add egde, node_id_:" << node_id_
               << " node_num:" << node_num_;
@@ -1936,9 +1940,10 @@ Node *GraphTable::find_node(GraphTableType table_type, uint64_t id) {
   }
   Node *node = nullptr;
   size_t index = shard_id - shard_start;
-  auto &search_shards =
-      table_type == GraphTableType::EDGE_TABLE ? edge_shards :
-      table_type == GraphTableType::FEATURE_TABLE ? feature_shards : node_shards;
+  auto &search_shards = table_type == GraphTableType::EDGE_TABLE ? edge_shards
+                        : table_type == GraphTableType::FEATURE_TABLE
+                            ? feature_shards
+                            : node_shards;
   for (auto &search_shard : search_shards) {
     PADDLE_ENFORCE_NOT_NULL(search_shard[index],
                             paddle::platform::errors::InvalidArgument(
@@ -1958,8 +1963,9 @@ Node *GraphTable::find_node(GraphTableType table_type, int idx, uint64_t id) {
   }
   size_t index = shard_id - shard_start;
   auto &search_shards =
-      table_type == GraphTableType::EDGE_TABLE ? edge_shards[idx] :
-      table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx] : node_shards[idx];
+      table_type == GraphTableType::EDGE_TABLE      ? edge_shards[idx]
+      : table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx]
+                                                    : node_shards[idx];
   PADDLE_ENFORCE_NOT_NULL(search_shards[index],
                           paddle::platform::errors::InvalidArgument(
                               "search_shard[%d] should not be null.", index));
@@ -1977,8 +1983,9 @@ uint32_t GraphTable::get_thread_pool_index_by_shard_index(
 
 int32_t GraphTable::clear_nodes(GraphTableType table_type, int idx) {
   auto &search_shards =
-      table_type == GraphTableType::EDGE_TABLE ? edge_shards[idx] :
-      table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx] : node_shards[idx];
+      table_type == GraphTableType::EDGE_TABLE      ? edge_shards[idx]
+      : table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx]
+                                                    : node_shards[idx];
   for (size_t i = 0; i < search_shards.size(); i++) {
     search_shards[i]->clear();
   }
@@ -2371,9 +2378,10 @@ int GraphTable::get_all_id(GraphTableType table_type,
                            int slice_num,
                            std::vector<std::vector<uint64_t>> *output) {
   MergeShardVector shard_merge(output, slice_num);
-  auto &search_shards =
-      table_type == GraphTableType::EDGE_TABLE ? edge_shards :
-      table_type == GraphTableType::FEATURE_TABLE ? feature_shards : node_shards;
+  auto &search_shards = table_type == GraphTableType::EDGE_TABLE ? edge_shards
+                        : table_type == GraphTableType::FEATURE_TABLE
+                            ? feature_shards
+                            : node_shards;
 
   std::vector<std::future<size_t>> tasks;
   for (size_t idx = 0; idx < search_shards.size(); idx++) {
@@ -2400,9 +2408,10 @@ int GraphTable::get_all_neighbor_id(
     int slice_num,
     std::vector<std::vector<uint64_t>> *output) {
   MergeShardVector shard_merge(output, slice_num);
-  auto &search_shards =
-      table_type == GraphTableType::EDGE_TABLE ? edge_shards :
-      table_type == GraphTableType::FEATURE_TABLE ? feature_shards : node_shards;
+  auto &search_shards = table_type == GraphTableType::EDGE_TABLE ? edge_shards
+                        : table_type == GraphTableType::FEATURE_TABLE
+                            ? feature_shards
+                            : node_shards;
   std::vector<std::future<size_t>> tasks;
   for (size_t idx = 0; idx < search_shards.size(); idx++) {
     for (size_t j = 0; j < search_shards[idx].size(); j++) {
@@ -2429,8 +2438,9 @@ int GraphTable::get_all_id(GraphTableType table_type,
                            std::vector<std::vector<uint64_t>> *output) {
   MergeShardVector shard_merge(output, slice_num);
   auto &search_shards =
-      table_type == GraphTableType::EDGE_TABLE ? edge_shards[idx] :
-      table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx] : node_shards[idx];
+      table_type == GraphTableType::EDGE_TABLE      ? edge_shards[idx]
+      : table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx]
+                                                    : node_shards[idx];
   std::vector<std::future<size_t>> tasks;
   VLOG(3) << "begin task, task_pool_size_[" << task_pool_size_ << "]";
   for (size_t i = 0; i < search_shards.size(); i++) {
@@ -2457,8 +2467,9 @@ int GraphTable::get_all_neighbor_id(
     std::vector<std::vector<uint64_t>> *output) {
   MergeShardVector shard_merge(output, slice_num);
   auto &search_shards =
-      table_type == GraphTableType::EDGE_TABLE ? edge_shards[idx] :
-      table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx] : node_shards[idx];
+      table_type == GraphTableType::EDGE_TABLE      ? edge_shards[idx]
+      : table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx]
+                                                    : node_shards[idx];
   std::vector<std::future<size_t>> tasks;
   VLOG(3) << "begin task, task_pool_size_[" << task_pool_size_ << "]";
   for (size_t i = 0; i < search_shards.size(); i++) {
@@ -2486,8 +2497,9 @@ int GraphTable::get_all_feature_ids(
     std::vector<std::vector<uint64_t>> *output) {
   MergeShardVector shard_merge(output, slice_num);
   auto &search_shards =
-      table_type == GraphTableType::EDGE_TABLE ? edge_shards[idx] :
-      table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx] : node_shards[idx];
+      table_type == GraphTableType::EDGE_TABLE      ? edge_shards[idx]
+      : table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx]
+                                                    : node_shards[idx];
   std::vector<std::future<size_t>> tasks;
   for (size_t i = 0; i < search_shards.size(); i++) {
     tasks.push_back(_shards_task_pool[i % task_pool_size_]->enqueue(
@@ -2527,8 +2539,9 @@ int32_t GraphTable::pull_graph_list(GraphTableType table_type,
   if (start < 0) start = 0;
   int size = 0, cur_size;
   auto &search_shards =
-      table_type == GraphTableType::EDGE_TABLE ? edge_shards[idx] :
-      table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx] : node_shards[idx];
+      table_type == GraphTableType::EDGE_TABLE      ? edge_shards[idx]
+      : table_type == GraphTableType::FEATURE_TABLE ? feature_shards[idx]
+                                                    : node_shards[idx];
   std::vector<std::future<std::vector<Node *>>> tasks;
   for (size_t i = 0; i < search_shards.size() && total_size > 0; i++) {
     cur_size = search_shards[i]->get_size();
@@ -2790,8 +2803,9 @@ void GraphTable::build_graph_type_keys() {
     graph_total_keys_.insert(
         graph_total_keys_.end(), keys[0].begin(), keys[0].end());
   }
-  VLOG(0) << "finish insert feature into graph_total_keys, feature embedding keys="
-          << graph_total_keys_.size();
+  VLOG(0)
+      << "finish insert feature into graph_total_keys, feature embedding keys="
+      << graph_total_keys_.size();
 }
 
 void GraphTable::build_node_iter_type_keys() {

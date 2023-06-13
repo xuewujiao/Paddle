@@ -152,9 +152,9 @@ class HeterComm {
                    const void* src,
                    size_t count,
                    StreamType stream = 0);
-  template<typename StreamType>
-  void MemcpyPeerAsync(void *dst,
-                       const void *src,
+  template <typename StreamType>
+  void MemcpyPeerAsync(void* dst,
+                       const void* src,
                        size_t count,
                        StreamType stream);
 

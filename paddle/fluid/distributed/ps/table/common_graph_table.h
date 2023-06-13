@@ -758,7 +758,8 @@ class GraphTable : public Table {
   std::vector<std::vector<uint64_t>> graph_type_keys_;
   std::unordered_map<int, int> type_to_index_;
 
-  std::vector<std::vector<GraphShard *>> edge_shards, feature_shards, node_shards;
+  std::vector<std::vector<GraphShard *>> edge_shards, feature_shards,
+      node_shards;
   size_t shard_start, shard_end, server_num, shard_num_per_server, shard_num;
   int task_pool_size_ = 64;
   int load_thread_num = 160;

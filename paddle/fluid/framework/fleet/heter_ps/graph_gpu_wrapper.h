@@ -214,7 +214,8 @@ class GraphGpuWrapper {
   std::vector<std::vector<std::shared_ptr<phi::Allocation>>>
       d_node_iter_graph_all_type_keys_;
   std::vector<std::vector<uint64_t>> h_node_iter_graph_all_type_keys_len_;
-  std::vector<std::shared_ptr<phi::Allocation>> d_node_iter_graph_metapath_keys_;
+  std::vector<std::shared_ptr<phi::Allocation>>
+      d_node_iter_graph_metapath_keys_;
   std::vector<size_t> h_node_iter_graph_metapath_keys_len_;
 
   std::map<uint64_t,  // edge_id
