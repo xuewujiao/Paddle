@@ -108,7 +108,6 @@ class GraphGpuWrapper {
                           int part_num,
                           bool reverse,
                           const std::vector<bool>& is_reverse_edge_map);
-  void calc_edge_type_limit();
   int set_node_iter_from_file(std::string ntype2files,
                               std::string nodes_file_path,
                               int part_num,
@@ -220,7 +219,6 @@ class GraphGpuWrapper {
   std::vector<uint64_t>& get_graph_total_keys();
   std::vector<std::vector<uint64_t>>& get_graph_type_keys();
   std::vector<robin_hood::unordered_set<uint64_t>>& get_graph_type_keys_set();
-  std::unordered_map<int, int>& get_type_to_neighbor_limit();
   std::unordered_map<int, int>& get_graph_type_to_index();
   std::string& get_node_type_size(std::string first_node_type);
   std::string& get_edge_type_size();

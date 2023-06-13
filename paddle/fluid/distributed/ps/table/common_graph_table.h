@@ -762,7 +762,6 @@ class GraphTable : public Table {
 
   void build_graph_total_keys();
   void build_graph_type_keys();
-  void calc_edge_type_limit();
   void build_node_iter_type_keys();
   bool is_key_for_self_rank(const uint64_t &id);
   void graph_partition(bool is_edge);
@@ -779,7 +778,6 @@ class GraphTable : public Table {
   robin_hood::unordered_set<uint64_t> unique_all_edge_keys_;
   std::vector<robin_hood::unordered_set<uint64_t>> egde_node_ids_;  // fennel
   std::vector<robin_hood::unordered_set<uint64_t>> graph_type_keys_set_;
-  std::unordered_map<int, int> type_to_neighbor_limit_;
 
   std::vector<std::vector<GraphShard *>> edge_shards, feature_shards,
       node_shards;

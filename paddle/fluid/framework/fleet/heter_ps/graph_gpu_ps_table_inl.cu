@@ -210,7 +210,6 @@ __global__ void neighbor_sample_kernel_walking(GpuPsCommGraph graph,
                                                uint64_t* res,
                                                int sample_len,
                                                int n,
-                                               int neighbor_size_limit,
                                                int default_value) {
   // graph: The corresponding edge table.
   // node_info_list: The input node query, duplicate nodes allowed.
@@ -244,13 +243,7 @@ __global__ void neighbor_sample_kernel_walking(GpuPsCommGraph graph,
         res[offset + j] = j;
       }
       __syncwarp();
-      int neighbor_num;
-      if (neighbor_len > neighbor_size_limit) {
-        neighbor_num = neighbor_size_limit;
-      } else {
-        neighbor_num = neighbor_len;
-      }
-      for (int j = sample_len + threadIdx.x; j < neighbor_num; j += WARP_SIZE) {
+      for (int j = sample_len + threadIdx.x; j < neighbor_len; j += WARP_SIZE) {
         const int num = curand(&rng) % (j + 1);
         if (num < sample_len) {
           atomicMax(reinterpret_cast<unsigned int*>(res + offset + num),
@@ -1981,7 +1974,6 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v3(
                                              q.src_nodes,
                                              q.sample_size,
                                              q.len,
-                                             q.neighbor_size_limit,
                                              cpu_switch,
                                              compress,
                                              weighted);
@@ -1993,7 +1985,6 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v3(
                                                   q.src_nodes,
                                                   q.sample_size,
                                                   q.len,
-                                                  q.neighbor_size_limit,
                                                   cpu_switch,
                                                   compress,
                                                   weighted,
@@ -2007,7 +1998,6 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v3(
                                            q.src_nodes,
                                            q.sample_size,
                                            q.len,
-                                           q.neighbor_size_limit,
                                            cpu_switch,
                                            compress,
                                            weighted);
@@ -2015,21 +2005,12 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v3(
   }
 }
 
-NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample(
-    int gpu_id,
-    uint64_t* key,
-    int sample_size,
-    int len,
-    int neighbor_size_limit) {
-  return graph_neighbor_sample_v2(gpu_id,
-                                  0,
-                                  key,
-                                  sample_size,
-                                  len,
-                                  neighbor_size_limit,
-                                  false,
-                                  true,
-                                  false);
+NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample(int gpu_id,
+                                                            uint64_t* key,
+                                                            int sample_size,
+                                                            int len) {
+  return graph_neighbor_sample_v2(
+      gpu_id, 0, key, sample_size, len, false, true, false);
 }
 
 NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all(
@@ -2039,7 +2020,6 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all(
     uint64_t* d_keys,
     int sample_size,
     int len,
-    int neighbor_size_limit,
     bool cpu_query_switch,
     bool compress,
     bool weighted,
@@ -2249,7 +2229,6 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all(
                                          loc.d_merged_keys,
                                          sample_size,
                                          pull_size,
-                                         neighbor_size_limit,
                                          cpu_query_switch,
                                          compress,
                                          weighted);
@@ -2358,7 +2337,6 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
     uint64_t* key,
     int sample_size,
     int len,
-    int neighbor_size_limit,
     bool cpu_query_switch,
     bool compress,
     bool weighted) {
@@ -2505,7 +2483,6 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
                                            sample_array,
                                            sample_size,
                                            shard_len,
-                                           neighbor_size_limit,
                                            default_value);
     } else {
       // Weighted sample.
