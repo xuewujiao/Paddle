@@ -1175,9 +1175,10 @@ void HogwildWorker::TrainFilesWithProfiler() {
     if (infer_out_of_ins) {
       for (size_t i = 0; i < ops_.size(); ++i) {
         timeline.Start();
+        auto &op = ops_[i];
         VLOG(3) << "Going to run op " << op_names_[i];
-        if (ops_[i]->Type() == std::string("c_broadcast")) {
-          ops_[i]->Run(*thread_scope_, place_);
+        if (op->Type() == "c_broadcast") {
+          op->Run(*thread_scope_, place_);
         }
 #ifdef PADDLE_WITH_HETERPS
         dev_ctx_->Wait();
@@ -1188,12 +1189,13 @@ void HogwildWorker::TrainFilesWithProfiler() {
         total_time += timeline.ElapsedSec();
         if (gc) {
           DeleteUnusedTensors(
-              *thread_scope_, ops_[i].get(), unused_vars_, gc.get());
+              *thread_scope_, op.get(), unused_vars_, gc.get());
         }
       }
     } else {
       for (size_t i = 0; i < ops_.size(); ++i) {
         timeline.Start();
+        auto &op = ops_[i];
         VLOG(3) << "Going to run op " << op_names_[i];
 #if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
         // offload
@@ -1202,7 +1204,7 @@ void HogwildWorker::TrainFilesWithProfiler() {
           it->second.CopyInputs(root_scope_, place_, thread_scope_, copyer.get());
         }
 #endif
-        ops_[i]->Run(*thread_scope_, place_);
+        op->Run(*thread_scope_, place_);
 #if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
         if (it != offload_vars_.end()) {
           it->second.BackUpInputs(root_scope_, thread_scope_, copyer.get());
@@ -1217,7 +1219,7 @@ void HogwildWorker::TrainFilesWithProfiler() {
         total_time += timeline.ElapsedSec();
         if (gc) {
           DeleteUnusedTensors(
-              *thread_scope_, ops_[i].get(), unused_vars_, gc.get());
+              *thread_scope_, op.get(), unused_vars_, gc.get());
         }
       }
     }
@@ -1372,7 +1374,7 @@ void HogwildWorker::TrainFiles() {
     }
     if (infer_out_of_ins) {
       for (auto &op : ops_) {
-        if (op->Type() == std::string("c_broadcast")) {
+        if (op->Type() == "c_broadcast") {
           op->Run(*thread_scope_, place_);
         }
         if (gc) {
