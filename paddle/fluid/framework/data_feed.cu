@@ -21,7 +21,6 @@ limitations under the License. */
 #include <thrust/device_ptr.h>
 #include <thrust/random.h>
 #include <thrust/shuffle.h>
-#include <cstdlib>
 #include <sstream>
 #include "cub/cub.cuh"
 #if defined(PADDLE_WITH_PSCORE) && defined(PADDLE_WITH_GPU_GRAPH)
@@ -3870,13 +3869,7 @@ void GraphDataGenerator::AllocResource(
   }
   VLOG(1) << "AllocResource gpuid " << conf_.gpuid
           << " feed_vec.size: " << feed_vec.size()
-          << " table cap: " << conf_.train_table_cap;
-  conf_.is_thread_sharding = false;        
-  const char *tmp = getenv("PADDLE_THREAD_SHARDING");
-  std::string is_thread_sharding(tmp ? tmp : "");   
-  if (is_thread_sharding == std::string("1")) {
-    conf_.is_thread_sharding = true;
-  }   
+          << " table cap: " << conf_.train_table_cap;   
   conf_.is_multi_node = false;
 #if defined(PADDLE_WITH_GLOO)
   auto gloo = paddle::framework::GlooWrapper::GetInstance();
@@ -4185,6 +4178,7 @@ void GraphDataGenerator::SetConfig(
           << ", infer_table_cap: " << conf_.infer_table_cap;
   std::string first_node_type = graph_config.first_node_type();
   std::string meta_path = graph_config.meta_path();
+  conf_.is_thread_sharding = graph_config.is_thread_sharding();
   conf_.sage_mode = graph_config.sage_mode();
   std::string str_samples = graph_config.samples();
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
