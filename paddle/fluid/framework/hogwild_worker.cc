@@ -155,19 +155,6 @@ inline void Tensor2Pinned(phi::DenseTensor *tensor, const TStream &stream) {
   tensor->ResetHolderWithType(holder, tensor->dtype());
 #endif
 }
-template<typename TStream>
-inline void CopyTensor(const phi::DenseTensor &src_tensor,
-    const phi::Place& place, phi::DenseTensor *dest_tensor, const TStream &stream) {
-#if defined(PADDLE_WITH_CUDA)
-  size_t mem_len = src_tensor.memory_size();
-  if (!dest_tensor->IsInitialized()) {
-    dest_tensor->Resize(src_tensor.dims());
-    dest_tensor->set_layout(src_tensor.layout());
-  }
-  auto ptr = dest_tensor->mutable_data(place, src_tensor.dtype(), mem_len);
-  memory::Copy(place, ptr, src_tensor.place(), src_tensor.data(), mem_len, stream);
-#endif
-}
 template<typename TCopyer>
 void HogwildWorker::OffLoadVarInfo::CopyInputs(const Scope* root,
                     const platform::Place& place,
@@ -525,7 +512,7 @@ size_t HogwildWorker::AdjustOffloadOps(const ProgramDesc &program) {
     }
   }
   // if not need gather
-  if (!is_offload_communication_ || FLAGS_gpugraph_offload_gather_copy_maxsize <= 0) {
+  if (FLAGS_gpugraph_offload_gather_copy_maxsize <= 0) {
     return offload_cnt;
   }
   // gather copy inputs
@@ -1122,8 +1109,11 @@ void HogwildWorker::TrainFilesWithProfiler() {
   }
 #if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
   auto stream = static_cast<phi::GPUContext *>(dev_ctx_)->stream();
-  std::unique_ptr<GPUParallelCopyer> copyer(
-      new GPUParallelCopyer(stream, thread_id_, FLAGS_gpugraph_parallel_stream_num));
+  std::unique_ptr<GPUParallelCopyer> copyer = nullptr;
+  if (!offload_vars_.empty()) {
+    copyer.reset(new GPUParallelCopyer(
+        stream, thread_id_, FLAGS_gpugraph_parallel_stream_num));
+  }
 #endif
   bool infer_out_of_ins = false;
   while (1) {
@@ -1323,8 +1313,11 @@ void HogwildWorker::TrainFiles() {
   }
 #if defined(PADDLE_WITH_CUDA) && defined(PADDLE_WITH_GPU_GRAPH)
   auto stream = static_cast<phi::GPUContext *>(dev_ctx_)->stream();
-  std::unique_ptr<GPUParallelCopyer> copyer(
-      new GPUParallelCopyer(stream, thread_id_, FLAGS_gpugraph_parallel_stream_num));
+  std::unique_ptr<GPUParallelCopyer> copyer = nullptr;
+  if (!offload_vars_.empty()) {
+    copyer.reset(new GPUParallelCopyer(
+        stream, thread_id_, FLAGS_gpugraph_parallel_stream_num));
+  }
 #endif
   bool infer_out_of_ins = false;
   while (1) {
