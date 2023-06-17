@@ -62,7 +62,7 @@ class GraphGpuWrapper {
   void init_conf(const std::string& first_node_type,
                  const std::string& meta_path,
                  const std::string& excluded_train_pair,
-                 const std::string &pair_label);
+                 const std::string& pair_label);
   void initialize();
   void finalize();
   void set_device(std::vector<int> ids);
@@ -74,13 +74,18 @@ class GraphGpuWrapper {
   void upload_batch(int table_type,
                     int slice_num,
                     const std::string& edge_type);
-  void upload_batch(int table_type, int slice_num, int slot_num, int float_slot_num);
+  void upload_batch(int table_type,
+                    int slice_num,
+                    int slot_num,
+                    int float_slot_num);
   std::vector<GpuPsCommGraphFea> get_sub_graph_fea(
-      std::vector<std::vector<uint64_t>>& node_ids, int slot_num);    // NOLINT
+      std::vector<std::vector<uint64_t>>& node_ids, int slot_num);  // NOLINT
   std::vector<GpuPsCommGraphFloatFea> get_sub_graph_float_fea(
-      std::vector<std::vector<uint64_t>>& node_ids, int float_slot_num);    // NOLINT
+      std::vector<std::vector<uint64_t>>& node_ids,
+      int float_slot_num);                                            // NOLINT
   void build_gpu_graph_fea(GpuPsCommGraphFea& sub_graph_fea, int i);  // NOLINT
-  void build_gpu_graph_float_fea(GpuPsCommGraphFloatFea& sub_graph_float_fea, int i);  // NOLINT
+  void build_gpu_graph_float_fea(GpuPsCommGraphFloatFea& sub_graph_float_fea,
+                                 int i);  // NOLINT
   void add_table_feat_conf(std::string table_name,
                            std::string feat_name,
                            std::string feat_dtype,
@@ -103,7 +108,6 @@ class GraphGpuWrapper {
                           int part_num,
                           bool reverse,
                           const std::vector<bool>& is_reverse_edge_map);
-  void calc_edge_type_limit();
   int set_node_iter_from_file(std::string ntype2files,
                               std::string nodes_file_path,
                               int part_num,
@@ -191,15 +195,15 @@ class GraphGpuWrapper {
       std::shared_ptr<phi::Allocation>& size_list_prefix_sum,
       std::shared_ptr<phi::Allocation>& feature_list,  // NOLINT
       std::shared_ptr<phi::Allocation>& slot_list,
-      bool sage_mode = false);    // NOLINT
+      bool sage_mode = false);  // NOLINT
   int get_float_feature_info_of_nodes(
       int gpu_id,
-      uint64_t *d_nodes,
+      uint64_t* d_nodes,
       int node_num,
-      uint32_t *size_list,
-      uint32_t *size_list_prefix_sum,
-      std::shared_ptr<phi::Allocation> &feature_list,  // NOLINT
-      std::shared_ptr<phi::Allocation> &slot_list);  // NOLINT
+      uint32_t* size_list,
+      uint32_t* size_list_prefix_sum,
+      std::shared_ptr<phi::Allocation>& feature_list,  // NOLINT
+      std::shared_ptr<phi::Allocation>& slot_list);    // NOLINT
   void init_metapath(std::string cur_metapath,
                      int cur_metapath_index,
                      int cur_metapath_len);
@@ -213,7 +217,6 @@ class GraphGpuWrapper {
       std::vector<std::vector<uint64_t>>& lens);
   std::vector<uint64_t>& get_graph_total_keys();
   std::vector<std::vector<uint64_t>>& get_graph_type_keys();
-  std::unordered_map<int, int>& get_type_to_neighbor_limit();
   std::unordered_map<int, int>& get_graph_type_to_index();
   std::string& get_node_type_size(std::string first_node_type);
   std::string& get_edge_type_size();
@@ -256,7 +259,8 @@ class GraphGpuWrapper {
   std::vector<std::vector<std::shared_ptr<phi::Allocation>>>
       d_node_iter_graph_all_type_keys_;
   std::vector<std::vector<uint64_t>> h_node_iter_graph_all_type_keys_len_;
-  std::vector<std::shared_ptr<phi::Allocation>> d_node_iter_graph_metapath_keys_;
+  std::vector<std::shared_ptr<phi::Allocation>>
+      d_node_iter_graph_metapath_keys_;
   std::vector<size_t> h_node_iter_graph_metapath_keys_len_;
 
   std::map<uint64_t,  // edge_id

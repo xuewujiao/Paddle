@@ -273,7 +273,6 @@ class DatasetImpl : public Dataset {
   virtual void ClearSampleState();
   virtual void DumpWalkPath(std::string dump_path, size_t dump_rate);
   virtual void DumpSampleNeighbors(std::string dump_path);
-
   std::vector<paddle::framework::Channel<T>>& GetMultiOutputChannel() {
     return multi_output_channel_;
   }

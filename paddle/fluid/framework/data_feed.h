@@ -909,6 +909,7 @@ struct GraphDataGeneratorConfig {
   bool weighted_sample;
   bool return_weight;
   bool is_multi_node;
+  bool is_thread_sharding;
   int batch_size;
   int slot_num;
   int walk_degree;
@@ -987,6 +988,7 @@ class GraphDataGenerator {
       return total_row_[0];
     }
   }
+
   std::vector<uint64_t>& GetHostVec() { return host_vec_; }
   bool get_epoch_finish() { return epoch_finish_; }
   int get_pass_end() { return pass_end_; }
