@@ -3716,6 +3716,7 @@ void GraphDataGenerator::DoSageForTrain() {
 
       VLOG(1) << "gpuid: " << conf_.gpuid
               << " get mini_batch_size";
+      
       ins_buf = reinterpret_cast<uint64_t *>(d_ins_buf_[tensor_pair_idx]->ptr());
       ins_cursor = ins_buf + ins_buf_pair_len_[tensor_pair_idx] * 2 - total_instance;
       int mini_batch_size = total_instance / conf_.accumulate_num;
@@ -3735,8 +3736,6 @@ void GraphDataGenerator::DoSageForTrain() {
       }
 
       // fill first graph holder
-      // VLOG(0) << "gpuid: " << conf_.gpuid
-      //         << " fill first graph holder";
       auto final_sage_nodes = GenerateSampleGraph(ins_cursor,
                                                   mini_batch_size,
                                                   &uniq_instance,
@@ -3763,8 +3762,6 @@ void GraphDataGenerator::DoSageForTrain() {
 
       // fill second graph holder
       if (mini_batch_size != total_instance) {
-        // VLOG(0) << "gpuid: " << conf_.gpuid
-        //         << " fill second graph holder";
         auto final_sage_nodes_v2 = GenerateSampleGraph(ins_cursor + mini_batch_size,
                                                        total_instance - mini_batch_size,
                                                        &uniq_instance,
@@ -3822,8 +3819,6 @@ void GraphDataGenerator::DoSageForTrain() {
   } // end while (is_sage_pass_continue)
   VLOG(1) << "gpuid: " << conf_.gpuid
           << " train_sage_batch_num: " << sage_batch_num_;
-  VLOG(1) << "gpuid: " << conf_.gpuid
-          << " Finish DoSageForTrain";
 }
 
 void GraphDataGenerator::DoSageForInfer() {
