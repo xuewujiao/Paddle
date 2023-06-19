@@ -13,6 +13,10 @@
 // limitations under the License.
 
 #pragma once
+#include <thrust/device_ptr.h>
+#include <thrust/execution_policy.h>
+#include <thrust/random.h>
+#include <thrust/shuffle.h>
 #include <algorithm>
 #include <string>
 #include <unordered_map>
@@ -218,6 +222,7 @@ class GraphGpuWrapper {
       std::vector<std::vector<uint64_t>>& lens);
   std::vector<uint64_t>& get_graph_total_keys();
   std::vector<std::vector<uint64_t>>& get_graph_type_keys();
+  std::vector<robin_hood::unordered_set<uint64_t>>& get_graph_type_keys_set();
   std::unordered_map<int, int>& get_graph_type_to_index();
   std::string& get_node_type_size(std::string first_node_type);
   std::string& get_edge_type_size();

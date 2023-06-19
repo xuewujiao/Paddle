@@ -378,6 +378,13 @@ class HeterComm {
           alloc_cache<uint32_t>(node_size * node_size, d_node_size_buf);
       shard_res.resize_part_size(node_size);
     }
+    void init_sample_shard(const size_t& len, const size_t& node_size) {
+      sample_shard_res.d_local_idx_parted =
+          alloc_cache<uint32_t>(len, sample_local_shard_idx);
+      sample_shard_res.d_node_size_ptr =
+          alloc_cache<uint32_t>(node_size * node_size, sample_d_node_size_buf);
+      sample_shard_res.resize_part_size(node_size);
+    }
     void init_inner(const size_t& len, const int& device_num) {
       inner_res.d_idx = alloc_cache<uint32_t>(len, local_inner_idx);
       inner_res.d_offset_ptr =
@@ -416,9 +423,12 @@ class HeterComm {
     std::shared_ptr<memory::Allocation> local_shard_idx = nullptr;
     std::shared_ptr<memory::Allocation> inner_offset = nullptr;
     std::shared_ptr<memory::Allocation> d_node_size_buf = nullptr;
+    std::shared_ptr<memory::Allocation> sample_local_shard_idx = nullptr;
+    std::shared_ptr<memory::Allocation> sample_d_node_size_buf = nullptr;
 
     InnerResource inner_res;
     ShardResource shard_res;
+    ShardResource sample_shard_res;
     PullResource pull_res;
 
     KeyType* d_merged_keys = nullptr;
@@ -564,6 +574,19 @@ class HeterComm {
                             size_t* h_part_sizes,
                             const int& shard_num,
                             const cudaStream_t& stream);
+  void sample_partition_shard_keys(const int& gpu_id,
+                                   const size_t& total_fea_num,
+                                   const KeyType* d_keys,
+                                   uint32_t* d_idx_parted,
+                                   KeyType* d_keys_parted,
+                                   size_t* h_part_sizes,
+                                   const int& shard_num,
+                                   const uint32_t* d_keys_exist,
+                                   const cudaStream_t& stream);
+  void sample_gather_keys_len(const int& gpu_id,
+                              const int* local_key_len,
+                              int* d_keys_len,
+                              const cudaStream_t& stream);
   size_t send_data_by_all2all(const int& gpu_id,
                               const int& nccl_node_size,
                               const int& nccl_rank_id,
@@ -579,6 +602,11 @@ class HeterComm {
                                       const size_t& fea_size,
                                       const KeyType* d_in_keys,
                                       const cudaStream_t& stream);
+  size_t sample_gather_inter_keys_by_all2all(const int& gpu_id,
+                                             const size_t& fea_size,
+                                             const KeyType* d_in_keys,
+                                             const uint32_t* d_keys_exist,
+                                             const cudaStream_t& stream);
   void scatter_inter_vals_by_all2all(const int& gpu_id,
                                      const size_t& fea_size,
                                      const char* d_in_vals,

@@ -1005,8 +1005,10 @@ void GraphGpuWrapper::build_gpu_graph_float_fea(
 
 NeighborSampleResult GraphGpuWrapper::graph_neighbor_sample_v3(
     NeighborSampleQuery q, bool cpu_switch, bool compress, bool weighted) {
+  auto &all_type_keys = get_graph_type_keys_set();
   return reinterpret_cast<GpuPsGraphTable *>(graph_table)
-      ->graph_neighbor_sample_v3(q, cpu_switch, compress, weighted);
+      ->graph_neighbor_sample_v3(
+          q, cpu_switch, compress, weighted, all_type_keys);
 }
 
 NeighborSampleResultV2 GraphGpuWrapper::graph_neighbor_sample_sage(
@@ -1018,6 +1020,7 @@ NeighborSampleResultV2 GraphGpuWrapper::graph_neighbor_sample_sage(
     std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,
     bool weighted,
     bool return_weight) {
+  auto &all_type_keys = get_graph_type_keys_set();
   return reinterpret_cast<GpuPsGraphTable *>(graph_table)
       ->graph_neighbor_sample_sage(gpu_id,
                                    edge_type_len,
@@ -1026,7 +1029,8 @@ NeighborSampleResultV2 GraphGpuWrapper::graph_neighbor_sample_sage(
                                    len,
                                    edge_type_graphs,
                                    weighted,
-                                   return_weight);
+                                   return_weight,
+                                   all_type_keys);
 }
 
 std::vector<std::shared_ptr<phi::Allocation>>
@@ -1063,6 +1067,7 @@ int GraphGpuWrapper::get_feature_info_of_nodes(
   PADDLE_ENFORCE_NOT_NULL(graph_table,
                           paddle::platform::errors::InvalidArgument(
                               "graph_table should not be null"));
+  auto &all_type_keys = get_graph_type_keys_set();
   return reinterpret_cast<GpuPsGraphTable *>(graph_table)
       ->get_feature_info_of_nodes(gpu_id,
                                   d_nodes,
@@ -1071,6 +1076,7 @@ int GraphGpuWrapper::get_feature_info_of_nodes(
                                   size_list_prefix_sum,
                                   feature_list,
                                   slot_list,
+                                  all_type_keys,
                                   sage_mode);
 }
 
@@ -1230,6 +1236,12 @@ std::vector<uint64_t> &GraphGpuWrapper::get_graph_total_keys() {
 std::vector<std::vector<uint64_t>> &GraphGpuWrapper::get_graph_type_keys() {
   return reinterpret_cast<GpuPsGraphTable *>(graph_table)
       ->cpu_graph_table_->graph_type_keys_;
+}
+
+std::vector<robin_hood::unordered_set<uint64_t>>
+    &GraphGpuWrapper::get_graph_type_keys_set() {
+  return reinterpret_cast<GpuPsGraphTable *>(graph_table)
+      ->cpu_graph_table_->graph_type_keys_set_;
 }
 
 std::unordered_map<int, int> &GraphGpuWrapper::get_graph_type_to_index() {

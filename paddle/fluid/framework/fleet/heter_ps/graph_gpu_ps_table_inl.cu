@@ -1960,8 +1960,13 @@ void GpuPsGraphTable::build_graph_from_cpu(
 }
 
 NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v3(
-    NeighborSampleQuery q, bool cpu_switch, bool compress, bool weighted) {
-  if (multi_node_ && FLAGS_enable_graph_multi_node_sampling) {
+    NeighborSampleQuery q,
+    bool cpu_switch,
+    bool compress,
+    bool weighted,
+    std::vector<robin_hood::unordered_set<uint64_t>>& total_keys) {
+  // if (multi_node_ && FLAGS_enable_graph_multi_node_sampling) {
+  if (FLAGS_enable_graph_multi_node_sampling) {
     // multi node mode
     if (q.sample_step == 1) {
       auto result = graph_neighbor_sample_v2(global_device_map[q.gpu_id],
@@ -1982,7 +1987,8 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v3(
                                                   q.len,
                                                   cpu_switch,
                                                   compress,
-                                                  weighted);
+                                                  weighted,
+                                                  total_keys);
       return result;
     }
   } else {
@@ -2016,17 +2022,206 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all(
     int len,
     bool cpu_query_switch,
     bool compress,
-    bool weighted) {
+    bool weighted,
+    std::vector<robin_hood::unordered_set<uint64_t>>& total_keys) {
   platform::CUDADeviceGuard guard(gpu_id);
+  platform::CUDAPlace place = platform::CUDAPlace(resource_->dev_id(gpu_id));
   auto& loc = storage_[gpu_id];
   auto stream = resource_->local_stream(gpu_id, 0);
 
   loc.alloc(len, sizeof(uint64_t) /*value_bytes*/);
 
   // all2all mode begins. init resource, partition keys, pull vals by all2all
-  auto pull_size = gather_inter_keys_by_all2all(gpu_id, len, d_keys, stream);
-  VLOG(2) << "gather_inter_keys_by_all2all finish, pull_size=" << pull_size
-          << ", len=" << len;
+  // 0. allgather keys len
+  auto d_local_keys_len = memory::Alloc(
+      place, sizeof(int), phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  int* d_local_keys_len_mem = reinterpret_cast<int*>(d_local_keys_len->ptr());
+
+  // cudaMemsetAsync(d_local_keys_len_mem, len, sizeof(int), stream);
+  CUDA_CHECK(cudaMemcpyAsync(
+      d_local_keys_len_mem, &len, sizeof(int), cudaMemcpyHostToDevice, stream));
+
+  auto keys_len =
+      memory::Alloc(place,
+                    node_size_ * sizeof(int),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  int* d_keys_len = reinterpret_cast<int*>(keys_len->ptr());
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  sample_gather_keys_len(gpu_id, d_local_keys_len_mem, d_keys_len, stream);
+  // int h_keys_len[node_size_];
+  std::vector<int> h_keys_len(node_size_);
+  CUDA_CHECK(cudaMemcpyAsync(&h_keys_len[0],
+                             d_keys_len,
+                             node_size_ * sizeof(int),
+                             cudaMemcpyDeviceToHost,
+                             stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  std::stringstream ss;
+  ss << "h_keys_len: " << node_size_ << " ";
+  for (int i = 0; i < node_size_; ++i) {
+    ss << h_keys_len[i] << " ";
+  }
+  VLOG(0) << ss.str();
+
+  // 1. send & recv key array
+  // 1.1
+  size_t all_keys_len = 0;
+  for (int i = 0; i < node_size_; ++i) {
+    all_keys_len += h_keys_len[i];
+  }
+  VLOG(0) << "all_keys_len :" << all_keys_len;
+  loc.init_sample_shard(all_keys_len, sizeof(uint64_t) /*value_bytes*/);
+  auto& sample_shard_res = loc.sample_shard_res;
+
+  size_t* h_local_part_sizes = sample_shard_res.h_local_part_sizes.data();
+  size_t* h_local_part_offsets = sample_shard_res.h_local_part_offsets.data();
+  uint32_t* h_push_fea_sizes = sample_shard_res.h_push_fea_sizes.data();
+  int all_shard_part_size = node_size_ * node_size_;
+  int rank_offset = rank_id_ * node_size_;
+  h_local_part_offsets[0] = 0;
+  for (int i = 0; i < node_size_; ++i) {
+    h_local_part_sizes[i] = h_keys_len[rank_id_];
+    h_push_fea_sizes[rank_offset + i] = h_local_part_sizes[i];
+    h_local_part_offsets[i + 1] =
+        h_local_part_offsets[i] + h_local_part_sizes[i];
+    VLOG(2) << "h_local_part_sizes " << i << " " << h_local_part_sizes[i]
+            << "  ;h_push_fea_sizes " << rank_offset + i << " "
+            << h_push_fea_sizes[rank_offset + i] << " ;h_local_part_offsets "
+            << h_local_part_offsets[i + 1];
+  }
+  CHECK_EQ(node_size_ * len, h_local_part_offsets[node_size_]);
+
+  size_t* h_remote_part_sizes = sample_shard_res.h_remote_part_sizes.data();
+  size_t* h_remote_part_offsets = sample_shard_res.h_remote_part_offsets.data();
+  h_remote_part_offsets[0] = 0;
+  for (int i = 0; i < node_size_; i++) {
+    int offset = node_size_ * i + rank_id_;
+    h_remote_part_sizes[i] = h_keys_len[i];
+    h_remote_part_offsets[i + 1] =
+        h_remote_part_offsets[i] + h_remote_part_sizes[i];
+    VLOG(2) << "h_push_fea_sizes " << offset << " " << h_push_fea_sizes[offset]
+            << "  ;h_remote_part_sizes " << i << " " << h_remote_part_sizes[i]
+            << " ;h_remote_part_offsets " << h_remote_part_offsets[i + 1];
+  }
+  CHECK_EQ(all_keys_len, h_remote_part_offsets[node_size_]);
+
+  auto d_send_keys = memory::Alloc(
+      place,
+      h_local_part_sizes[rank_id_] * node_size_ * sizeof(uint64_t),
+      phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  uint64_t* d_send_keys_mem = reinterpret_cast<uint64_t*>(d_send_keys->ptr());
+  for (int i = 0; i < node_size_; i++) {
+    auto index = h_local_part_sizes[rank_id_] * i;
+    CUDA_CHECK(cudaMemcpyAsync(&d_send_keys_mem[index],
+                               d_keys,
+                               h_local_part_sizes[rank_id_] * sizeof(uint64_t),
+                               cudaMemcpyDeviceToDevice,
+                               stream));
+  }
+  auto d_recv_keys =
+      memory::Alloc(place,
+                    all_keys_len * sizeof(uint64_t),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  uint64_t* d_recv_keys_mem = reinterpret_cast<uint64_t*>(d_recv_keys->ptr());
+
+  size_t total_fea_num =
+      send_data_by_all2all(gpu_id,
+                           node_size_,
+                           rank_id_,
+                           sizeof(uint64_t),
+                           h_local_part_sizes,
+                           h_local_part_offsets,
+                           h_remote_part_sizes,
+                           h_remote_part_offsets,
+                           reinterpret_cast<const char*>(d_send_keys_mem),
+                           reinterpret_cast<char*>(d_recv_keys_mem),
+                           stream);
+  VLOG(2) << "total_fea_num:" << total_fea_num;
+
+  // 2. get key exist flag array
+  VLOG(0) << "begin get key exist flag array";
+
+  std::vector<uint64_t> h_recv_keys(all_keys_len, 0);
+  CUDA_CHECK(cudaMemcpyAsync(h_recv_keys.data(),
+                             d_recv_keys_mem,
+                             all_keys_len * sizeof(uint64_t),
+                             cudaMemcpyDeviceToHost,
+                             stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  VLOG(0) << "cudaMemcpyAsync end";
+  std::vector<uint32_t> keys_exist_in_this_node(all_keys_len, 0);
+  VLOG(0) << "keys_exist_in_this_node vector";
+
+  auto get_keys_exist_in_this_node =
+      [this](std::vector<uint32_t>& keys_exist_in_this_node,
+             std::vector<robin_hood::unordered_set<uint64_t>>& total_keys,
+             std::vector<uint64_t>& h_key,
+             const size_t* h_remote_part_offsets,
+             int node_id) {
+        for (int index = h_remote_part_offsets[node_id];
+             index < h_remote_part_offsets[node_id + 1];
+             index++) {
+          for (size_t i = 0; i < total_keys.size(); ++i) {
+            if (total_keys[i].find(h_key[index]) != total_keys[i].end()) {
+              keys_exist_in_this_node[index] = 1;
+              break;
+            }
+          }
+        }
+      };
+  std::vector<std::thread> threads;
+  for (int node_id = 0; node_id < node_size_; node_id++) {
+    threads.push_back(std::thread(get_keys_exist_in_this_node,
+                                  std::ref(keys_exist_in_this_node),
+                                  std::ref(total_keys),
+                                  std::ref(h_recv_keys),
+                                  h_remote_part_offsets,
+                                  node_id));
+  }
+
+  for (std::thread& t : threads) {
+    t.join();
+  }
+
+  auto d_keys_exist_in_this_node =
+      memory::Alloc(place,
+                    all_keys_len * sizeof(uint32_t),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  uint32_t* d_keys_exist_in_this_node_ptr =
+      reinterpret_cast<uint32_t*>(d_keys_exist_in_this_node->ptr());
+  CUDA_CHECK(cudaMemcpyAsync(d_keys_exist_in_this_node_ptr,
+                             keys_exist_in_this_node.data(),
+                             all_keys_len * sizeof(uint32_t),
+                             cudaMemcpyHostToDevice,
+                             stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  VLOG(0) << " cudaMemcpyAsync d_keys_exist_in_this_node_ptr END";
+
+  // 3. send & receive exist result
+  auto d_recv_key_exists = memory::Alloc(
+      place,
+      h_local_part_sizes[rank_id_] * node_size_ * sizeof(uint32_t),
+      phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  uint32_t* d_recv_key_exists_mem =
+      reinterpret_cast<uint32_t*>(d_recv_key_exists->ptr());
+  total_fea_num = send_data_by_all2all(
+      gpu_id,
+      node_size_,
+      rank_id_,
+      sizeof(uint32_t),
+      h_remote_part_sizes,
+      h_remote_part_offsets,
+      h_local_part_sizes,
+      h_local_part_offsets,
+      reinterpret_cast<const char*>(d_keys_exist_in_this_node_ptr),
+      reinterpret_cast<char*>(d_recv_key_exists_mem),
+      stream);
+  VLOG(2) << "sample_gather_inter_keys_by_all2all begin,total_fea_num:"
+          << total_fea_num;
+  auto pull_size = sample_gather_inter_keys_by_all2all(
+      gpu_id, len, d_keys, d_recv_key_exists_mem, stream);
+  VLOG(2) << "sample_gather_inter_keys_by_all2all finish, pull_size="
+          << pull_size << ", len=" << len;
 
   // do single-node multi-card sampling
   auto result = graph_neighbor_sample_v2(gpu_id,
@@ -2522,7 +2717,8 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_sage(
     int len,
     std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,
     bool weighted,
-    bool return_weight) {
+    bool return_weight,
+    std::vector<robin_hood::unordered_set<uint64_t>>& total_keys) {
   if (multi_node_ && FLAGS_enable_graph_multi_node_sampling) {
     // multi node mode
     auto result = graph_neighbor_sample_sage_all2all(gpu_id,
@@ -2532,7 +2728,8 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_sage(
                                                      len,
                                                      edge_type_graphs,
                                                      weighted,
-                                                     return_weight);
+                                                     return_weight,
+                                                     total_keys);
     return result;
   } else {
     auto result = graph_neighbor_sample_all_edge_type(gpu_id,
@@ -2580,17 +2777,204 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_sage_all2all(
     int len,
     std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,
     bool weighted,
-    bool return_weight) {
+    bool return_weight,
+    std::vector<robin_hood::unordered_set<uint64_t>>& total_keys) {
   platform::CUDADeviceGuard guard(gpu_id);
+  platform::CUDAPlace place = platform::CUDAPlace(resource_->dev_id(gpu_id));
   auto& loc = storage_[gpu_id];
   auto stream = resource_->local_stream(gpu_id, 0);
 
   loc.alloc(len, sizeof(uint64_t) * edge_type_len * sample_size);  // key_bytes
 
   // all2all mode begins, init resource, partition keys, pull vals by all2all.
-  auto pull_size = gather_inter_keys_by_all2all(gpu_id, len, d_keys, stream);
-  VLOG(2) << "gather_inter_keys_by_all2all sage finish, pull_size=" << pull_size
-          << ", len=" << len;
+  // 0. allgather keys len
+  auto d_local_keys_len = memory::Alloc(
+      place, sizeof(int), phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  int* d_local_keys_len_mem = reinterpret_cast<int*>(d_local_keys_len->ptr());
+
+  // cudaMemsetAsync(d_local_keys_len_mem, len, sizeof(int), stream);
+  CUDA_CHECK(cudaMemcpyAsync(
+      d_local_keys_len_mem, &len, sizeof(int), cudaMemcpyHostToDevice, stream));
+
+  auto keys_len =
+      memory::Alloc(place,
+                    node_size_ * sizeof(int),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  int* d_keys_len = reinterpret_cast<int*>(keys_len->ptr());
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  sample_gather_keys_len(gpu_id, d_local_keys_len_mem, d_keys_len, stream);
+  // int h_keys_len[node_size_];
+  std::vector<int> h_keys_len(node_size_);
+  CUDA_CHECK(cudaMemcpyAsync(&h_keys_len[0],
+                             d_keys_len,
+                             node_size_ * sizeof(int),
+                             cudaMemcpyDeviceToHost,
+                             stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  std::stringstream ss;
+  ss << "h_keys_len: " << node_size_ << " ";
+  for (int i = 0; i < node_size_; ++i) {
+    ss << h_keys_len[i] << " ";
+  }
+  VLOG(0) << ss.str();
+
+  // 1. send & recv key array
+  // 1.1
+  size_t all_keys_len = 0;
+  for (int i = 0; i < node_size_; ++i) {
+    all_keys_len += h_keys_len[i];
+  }
+  VLOG(0) << "all_keys_len :" << all_keys_len;
+  loc.init_sample_shard(all_keys_len, sizeof(uint64_t) /*value_bytes*/);
+  auto& sample_shard_res = loc.sample_shard_res;
+
+  size_t* h_local_part_sizes = sample_shard_res.h_local_part_sizes.data();
+  size_t* h_local_part_offsets = sample_shard_res.h_local_part_offsets.data();
+  uint32_t* h_push_fea_sizes = sample_shard_res.h_push_fea_sizes.data();
+  int all_shard_part_size = node_size_ * node_size_;
+  int rank_offset = rank_id_ * node_size_;
+  h_local_part_offsets[0] = 0;
+  for (int i = 0; i < node_size_; ++i) {
+    h_local_part_sizes[i] = h_keys_len[rank_id_];
+    h_push_fea_sizes[rank_offset + i] = h_local_part_sizes[i];
+    h_local_part_offsets[i + 1] =
+        h_local_part_offsets[i] + h_local_part_sizes[i];
+    VLOG(2) << "h_local_part_sizes " << i << " " << h_local_part_sizes[i]
+            << "  ;h_push_fea_sizes " << rank_offset + i << " "
+            << h_push_fea_sizes[rank_offset + i] << " ;h_local_part_offsets "
+            << h_local_part_offsets[i + 1];
+  }
+  CHECK_EQ(node_size_ * len, h_local_part_offsets[node_size_]);
+
+  size_t* h_remote_part_sizes = sample_shard_res.h_remote_part_sizes.data();
+  size_t* h_remote_part_offsets = sample_shard_res.h_remote_part_offsets.data();
+  h_remote_part_offsets[0] = 0;
+  for (int i = 0; i < node_size_; i++) {
+    int offset = node_size_ * i + rank_id_;
+    h_remote_part_sizes[i] = h_keys_len[i];
+    h_remote_part_offsets[i + 1] =
+        h_remote_part_offsets[i] + h_remote_part_sizes[i];
+    VLOG(2) << "h_push_fea_sizes " << offset << " " << h_push_fea_sizes[offset]
+            << "  ;h_remote_part_sizes " << i << " " << h_remote_part_sizes[i]
+            << " ;h_remote_part_offsets " << h_remote_part_offsets[i + 1];
+  }
+  CHECK_EQ(all_keys_len, h_remote_part_offsets[node_size_]);
+
+  auto d_send_keys = memory::Alloc(
+      place,
+      h_local_part_sizes[rank_id_] * node_size_ * sizeof(uint64_t),
+      phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  uint64_t* d_send_keys_mem = reinterpret_cast<uint64_t*>(d_send_keys->ptr());
+  for (int i = 0; i < node_size_; i++) {
+    auto index = h_local_part_sizes[rank_id_] * i;
+    CUDA_CHECK(cudaMemcpyAsync(&d_send_keys_mem[index],
+                               d_keys,
+                               h_local_part_sizes[rank_id_] * sizeof(uint64_t),
+                               cudaMemcpyDeviceToDevice,
+                               stream));
+  }
+  auto d_recv_keys =
+      memory::Alloc(place,
+                    all_keys_len * sizeof(uint64_t),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  uint64_t* d_recv_keys_mem = reinterpret_cast<uint64_t*>(d_recv_keys->ptr());
+
+  size_t total_fea_num =
+      send_data_by_all2all(gpu_id,
+                           node_size_,
+                           rank_id_,
+                           sizeof(uint64_t),
+                           h_local_part_sizes,
+                           h_local_part_offsets,
+                           h_remote_part_sizes,
+                           h_remote_part_offsets,
+                           reinterpret_cast<const char*>(d_send_keys_mem),
+                           reinterpret_cast<char*>(d_recv_keys_mem),
+                           stream);
+  VLOG(2) << "total_fea_num:" << total_fea_num;
+
+  // 2. get key exist flag array
+  VLOG(0) << "begin get key exist flag array";
+
+  std::vector<uint64_t> h_recv_keys(all_keys_len, 0);
+  CUDA_CHECK(cudaMemcpyAsync(h_recv_keys.data(),
+                             d_recv_keys_mem,
+                             all_keys_len * sizeof(uint64_t),
+                             cudaMemcpyDeviceToHost,
+                             stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  VLOG(0) << "cudaMemcpyAsync end";
+  std::vector<uint32_t> keys_exist_in_this_node(all_keys_len, 0);
+  VLOG(0) << "keys_exist_in_this_node vector";
+
+  auto get_keys_exist_in_this_node =
+      [this](std::vector<uint32_t>& keys_exist_in_this_node,
+             std::vector<robin_hood::unordered_set<uint64_t>>& total_keys,
+             std::vector<uint64_t>& h_key,
+             const size_t* h_remote_part_offsets,
+             int node_id) {
+        for (int index = h_remote_part_offsets[node_id];
+             index < h_remote_part_offsets[node_id + 1];
+             index++) {
+          for (size_t i = 0; i < total_keys.size(); ++i) {
+            if (total_keys[i].find(h_key[index]) != total_keys[i].end()) {
+              keys_exist_in_this_node[index] = 1;
+              break;
+            }
+          }
+        }
+      };
+  std::vector<std::thread> threads;
+  for (int node_id = 0; node_id < node_size_; node_id++) {
+    threads.push_back(std::thread(get_keys_exist_in_this_node,
+                                  std::ref(keys_exist_in_this_node),
+                                  std::ref(total_keys),
+                                  std::ref(h_recv_keys),
+                                  h_remote_part_offsets,
+                                  node_id));
+  }
+
+  for (std::thread& t : threads) {
+    t.join();
+  }
+
+  auto d_keys_exist_in_this_node =
+      memory::Alloc(place,
+                    all_keys_len * sizeof(uint32_t),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  uint32_t* d_keys_exist_in_this_node_ptr =
+      reinterpret_cast<uint32_t*>(d_keys_exist_in_this_node->ptr());
+  CUDA_CHECK(cudaMemcpyAsync(d_keys_exist_in_this_node_ptr,
+                             keys_exist_in_this_node.data(),
+                             all_keys_len * sizeof(uint32_t),
+                             cudaMemcpyHostToDevice,
+                             stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  VLOG(0) << " cudaMemcpyAsync d_keys_exist_in_this_node_ptr END";
+
+  // 3. send & receive exist result
+  auto d_recv_key_exists = memory::Alloc(
+      place,
+      h_local_part_sizes[rank_id_] * node_size_ * sizeof(uint32_t),
+      phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  uint32_t* d_recv_key_exists_mem =
+      reinterpret_cast<uint32_t*>(d_recv_key_exists->ptr());
+  total_fea_num = send_data_by_all2all(
+      gpu_id,
+      node_size_,
+      rank_id_,
+      sizeof(uint32_t),
+      h_remote_part_sizes,
+      h_remote_part_offsets,
+      h_local_part_sizes,
+      h_local_part_offsets,
+      reinterpret_cast<const char*>(d_keys_exist_in_this_node_ptr),
+      reinterpret_cast<char*>(d_recv_key_exists_mem),
+      stream);
+  auto pull_size = sample_gather_inter_keys_by_all2all(
+      gpu_id, len, d_keys, d_recv_key_exists_mem, stream);
+  VLOG(2) << "sample_gather_inter_keys_by_all2all sage finish, pull_size="
+          << pull_size << ", len=" << len;
 
   // do single-node multi-card sampling
   auto result = graph_neighbor_sample_all_edge_type(gpu_id,
@@ -3203,6 +3587,7 @@ int GpuPsGraphTable::get_feature_info_of_nodes(
     std::shared_ptr<phi::Allocation>& size_list_prefix_sum,
     std::shared_ptr<phi::Allocation>& feature_list,
     std::shared_ptr<phi::Allocation>& slot_list,
+    std::vector<robin_hood::unordered_set<uint64_t>>& total_keys,
     bool sage_mode) {
   if (node_num == 0) {
     return 0;
@@ -3227,6 +3612,7 @@ int GpuPsGraphTable::get_feature_info_of_nodes(
                                                         size_list_prefix_sum,
                                                         feature_list,
                                                         slot_list,
+                                                        total_keys,
                                                         sage_mode);
       }
     }
@@ -3251,6 +3637,7 @@ int GpuPsGraphTable::get_feature_info_of_nodes_all2all(
     std::shared_ptr<phi::Allocation>& size_list_prefix_sum,
     std::shared_ptr<phi::Allocation>& feature_list,
     std::shared_ptr<phi::Allocation>& slot_list,
+    std::vector<robin_hood::unordered_set<uint64_t>>& total_keys,
     bool sage_mode) {
   if (node_num == 0) {
     return 0;

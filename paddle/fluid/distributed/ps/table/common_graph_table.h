@@ -122,7 +122,9 @@ class GraphShard {
   }
   GraphNode *add_graph_node(uint64_t id);
   GraphNode *add_graph_node(Node *node);
-  FeatureNode *add_feature_node(uint64_t id, bool is_overlap = true, int float_fea_num = 0);
+  FeatureNode *add_feature_node(uint64_t id,
+                                bool is_overlap = true,
+                                int float_fea_num = 0);
   Node *find_node(uint64_t id);
   void delete_node(uint64_t id);
   void clear();
@@ -726,7 +728,9 @@ class GraphTable : public Table {
   virtual paddle::framework::GpuPsCommGraphFea make_gpu_ps_graph_fea(
       int gpu_id, std::vector<uint64_t> &node_ids, int slot_num);  // NOLINT
   virtual paddle::framework::GpuPsCommGraphFloatFea make_gpu_ps_graph_float_fea(
-      int gpu_id, std::vector<uint64_t> &node_ids, int float_slot_num);  // NOLINT
+      int gpu_id,
+      std::vector<uint64_t> &node_ids,
+      int float_slot_num);  // NOLINT
   int32_t Load_to_ssd(const std::string &path, const std::string &param);
   int64_t load_graph_to_memory_from_ssd(int idx,
                                         std::vector<uint64_t> &ids);  // NOLINT
@@ -763,11 +767,18 @@ class GraphTable : public Table {
   void graph_partition(bool is_edge);
   void dbh_graph_edge_partition();
   void dbh_graph_feature_partition();
+  void fennel_graph_edge_partition_cx();
+  void fennel_graph_edge_partition_bx();
+  void fennel_graph_feature_partition();
+  void hard_graph_edge_partition();
+  void hard_graph_feature_partition() {}
 
   std::vector<uint64_t> graph_total_keys_;
   std::vector<std::vector<uint64_t>> graph_type_keys_;
   std::unordered_map<int, int> type_to_index_;
   robin_hood::unordered_set<uint64_t> unique_all_edge_keys_;
+  std::vector<robin_hood::unordered_set<uint64_t>> egde_node_ids_;  // fennel
+  std::vector<robin_hood::unordered_set<uint64_t>> graph_type_keys_set_;
 
   std::vector<std::vector<GraphShard *>> edge_shards, feature_shards,
       node_shards;
@@ -822,6 +833,7 @@ class GraphTable : public Table {
   int node_num_ = 1;
   int node_id_ = 0;
   bool is_weighted_ = false;
+  std::atomic<uint64_t> edge_counts_{0};
 };
 
 /*
