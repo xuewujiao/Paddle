@@ -570,6 +570,17 @@ __global__ void GraphFillIdKernel(uint64_t *id_tensor,
   }
 }
 
+__global__ void GraphZeroIdKernel(uint64_t *id_tensor,
+                                   int len) {
+  size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+  uint64_t zerokey = 0;
+  if (idx < len) {
+    int dst = idx * 2;
+    id_tensor[dst] = zerokey;
+    id_tensor[dst + 1] = zerokey;
+  }
+}
+
 __global__ void GraphFillSlotKernel(uint64_t *id_tensor,
                                     uint64_t *feature_buf,
                                     int len,
@@ -823,6 +834,7 @@ int GraphDataGenerator::FillGraphIdShowClkTensor(int uniq_instance,
 }
 
 int GraphDataGenerator::FillGraphIdShowClkTensorAccum(int index) {
+  VLOG(1) << conf_.gpuid << ": Begin fill in show, cvm and id";
   int fake_accumulate_num = 2;
   for (int accum = 0; accum < fake_accumulate_num; accum++) {
     int uniq_instance = uniq_instance_vec_[2 * index + 1 - accum];
@@ -847,8 +859,12 @@ int GraphDataGenerator::FillGraphIdShowClkTensorAccum(int index) {
                     cudaMemcpyDeviceToDevice,
                     train_stream_);
     cudaStreamSynchronize(train_stream_);
+
+    VLOG(1) << conf_.gpuid << ": finish show, cvm and id for " << accum
+            << " uniq_instance: " << uniq_instance;
   }
 
+  VLOG(1) << conf_.gpuid << ": Begin copy graph data";
   for (int accum = 0; accum < fake_accumulate_num; accum++) {
     int feed_vec_idx = 3 * fake_accumulate_num + 
                        conf_.slot_num * 2 + 
@@ -856,6 +872,10 @@ int GraphDataGenerator::FillGraphIdShowClkTensorAccum(int index) {
     int new_index = index * 2 + 1 - accum;
     int uniq_instance = uniq_instance_vec_[new_index];
     int total_instance = total_instance_vec_[new_index];
+    VLOG(1) << conf_.gpuid
+            << " accum: " << accum
+            << " uniq_instance: " << uniq_instance
+            << " total_instance: " << total_instance;
     int len_samples = conf_.samples.size();
     int *num_nodes_tensor_ptr_[len_samples];
     int *next_num_nodes_tensor_ptr_[len_samples];
@@ -922,6 +942,7 @@ int GraphDataGenerator::FillGraphIdShowClkTensorAccum(int index) {
       }
     } // end for (int i = 0; i < len_samples; i++) {
 
+    VLOG(1) << conf_.gpuid << ": Fill index_tensor";
     index_tensor_ptr_ = feed_vec_[feed_vec_idx++]->mutable_data<int>(
         {total_instance}, this->place_);
     cudaMemcpyAsync(index_tensor_ptr_,
@@ -932,6 +953,7 @@ int GraphDataGenerator::FillGraphIdShowClkTensorAccum(int index) {
     cudaStreamSynchronize(train_stream_);
   } // end for (int accum = 0; accum < fake_accumulate_num;
   
+  VLOG(1) << conf_.gpuid << ": Finish FillGraphIdAccum";
   return 0;
 }
 
@@ -1129,6 +1151,7 @@ int GraphDataGenerator::GenerateBatch() {
     }
   } else { // train
     if (!conf_.sage_mode) {
+      int fill_zero_num = 10;
       for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
               ++tensor_pair_idx) {
         while (ins_buf_pair_len_[tensor_pair_idx] < conf_.batch_size) {
@@ -1156,6 +1179,13 @@ int GraphDataGenerator::GenerateBatch() {
                   buf_state_[tensor_pair_idx].Reset(total_row_[tensor_pair_idx]);
                   VLOG(1)
                       << "reset buf state to make batch num equal in multi node";
+                } else {
+                  VLOG(1) << "total row in buf state is 0";
+                  // Fill 0 ins kernel
+                  GraphZeroIdKernel<<<GET_BLOCKS(fill_zero_num), CUDA_NUM_THREADS, 0, train_stream_>>>(
+                      reinterpret_cast<uint64_t *>(d_ins_buf_[tensor_pair_idx]->ptr()),
+                      fill_zero_num);
+                  break;
                 }
               } else {
                 return 0;
@@ -1170,6 +1200,11 @@ int GraphDataGenerator::GenerateBatch() {
       int min_ins_buf_pair_len = *std::min_element(ins_buf_pair_len_.begin(), ins_buf_pair_len_.end());
       total_instance = min_ins_buf_pair_len < conf_.batch_size ? min_ins_buf_pair_len
                                                             : conf_.batch_size;
+      if (conf_.is_multi_node && total_row_[0] == 0) {
+        total_instance = fill_zero_num;
+        ins_buf_pair_len_[0] = fill_zero_num;
+        VLOG(1) << "gpu id: " << conf_.gpuid << "set total ins num: " << fill_zero_num;
+      }
       total_instance *= 2;
       VLOG(2) << "total_instance: " << total_instance
               << ", ins_buf_pair_len = " << min_ins_buf_pair_len;
@@ -2782,6 +2817,40 @@ int multi_node_sync_sample(int flag,
   return ret;
 }
 
+int get_multi_node_global_flag(int local_flag,
+                               const ncclRedOp_t &op,
+                               const paddle::platform::Place &place,
+                               cudaStream_t stream) {
+  auto send_buff = memory::Alloc(
+      place,
+      2 * sizeof(int),
+      phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  int *send_buff_ptr = reinterpret_cast<int *>(send_buff->ptr());
+  cudaMemcpyAsync(send_buff_ptr,
+                  &local_flag,
+                  sizeof(int),
+                  cudaMemcpyHostToDevice,
+                  stream);
+  cudaStreamSynchronize(stream);
+  auto comm =
+      platform::NCCLCommContext::Instance().Get(0, place.GetDeviceId());
+  PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllReduce(&send_buff_ptr[0],
+                                                              &send_buff_ptr[1],
+                                                              1,
+                                                              ncclInt,
+                                                              op,
+                                                              comm->comm(),
+                                                              stream));
+  int global_flag = 0;
+  cudaMemcpyAsync(&global_flag,
+                  &send_buff_ptr[1],
+                  sizeof(int),
+                  cudaMemcpyDeviceToHost,
+                  stream);
+  cudaStreamSynchronize(stream);
+  return global_flag;
+}
+
 int FillWalkBuf(const std::vector<uint64_t> &h_device_keys_len,
                 const std::vector<std::shared_ptr<phi::Allocation>>
                     &d_device_keys,                              // input
@@ -3465,9 +3534,23 @@ void GraphDataGenerator::DoWalkandSage() {
   platform::CUDADeviceGuard guard(conf_.gpuid);
   sage_batch_num_ = 0;
   if (conf_.gpu_graph_training) {
-    bool train_flag = DoWalkForTrain();
-    if (train_flag && conf_.sage_mode) {
-      DoSageForTrain();
+    int local_train_flag = DoWalkForTrain();
+    if (!conf_.is_multi_node) {
+      if (local_train_flag && conf_.sage_mode) {
+        DoSageForTrain();
+      }
+    } else {
+      if (conf_.sage_mode) {
+        global_train_flag_ = get_multi_node_global_flag(local_train_flag, ncclProd,
+                                                        place_, sample_stream_);
+       VLOG(1) << "gpu_id: " << conf_.gpuid
+               << ", local_train_flag: " << local_train_flag
+               << ", global_train_flag: " << global_train_flag_;
+        if (global_train_flag_) {
+          // When global_train_flag is true, we need to go ahead in multi-node scenario.
+          DoSageForTrain();
+        }
+      }
     }
   } else {
     bool infer_flag = DoWalkForInfer();
@@ -3554,7 +3637,9 @@ void GraphDataGenerator::DoSageForTrain() {
   bool is_sage_pass_continue = true;
   int sage_pass_end = 0;
   uint64_t *ins_buf, *ins_cursor;
+  bool not_empty_batch = 1;
   while (is_sage_pass_continue) {
+    int fill_zero_num = 10;
     for (int tensor_pair_idx = 0;
             tensor_pair_idx < conf_.tensor_pair_num && is_sage_pass_continue;
             ++tensor_pair_idx) {
@@ -3585,6 +3670,13 @@ void GraphDataGenerator::DoSageForTrain() {
                 buf_state_[tensor_pair_idx].Reset(total_row_[tensor_pair_idx]);
                 VLOG(1) << "reset buf state to make batch num equal in "
                            "multi node";
+              } else {
+                VLOG(1) << conf_.gpuid << ": total row in buf state is 0";
+                GraphZeroIdKernel<<<GET_BLOCKS(fill_zero_num), CUDA_NUM_THREADS, 0, train_stream_>>>(
+                    reinterpret_cast<uint64_t *>(d_ins_buf_[tensor_pair_idx]->ptr()),
+                    fill_zero_num);
+                VLOG(1) << conf_.gpuid << ": end set seq ins";
+                break;
               }
             } else {
               is_sage_pass_continue = false;
@@ -3600,7 +3692,9 @@ void GraphDataGenerator::DoSageForTrain() {
       if (conf_.is_multi_node) {
         int res = multi_node_sync_sample(
             sage_pass_end, ncclProd, place_, &multi_node_sync_stat_);
+        VLOG(1) << conf_.gpuid << " get global sage_pass_end: " << res;
         if (res) {
+          VLOG(1) << conf_.gpuid << ": reach sage pass end";
           is_sage_pass_continue = false;
           break;
         }
@@ -3608,9 +3702,15 @@ void GraphDataGenerator::DoSageForTrain() {
 
       total_instance = ins_buf_pair_len_[tensor_pair_idx] < conf_.batch_size ?
           ins_buf_pair_len_[tensor_pair_idx] : conf_.batch_size;
+      if (conf_.is_multi_node && total_row_[0] == 0) {
+        total_instance = fill_zero_num;
+        ins_buf_pair_len_[0] = fill_zero_num;
+        VLOG(1) << "gpu id: " << conf_.gpuid << " set total ins num: " << fill_zero_num;
+      }
       total_instance *= 2;
 
       if (total_instance == 0) {
+        not_empty_batch = 0;
         break;
       }
 
@@ -3622,12 +3722,14 @@ void GraphDataGenerator::DoSageForTrain() {
       if (conf_.accumulate_num >= 2) {
         if (mini_batch_size == 0) {
           ins_buf_pair_len_[tensor_pair_idx] -= total_instance / 2;
+          not_empty_batch = 0;
           break;
         } else if (mini_batch_size % 2 == 1) {
           mini_batch_size += 1;
         }
         if (total_instance - mini_batch_size == 0) {
           ins_buf_pair_len_[tensor_pair_idx] -= total_instance / 2;
+          not_empty_batch = 0;
           break;
         }
       }
@@ -3714,7 +3816,7 @@ void GraphDataGenerator::DoSageForTrain() {
       cudaStreamSynchronize(sample_stream_);
       ins_buf_pair_len_[tensor_pair_idx] -= total_instance / 2;
     } // end for (int tensor_pair_idx = 0;
-    if (is_sage_pass_continue) {
+    if (is_sage_pass_continue && not_empty_batch) {
       sage_batch_num_ += 1;
     }
   } // end while (is_sage_pass_continue)
@@ -3797,6 +3899,8 @@ void GraphDataGenerator::DoSageForInfer() {
   } // end for (int tensor_pair_idx = 0; tensor_pair_idx < conf_.tensor_pair_num;
 
   sage_batch_num_ /= conf_.tensor_pair_num;
+  VLOG(1) << "gpuid: " << conf_.gpuid
+          << " infer_sage_batch_num: " << sage_batch_num_;
 }
 
 void GraphDataGenerator::clear_gpu_mem() {
@@ -3903,7 +4007,8 @@ bool FillInferBuf(const std::vector<uint64_t> &h_device_keys_len, // input
     if (conf.is_multi_node || conf.is_thread_sharding) {
       int local_reach_end = global_infer_node_type_start[infer_cursor] + conf.buf_size >=
                             device_key_size;
-      int global_reach_end = dynamic_adjust_total_row_for_infer(local_reach_end, place, stream);
+      int global_reach_end = get_multi_node_global_flag(local_reach_end, ncclProd,
+                                                        place, stream);
       int remain = device_key_size - global_infer_node_type_start[infer_cursor];
       if (global_reach_end) {
         *total_row_ptr = remain;
@@ -4216,8 +4321,12 @@ void GraphDataGenerator::AllocResource(
   if (!conf_.sage_mode) {
     conf_.slot_num = (feed_vec.size() - id_offset_of_feed_vec_) / 2;
   } else {
+    VLOG(0) << "feed_vec.size(): " << feed_vec.size();
     conf_.tensor_num_of_one_pair = (feed_vec.size() - 2) / conf_.tensor_pair_num;  // 2 means show and clk
     assert((conf_.tensor_num_of_one_pair * conf_.tensor_pair_num + 2) == feed_vec.size());
+    VLOG(0) << "feed_vec.size(): " << feed_vec.size()
+            << " tensor_num_of_one_pair: " << conf_.tensor_num_of_one_pair
+            << " tensor_pair_num: " << conf_.tensor_pair_num;
     uint32_t tensor_num_of_one_sample = 5;
     if (conf_.return_weight) {
       tensor_num_of_one_sample++;
@@ -4228,10 +4337,16 @@ void GraphDataGenerator::AllocResource(
     if (conf_.get_degree) {
       conf_.tensor_num_of_one_subgraph++; // degree_norm
     }
+    VLOG(0) << "conf_.tensor_num_of_one_sample: " << tensor_num_of_one_sample
+            << " conf_.sample.size(): " << conf_.samples.size()
+            << " conf_.tensor_num_of_one_subgraph: " << conf_.tensor_num_of_one_subgraph
+            << " conf_.accumulate_num: " << conf_.accumulate_num;
 
     if (conf_.accumulate_num == 1) {
       conf_.slot_num = (conf_.tensor_num_of_one_pair - 1 - conf_.tensor_num_of_one_subgraph) / 2;
       assert((1 + conf_.slot_num * 2 + conf_.tensor_num_of_one_subgraph) == conf_.tensor_num_of_one_pair);
+
+      VLOG(0) << "get conf_.slot_num: " << conf_.slot_num;
     } else {
       conf_.slot_num = (feed_vec.size() - 2 * conf_.tensor_num_of_one_subgraph - 6) / 2;
     }
@@ -4427,6 +4542,73 @@ void GraphDataGenerator::DumpWalkPath(std::string dump_path, size_t dump_rate) {
       VLOG(1) << "dump walk path" << ss << " failed";
     }
     write_count = fwrite_unlocked("\n", 1, 1, fp.get());
+  }
+  delete[] h_walk;
+#endif
+}
+
+void GraphDataGenerator::DumpSampleNeighbors(std::string dump_path) {
+#ifdef _LINUX
+  int err_no = 0;
+  int part_num = rand() % 100;  // set 100 part files
+  std::string part_path =
+      string::format_string("%s-%03d", dump_path.c_str(), part_num);
+  std::shared_ptr<FILE> fp = fs_open_append_write(part_path, &err_no, "");
+  for (int i = 0; i < sage_batch_num_; i++) {
+    int uniq_instance = uniq_instance_vec_[i];
+    uint64_t *h_id_tensor = new uint64_t[uniq_instance];
+    cudaMemcpy(h_id_tensor,
+               final_sage_nodes_vec_[i]->ptr(),
+               sizeof(uint64_t) * uniq_instance,
+               cudaMemcpyDeviceToHost);
+    std::string ss = "id:";
+    for (int xx = 0; xx < uniq_instance; xx++) {
+      ss += std::to_string(h_id_tensor[xx]) + ",";
+    }
+    ss += "\t";
+    int len_samples = conf_.samples.size();
+    std::vector<std::vector<int>> edges_split_num_for_graph =
+        edges_split_num_vec_[i];
+    std::vector<std::shared_ptr<phi::Allocation>> graph_edges =
+        graph_edges_vec_[i];
+    int graph_edges_index = 0;
+    for (int j = 0; j < len_samples; j++) {
+      ss += std::to_string(j) + ":[";
+      std::vector<int> edges_split_num = edges_split_num_for_graph[j];
+      int neighbor_len = edges_split_num[conf_.edge_to_id_len + 2];
+      int64_t *h_edge_src_tensor = new int64_t[neighbor_len];
+      int64_t *h_edge_dst_tensor = new int64_t[neighbor_len];
+      cudaMemcpy(h_edge_src_tensor,
+                 graph_edges[graph_edges_index++]->ptr(),
+                 sizeof(int64_t) * neighbor_len,
+                 cudaMemcpyDeviceToHost);
+      cudaMemcpy(h_edge_dst_tensor,
+                 graph_edges[graph_edges_index++]->ptr(),
+                 sizeof(int64_t) * neighbor_len,
+                 cudaMemcpyDeviceToHost);
+      ss += "src:";
+      for (int yy = 0; yy < neighbor_len; yy++) {
+        ss += std::to_string(h_edge_src_tensor[yy]) + ",";
+      }
+      ss += "\tdst:";
+      for (int yy = 0; yy < neighbor_len; yy++) {
+        ss += std::to_string(h_edge_dst_tensor[yy]) + ",";
+      }
+      ss += "\tsplit:";
+      for (int yy = 0; yy < conf_.edge_to_id_len; yy++) {
+        ss += std::to_string(edges_split_num[yy]) + ",";
+      }
+      ss += "]\t";
+
+      delete[] h_edge_src_tensor;
+      delete[] h_edge_dst_tensor;
+    }
+    size_t write_count = fwrite_unlocked(ss.data(), 1, ss.length(), fp.get());
+    if (write_count != ss.length()) {
+      VLOG(1) << "dump sample neighbors: " << ss << " failed!";
+    }
+    write_count = fwrite_unlocked("\n", 1, 1, fp.get());
+    delete[] h_id_tensor;
   }
 #endif
 }
