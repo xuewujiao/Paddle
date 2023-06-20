@@ -2057,7 +2057,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all(
                              stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
   std::stringstream ss;
-  ss << "h_keys_len: " << node_size_ << " ";
+  ss << "h_keys_len: " << node_size_ << " " << len << ":";
   for (int i = 0; i < node_size_; ++i) {
     ss << h_keys_len[i] << " ";
   }
@@ -2075,19 +2075,14 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all(
 
   size_t* h_local_part_sizes = sample_shard_res.h_local_part_sizes.data();
   size_t* h_local_part_offsets = sample_shard_res.h_local_part_offsets.data();
-  uint32_t* h_push_fea_sizes = sample_shard_res.h_push_fea_sizes.data();
   int all_shard_part_size = node_size_ * node_size_;
-  int rank_offset = rank_id_ * node_size_;
   h_local_part_offsets[0] = 0;
   for (int i = 0; i < node_size_; ++i) {
     h_local_part_sizes[i] = h_keys_len[rank_id_];
-    h_push_fea_sizes[rank_offset + i] = h_local_part_sizes[i];
     h_local_part_offsets[i + 1] =
         h_local_part_offsets[i] + h_local_part_sizes[i];
     VLOG(2) << "h_local_part_sizes " << i << " " << h_local_part_sizes[i]
-            << "  ;h_push_fea_sizes " << rank_offset + i << " "
-            << h_push_fea_sizes[rank_offset + i] << " ;h_local_part_offsets "
-            << h_local_part_offsets[i + 1];
+            << "  ;h_local_part_offsets " << h_local_part_offsets[i + 1];
   }
   CHECK_EQ(node_size_ * len, h_local_part_offsets[node_size_]);
 
@@ -2095,26 +2090,25 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all(
   size_t* h_remote_part_offsets = sample_shard_res.h_remote_part_offsets.data();
   h_remote_part_offsets[0] = 0;
   for (int i = 0; i < node_size_; i++) {
-    int offset = node_size_ * i + rank_id_;
     h_remote_part_sizes[i] = h_keys_len[i];
     h_remote_part_offsets[i + 1] =
         h_remote_part_offsets[i] + h_remote_part_sizes[i];
-    VLOG(2) << "h_push_fea_sizes " << offset << " " << h_push_fea_sizes[offset]
-            << "  ;h_remote_part_sizes " << i << " " << h_remote_part_sizes[i]
+    VLOG(2) << "  ;h_remote_part_sizes " << i << " " << h_remote_part_sizes[i]
             << " ;h_remote_part_offsets " << h_remote_part_offsets[i + 1];
   }
   CHECK_EQ(all_keys_len, h_remote_part_offsets[node_size_]);
+  CHECK_EQ(len, h_local_part_sizes[rank_id_]);
 
-  auto d_send_keys = memory::Alloc(
-      place,
-      h_local_part_sizes[rank_id_] * node_size_ * sizeof(uint64_t),
-      phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  auto d_send_keys =
+      memory::Alloc(place,
+                    len * node_size_ * sizeof(uint64_t),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   uint64_t* d_send_keys_mem = reinterpret_cast<uint64_t*>(d_send_keys->ptr());
   for (int i = 0; i < node_size_; i++) {
-    auto index = h_local_part_sizes[rank_id_] * i;
+    auto index = len * i;
     CUDA_CHECK(cudaMemcpyAsync(&d_send_keys_mem[index],
                                d_keys,
-                               h_local_part_sizes[rank_id_] * sizeof(uint64_t),
+                               len * sizeof(uint64_t),
                                cudaMemcpyDeviceToDevice,
                                stream));
   }
@@ -2157,15 +2151,14 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all(
              std::vector<robin_hood::unordered_set<uint64_t>>& total_keys,
              std::vector<uint64_t>& h_key,
              const size_t* h_remote_part_offsets,
+             int table_idx,
              int node_id) {
         for (int index = h_remote_part_offsets[node_id];
              index < h_remote_part_offsets[node_id + 1];
              index++) {
-          for (size_t i = 0; i < total_keys.size(); ++i) {
-            if (total_keys[i].find(h_key[index]) != total_keys[i].end()) {
-              keys_exist_in_this_node[index] = 1;
-              break;
-            }
+          if (total_keys[table_idx].find(h_key[index]) !=
+              total_keys[table_idx].end()) {
+            keys_exist_in_this_node[index] = 1;
           }
         }
       };
@@ -2176,12 +2169,24 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all(
                                   std::ref(total_keys),
                                   std::ref(h_recv_keys),
                                   h_remote_part_offsets,
+                                  table_idx,
                                   node_id));
   }
 
   for (std::thread& t : threads) {
     t.join();
   }
+
+  // std::stringstream ss1;
+  // ss1 << "keys_exist_in_this_node:" << len << " " << all_keys_len << ": ";
+  // for (int node_id = 0; node_id < node_size_; node_id++) {
+  //   for (int i = 0; i < all_keys_len/10000; ++i) {
+  //     int index = h_remote_part_offsets[node_id];
+  //     ss1 << keys_exist_in_this_node[index+i] << " ";
+  //   }
+  //   ss1 << ";\t";
+  // }
+  // VLOG(2) << ss1.str();
 
   auto d_keys_exist_in_this_node =
       memory::Alloc(place,
@@ -2194,14 +2199,60 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all(
                              all_keys_len * sizeof(uint32_t),
                              cudaMemcpyHostToDevice,
                              stream));
-  CUDA_CHECK(cudaStreamSynchronize(stream));
-  VLOG(0) << " cudaMemcpyAsync d_keys_exist_in_this_node_ptr END";
+
+  // thread_local std::shared_ptr<memory::Allocation> d_offset_tmp2 = nullptr;
+  // uint32_t *d_shard_index_tmp_ptr2 = AllocCache<uint32_t>(
+  //     &d_offset_tmp2, place, len * sizeof(int));
+  // heter_comm_kernel_->calc_node_shard_index(
+  //     d_keys, len, d_shard_index_tmp_ptr2, 8, node_size_, stream);
+  // std::vector<int> h_shard_index_tmp2(len, 0);
+  // CUDA_CHECK(cudaMemcpyAsync(h_shard_index_tmp2.data(),
+  //                             d_shard_index_tmp_ptr2,
+  //                             len * sizeof(uint32_t),
+  //                             cudaMemcpyDeviceToHost,
+  //                             stream));
+  // CUDA_CHECK(cudaStreamSynchronize(stream));
+  // for(int i = 0; i< len; ++i) {
+  //   int index = h_remote_part_offsets[rank_id_];
+  //   if (rank_id_ == 0) {
+  //     if (h_shard_index_tmp2[i] == keys_exist_in_this_node[index+i]) {
+
+  //       int res = 0;
+  //       for (size_t j = 0; j < total_keys.size(); ++j) {
+  //         if (total_keys[j].find(h_recv_keys[index+i]) !=
+  //         total_keys[j].end()) {
+  //           res = 1;
+  //         }
+  //       }
+  //       VLOG(0) << "wrong hard: " << rank_id_ << " " << len << " " <<
+  //       h_remote_part_offsets[node_size_]
+  //               << " :" << i << ":" << h_shard_index_tmp2[i]
+  //               << "," << keys_exist_in_this_node[index+i]
+  //               << " " << (h_recv_keys[index+i]/8)%2 << "|" << res;
+  //     }
+  //   } else {
+  //     if (h_shard_index_tmp2[i] != keys_exist_in_this_node[index+i]) {
+  //       int res = 0;
+  //       for (size_t j = 0; j < total_keys.size(); ++j) {
+  //         if (total_keys[j].find(h_recv_keys[index+i]) !=
+  //         total_keys[j].end()) {
+  //           res = 1;
+  //         }
+  //       }
+  //       VLOG(0) << "wrong hard: " << rank_id_ << " " << len << " " <<
+  //       h_remote_part_offsets[node_size_]
+  //               << " :" << i << ":" << h_shard_index_tmp2[i]
+  //               << "," << keys_exist_in_this_node[index+i]
+  //               << " " << (h_recv_keys[index+i]/8)%2 << "|" << res;
+  //     }
+  //   }
+  // }
 
   // 3. send & receive exist result
-  auto d_recv_key_exists = memory::Alloc(
-      place,
-      h_local_part_sizes[rank_id_] * node_size_ * sizeof(uint32_t),
-      phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  auto d_recv_key_exists =
+      memory::Alloc(place,
+                    len * node_size_ * sizeof(uint32_t),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   uint32_t* d_recv_key_exists_mem =
       reinterpret_cast<uint32_t*>(d_recv_key_exists->ptr());
   total_fea_num = send_data_by_all2all(
@@ -2216,6 +2267,25 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all(
       reinterpret_cast<const char*>(d_keys_exist_in_this_node_ptr),
       reinterpret_cast<char*>(d_recv_key_exists_mem),
       stream);
+  // CUDA_CHECK(cudaStreamSynchronize(stream));
+
+  // std::vector<uint32_t> h_recv_key_exists(len * node_size_, 0);
+  // CUDA_CHECK(cudaMemcpyAsync(h_recv_key_exists.data(),
+  //                            d_recv_key_exists_mem,
+  //                            len * node_size_ * sizeof(uint32_t),
+  //                            cudaMemcpyDeviceToHost,
+  //                            stream));
+  // CUDA_CHECK(cudaStreamSynchronize(stream));
+  // std::stringstream ss2;
+  // ss2 << "h_recv_key_exists:" << len << " " << all_keys_len << ": ";
+  // for (int node_id = 0; node_id < node_size_; node_id++) {
+  //   for (int i = 0; i < len/5000; ++i) {
+  //     ss2 << h_recv_key_exists[node_id*len+i] << " ";
+  //   }
+  //   ss2 << ";\t";
+  // }
+  // VLOG(2) << ss2.str();
+
   VLOG(2) << "sample_gather_inter_keys_by_all2all begin,total_fea_num:"
           << total_fea_num;
   auto pull_size = sample_gather_inter_keys_by_all2all(
@@ -2234,12 +2304,16 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all(
                                          weighted);
   VLOG(2) << "graph_neighbor_sample_v2 local finish"
           << ", gpu_id=" << gpu_id << ", pull_size=" << pull_size
-          << ", total_sample_size=" << result.total_sample_size;
+          << ", total_sample_size=" << result.total_sample_size
+          << ", loc.shard_res.key_in_this_node:"
+          << loc.shard_res.key_in_this_node;
 
   // init neighbor result
   NeighborSampleResult final;
   final.set_stream(stream);
   final.initialize(sample_size, len, gpu_id);
+  final.key_in_this_node_size = loc.shard_res.key_in_this_node;
+  final.all_key_size = loc.shard_res.all_key;
 
   // all2all mode finish, scatter sample values by all2all
   scatter_inter_vals_by_all2all_common(

@@ -105,16 +105,18 @@ __global__ void calc_node_shard_index_kernel(KeyType* d_keys,
   }
 }
 
-template <typename T>
+template <typename KeyType, typename T>
 __global__ void sample_calc_node_shard_index_kernel(
+    KeyType* d_keys,
     const uint32_t* d_keys_exist,
     const size_t len,
     T* shard_index,
     const int rank_id,
+    const int total_gpu,
     const int node_num) {
   const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
   if (i < len) {
-    int index = 0;
+    int index = -1;
     if (d_keys_exist[rank_id * len + i] == 1) {
       index = rank_id;
     } else {
@@ -123,6 +125,9 @@ __global__ void sample_calc_node_shard_index_kernel(
           index = k;
         }
       }
+    }
+    if (index == -1) {
+      index = (d_keys[i] / total_gpu) % node_num;
     }
     shard_index[i] = index;
   }
@@ -403,17 +408,19 @@ void HeterCommKernel::calc_node_shard_index(const KeyType* d_keys,
       d_keys, c_len, shard_index, total_devs, node_num);
 }
 
-template <typename T, typename StreamType>
-void HeterCommKernel::sample_calc_node_shard_index(const uint32_t* d_keys_exist,
+template <typename KeyType, typename T, typename StreamType>
+void HeterCommKernel::sample_calc_node_shard_index(const KeyType* d_keys,
+                                                   const uint32_t* d_keys_exist,
                                                    int64_t len,
                                                    T* shard_index,
                                                    const int& rank_id,
+                                                   const int& total_devs,
                                                    const int& node_num,
                                                    const StreamType& stream) {
   int grid_size = (len - 1) / block_size_ + 1;
   size_t c_len = static_cast<size_t>(len);
   sample_calc_node_shard_index_kernel<<<grid_size, block_size_, 0, stream>>>(
-      d_keys_exist, c_len, shard_index, rank_id, node_num);
+      d_keys, d_keys_exist, c_len, shard_index, rank_id, total_devs, node_num);
 }
 
 template <typename KeyType, typename T, typename StreamType>
@@ -1155,19 +1162,46 @@ HeterCommKernel::calc_node_shard_index<int64_t, uint32_t, cudaStream_t>(
     const cudaStream_t& stream);
 
 template void
-HeterCommKernel::sample_calc_node_shard_index<uint32_t, cudaStream_t>(
+HeterCommKernel::sample_calc_node_shard_index<int64_t, uint32_t, cudaStream_t>(
+    const int64_t* d_keys,
     const uint32_t* d_keys_exist,
     int64_t len,
     uint32_t* shard_index,
     const int& rank_id,
+    const int& total_devs,
     const int& node_num,
     const cudaStream_t& stream);
 
-template void HeterCommKernel::sample_calc_node_shard_index<int, cudaStream_t>(
+template void
+HeterCommKernel::sample_calc_node_shard_index<int64_t, int, cudaStream_t>(
+    const int64_t* d_keys,
     const uint32_t* d_keys_exist,
     int64_t len,
     int* shard_index,
     const int& rank_id,
+    const int& total_devs,
+    const int& node_num,
+    const cudaStream_t& stream);
+
+template void
+HeterCommKernel::sample_calc_node_shard_index<uint64_t, uint32_t, cudaStream_t>(
+    const uint64_t* d_keys,
+    const uint32_t* d_keys_exist,
+    int64_t len,
+    uint32_t* shard_index,
+    const int& rank_id,
+    const int& total_devs,
+    const int& node_num,
+    const cudaStream_t& stream);
+
+template void
+HeterCommKernel::sample_calc_node_shard_index<uint64_t, int, cudaStream_t>(
+    const uint64_t* d_keys,
+    const uint32_t* d_keys_exist,
+    int64_t len,
+    int* shard_index,
+    const int& rank_id,
+    const int& total_devs,
     const int& node_num,
     const cudaStream_t& stream);
 

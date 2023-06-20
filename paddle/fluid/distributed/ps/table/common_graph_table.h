@@ -764,6 +764,7 @@ class GraphTable : public Table {
   void build_graph_type_keys();
   void build_node_iter_type_keys();
   bool is_key_for_self_rank(const uint64_t &id);
+  int partition_for_rank(const uint64_t &id);
   void graph_partition(bool is_edge);
   void dbh_graph_edge_partition();
   void dbh_graph_feature_partition();
@@ -771,7 +772,7 @@ class GraphTable : public Table {
   void fennel_graph_edge_partition_bx();
   void fennel_graph_feature_partition();
   void hard_graph_edge_partition();
-  void hard_graph_feature_partition() {}
+  void hard_graph_feature_partition();
 
   std::vector<uint64_t> graph_total_keys_;
   std::vector<std::vector<uint64_t>> graph_type_keys_;

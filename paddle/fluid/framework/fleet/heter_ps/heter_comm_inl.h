@@ -3121,8 +3121,14 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::
   // 3. calculate index of keys
 
   VLOG(0) << "sample_calc_node_shard_index start";
-  heter_comm_kernel_->sample_calc_node_shard_index(
-      d_keys_exist, len, d_shard_index_tmp_ptr, rank_id_, shard_num, stream);
+  heter_comm_kernel_->sample_calc_node_shard_index(d_keys,
+                                                   d_keys_exist,
+                                                   len,
+                                                   d_shard_index_tmp_ptr,
+                                                   rank_id_,
+                                                   device_num_,
+                                                   shard_num,
+                                                   stream);
   VLOG(0) << "sample_calc_node_shard_index end";
   // int h_shard_index_tmp[len];
   // CUDA_CHECK(cudaMemcpyAsync(&h_shard_index_tmp,
@@ -3131,13 +3137,44 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::
   //                             cudaMemcpyDeviceToHost,
   //                             stream));
   // CUDA_CHECK(cudaStreamSynchronize(stream));
+  // auto& loc = storage_[gpu_id];
+  // auto& sample_shard_res = loc.sample_shard_res;
+  // size_t* h_remote_part_offsets =
+  // sample_shard_res.h_remote_part_offsets.data();
+
   // std::stringstream ss2;
-  // ss2 << "h_shard_index_tmp: " << len << " ";
-  // for(int i = 0; i< 10; ++i){
+  // ss2 << "h_shard_index_tmp: " << len << " " <<
+  // h_remote_part_offsets[node_size_] << " :"; for(int i = 0; i< 20; ++i){
   //   ss2 << h_shard_index_tmp[i] << " ";
   // }
-  // VLOG(0) << ss2.str();
-  // VLOG(0) << "sample partition shards keys sample_calc_node_shard_index end";
+  // VLOG(2) << ss2.str();
+  // VLOG(2) << "sample partition shards keys sample_calc_node_shard_index end";
+
+  // thread_local std::shared_ptr<memory::Allocation> d_offset_tmp2 = nullptr;
+  // uint32_t *d_shard_index_tmp_ptr2 = AllocCache<uint32_t>(
+  //     &d_offset_tmp2, place, len * sizeof(int));
+  // heter_comm_kernel_->calc_node_shard_index(
+  //     d_keys, len, d_shard_index_tmp_ptr2, device_num_, shard_num, stream);
+  // int h_shard_index_tmp2[len];
+  // CUDA_CHECK(cudaMemcpyAsync(&h_shard_index_tmp2,
+  //                             d_shard_index_tmp_ptr2,
+  //                             len * sizeof(uint32_t),
+  //                             cudaMemcpyDeviceToHost,
+  //                             stream));
+  // CUDA_CHECK(cudaStreamSynchronize(stream));
+  // std::stringstream ss3;
+  // ss3 << "h_shard_index_tmp2 hard: " << len << " " <<
+  // h_remote_part_offsets[node_size_] << " :"; for(int i = 0; i< 20; ++i) {
+  //   ss3 << h_shard_index_tmp2[i] << " ";
+  // }
+  // VLOG(2) << ss3.str();
+
+  // for(int i = 0; i< len; i++) {
+  //   if (h_shard_index_tmp2[i] != h_shard_index_tmp[i]) {
+  //     VLOG(0) << "!!!!  " << i << " not equal! " << h_shard_index_tmp[i] << "
+  //     " << h_shard_index_tmp2[i];
+  //   }
+  // }
 
   size_t temp_storage_bytes;
   const int num_bits = 1 + log2i(shard_num);
@@ -3401,6 +3438,10 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
         h_local_part_offsets[i] + h_local_part_sizes[i];
   }
   CHECK_EQ(fea_size, h_local_part_offsets[node_size_]);
+
+  // 统计
+  res.key_in_this_node += h_local_part_sizes[rank_id_];
+  res.all_key += fea_size;
 
   PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyAsync(&res.d_node_size_ptr[rank_offset],
                                              &h_push_fea_sizes[rank_offset],

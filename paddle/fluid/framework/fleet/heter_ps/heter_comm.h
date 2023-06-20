@@ -283,6 +283,8 @@ class HeterComm {
     std::vector<size_t> h_remote_part_offsets;
     uint32_t* d_node_size_ptr = nullptr;
     std::vector<uint32_t> h_push_fea_sizes;
+    size_t key_in_this_node = 0;
+    size_t all_key = 0;
     // shard part
     void resize_part_size(const int node_size) {
       if (h_local_part_sizes.size() >= static_cast<size_t>(node_size)) {
