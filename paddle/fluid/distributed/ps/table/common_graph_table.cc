@@ -1620,7 +1620,7 @@ void GraphTable::fennel_graph_edge_partition() {
           ++cnt;
         }
       }
-//      shard.erase(key);
+      shard.erase(key);
     }
     if (cnt - start_print > 10000000) {
       for (int i = 0; i < node_num_; i++) {
@@ -1641,8 +1641,28 @@ void GraphTable::filter_graph_edge_nodes() {
   // 过滤不属于自己边表信息
   std::vector<std::future<std::pair<size_t, size_t>>> shard_tasks;
   std::vector<size_t> total_edge_count(shard_num_per_server, 0);
-  std::vector<size_t> other_edge_count(shard_num_per_server, 0);
   std::vector<size_t> edge_before_count(edge_shards.size(), 0);
+
+  std::vector<std::vector<size_t>> rank_edge_count;
+  std::vector<std::vector<size_t>> cross_edge_count;
+  rank_edge_count.resize(node_num_);
+  cross_edge_count.resize(node_num_);
+  for (int i = 0; i < node_num_; ++i) {
+    rank_edge_count[i].resize(shard_num_per_server, 0);
+    cross_edge_count[i].resize(shard_num_per_server, 0);
+  }
+  // 获取边是否跨机统计
+  auto get_cross_edge_count = [this](const int &rank_id, Node *node) {
+    size_t cnt = 0;
+    for (size_t i = 0; i < node->get_neighbor_size(); ++i) {
+      uint64_t nid = node->get_neighbor_id(i);
+      if (egde_node_rank_.find(nid) != rank_id) {
+        ++cnt;
+      }
+    }
+    return cnt;
+  };
+
   for (size_t idx = 0; idx < edge_shards.size(); ++idx) {
     for (size_t part_id = 0; part_id < shard_num_per_server; ++part_id) {
       edge_before_count[idx] += edge_shards[idx][part_id]->get_size();
@@ -1650,7 +1670,8 @@ void GraphTable::filter_graph_edge_nodes() {
     for (size_t part_id = 0; part_id < shard_num_per_server; ++part_id) {
       shard_tasks.push_back(
           load_node_edge_task_pool->enqueue(
-              [this, part_id, idx, &total_edge_count, &other_edge_count]() -> std::pair<size_t, size_t> {
+              [this, part_id, idx, &total_edge_count,
+               &rank_edge_count, &cross_edge_count, get_cross_edge_count]() -> std::pair<size_t, size_t> {
         size_t total_cnt = 0;
         size_t remove_cnt = 0;
 
@@ -1658,26 +1679,23 @@ void GraphTable::filter_graph_edge_nodes() {
         auto &nodes = shard->get_bucket();
         std::vector<uint64_t> remove_ids;
         for (auto &node : nodes) {
+          total_edge_count[part_id] += node->get_neighbor_size();
           auto nid = node->get_id();
           // 节点插入到对应的机器shard中
-          if (egde_node_rank_.find(nid) != node_id_) {
+          int rank = egde_node_rank_.find(nid);
+          if (rank != node_id_) {
             remove_ids.push_back(nid);
             ++remove_cnt;
           }
+          // 统计各节点边分布情况
+          cross_edge_count[rank][part_id] += get_cross_edge_count(rank, node);
+          rank_edge_count[rank][part_id] += node->get_neighbor_size();
+
           ++total_cnt;
         }
         // delete
         for (auto &id : remove_ids) {
           shard->delete_node(id);
-        }
-        for (auto &node : shard->get_bucket()) {
-          total_edge_count[part_id] += node->get_neighbor_size();
-          for (size_t i = 0; i < node->get_neighbor_size(); ++i) {
-            uint64_t nid = node->get_neighbor_id(i);
-            if (egde_node_rank_.find(nid) != node_id_) {
-              ++other_edge_count[part_id];
-            }
-          }
         }
         return {total_cnt, remove_cnt};
       }));
@@ -1690,23 +1708,34 @@ void GraphTable::filter_graph_edge_nodes() {
     all_node_size += res.first;
     all_cut_size += res.second;
   }
+  // 分类型打印边的分布情况
   for (size_t idx = 0; idx < edge_shards.size(); ++idx) {
     size_t total = 0;
     for (size_t part_id = 0; part_id < shard_num_per_server; ++part_id) {
       total += edge_shards[idx][part_id]->get_size();
     }
-    VLOG(0) << "edge idx=" << idx << ", total edge nodes="
-        << edge_before_count[idx] << ", filter left edge nodes count=" << total;
+    VLOG(0) << "filter edge idx=" << idx << ", total edge nodes="
+        << edge_before_count[idx] << ", left edge nodes count=" << total;
   }
+  // 统计所有边以及跨节点情况
   size_t total_edge_cnt = 0;
-  size_t other_edge_cnt = 0;
+  std::vector<size_t> rank_edge_cnt(node_num_, 0);
+  std::vector<size_t> cross_edge_cnt(node_num_, 0);
   for (size_t part_id = 0; part_id < shard_num_per_server; ++part_id) {
     total_edge_cnt += total_edge_count[part_id];
-    other_edge_cnt += other_edge_count[part_id];
+    for (int rank = 0; rank < node_num_; ++rank) {
+      rank_edge_cnt[rank] += rank_edge_count[rank][part_id];
+      cross_edge_cnt[rank] += cross_edge_count[rank][part_id];
+    }
   }
-  VLOG(0) << "total edge count: " << total_edge_cnt << ", other edge: " << other_edge_cnt
-          << ", node size: " << all_node_size << ", cut size: "
-          << all_cut_size << ", end filter edge";
+  VLOG(0) << "total edge count: " << total_edge_cnt;
+  for (int rank = 0; rank < node_num_; ++rank) {
+    VLOG(0) << "rank=" << rank << ", edge count: "
+        << rank_edge_cnt[rank] << ", cross count: " << cross_edge_cnt[rank]
+        << ", cross rate: " << double(cross_edge_cnt[rank]) / double(rank_edge_cnt[rank]);
+  }
+  VLOG(0) << "total edge start node size: " << all_node_size
+      << ", cut start node size: " << all_cut_size << ", end filter edge";
 }
 void GraphTable::fennel_graph_feature_partition() {
   VLOG(0) << "start to process fennel feature shard";
