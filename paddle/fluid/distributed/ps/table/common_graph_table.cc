@@ -42,16 +42,19 @@ DECLARE_bool(graph_metapath_split_opt);
 PADDLE_DEFINE_EXPORTED_bool(graph_edges_split_only_by_src_id,
                             false,
                             "multi-node split edges only by src id");
-PADDLE_DEFINE_EXPORTED_bool(graph_edges_hard_split_debug,
-                            false,
-                            "graph split hard split by debug");
 PADDLE_DEFINE_EXPORTED_string(
     graph_edges_split_mode,
     "hard",
     "graph split split, optional: [dbh,hard,none], default:hard");
-PADDLE_DEFINE_EXPORTED_bool(graph_edges_fennel_split_debug,
+PADDLE_DEFINE_EXPORTED_bool(graph_edges_split_debug,
                             false,
-                            "graph split fennel split by debug");
+                            "graph split by debug");
+PADDLE_DEFINE_EXPORTED_int32(graph_edges_debug_node_id,
+                            0,
+                            "graph debug node id");
+PADDLE_DEFINE_EXPORTED_int32(graph_edges_debug_node_num,
+                            2,
+                            "graph debug node num");
 
 namespace paddle {
 namespace distributed {
@@ -2052,13 +2055,10 @@ int32_t GraphTable::get_nodes_ids_by_ranges(
 }
 bool GraphTable::is_key_for_self_rank(const uint64_t &id) {
 #if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
-  if (node_num_ == 1) {
-    if (FLAGS_graph_edges_hard_split_debug) {
-      return (((id / 8) % 2) == 0);
-    }
-    return true;
-  }
   thread_local auto ps_wrapper = paddle::framework::PSGPUWrapper::GetInstance();
+  if (FLAGS_graph_edges_split_debug && ps_wrapper->GetRankNum() == 1) {
+    return (static_cast<int>((id / 8) % node_num_) == node_id_);
+  }
   return ps_wrapper->IsKeyForSelfRank(id);
 #else
   return true;
@@ -3181,11 +3181,12 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
 
 #if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
   auto ps_wrapper = paddle::framework::PSGPUWrapper::GetInstance();
-  node_num_ = ps_wrapper->GetRankNum();
-  if (FLAGS_graph_edges_fennel_split_debug && node_num_ == 1) {
-    node_num_ = 2;
-  }
   node_id_ = ps_wrapper->GetRankId();
+  node_num_ = ps_wrapper->GetRankNum();
+  if (FLAGS_graph_edges_split_debug && node_num_ == 1) {
+    node_num_ = FLAGS_graph_edges_debug_node_num;
+    node_id_ = FLAGS_graph_edges_debug_node_id;
+  }
 #endif
 
   VLOG(0) << "got " << edge_types.size()
