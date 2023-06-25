@@ -633,6 +633,8 @@ class GraphTable : public Table {
   int32_t get_server_index_by_id(uint64_t id);
   Node *find_node(GraphTableType table_type, int idx, uint64_t id);
   Node *find_node(GraphTableType table_type, uint64_t id);
+  // query all ids rank
+  void query_all_ids_rank(const size_t &total, const uint64_t *ids, int *ranks);
 
   virtual int32_t Pull(TableContext &context) { return 0; }  // NOLINT
   virtual int32_t Push(TableContext &context) { return 0; }  // NOLINT
@@ -749,6 +751,7 @@ class GraphTable : public Table {
   void build_graph_type_keys();
   void build_node_iter_type_keys();
   bool is_key_for_self_rank(const uint64_t &id);
+  int  partition_key_for_rank(const uint64_t &key);
   void graph_partition(bool is_edge);
   void dbh_graph_edge_partition();
   void dbh_graph_feature_partition();
@@ -756,6 +759,7 @@ class GraphTable : public Table {
   void filter_graph_edge_nodes();
   void fennel_graph_feature_partition();
   void fix_feature_node_shards(bool load_slot);
+  void stat_graph_edge_info(int type);
 
   std::vector<uint64_t> graph_total_keys_;
   std::vector<std::vector<uint64_t>> graph_type_keys_;
@@ -768,7 +772,7 @@ class GraphTable : public Table {
       node_shards;
   size_t shard_start, shard_end, server_num, shard_num_per_server, shard_num;
   int task_pool_size_ = 64;
-  int load_thread_num = 160;
+  int load_thread_num_ = 160;
   std::vector<std::vector<std::vector<uint64_t>>> edge_shards_keys_;
 
   const int random_sample_nodes_ranges = 3;

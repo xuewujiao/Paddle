@@ -1246,6 +1246,9 @@ void GraphTable::graph_partition(bool is_edge) {
     VLOG(0) << "Graph partitioning DBH Done";
   } else if (mode == "hard" || mode == "HARD") {
     VLOG(0) << "Graph partitioning Hard Hash Split";
+    if (is_edge) {
+      stat_graph_edge_info(0);
+    }
   } else if (strncasecmp(mode.c_str(), "fennel", 6) == 0) {
     if (is_edge) {
       fennel_graph_edge_partition();
@@ -1428,6 +1431,33 @@ void GraphTable::dbh_graph_feature_partition() {
     VLOG(0) << "end to process dbh feature shard";
   }
 }
+// query all ids rank
+void GraphTable::query_all_ids_rank(const size_t &total, const uint64_t *ids, int *ranks) {
+  std::vector<std::future<size_t>> wait_tasks;
+  size_t step = static_cast<size_t>((total + load_thread_num_ - 1) / load_thread_num_);
+  for (size_t start = 0; start < total; start = start + step) {
+    size_t end = (start + step > total) ? total : (start + step);
+    wait_tasks.push_back(
+        load_node_edge_task_pool->enqueue([this, &ids, &ranks, start, end]() {
+      size_t cnt = 0;
+      for (size_t k = start; k < end; ++k) {
+        int rank = egde_node_rank_.find(ids[k]);
+        if (rank < 0) {
+          rank = partition_key_for_rank(ids[k]);
+          ++cnt;
+        }
+        ranks[k] = rank;
+      }
+      return cnt;
+    }));
+  }
+  // all
+  size_t hash_count = 0;
+  for (auto &t : wait_tasks) {
+    hash_count += t.get();
+  }
+  VLOG(0) << "query total keys=" << total << ", hash count=" << hash_count;
+}
 void GraphTable::fennel_graph_edge_partition() {
   VLOG(0) << "start to process fennel2 egde shard";
   std::vector<std::future<size_t>> wait_tasks;
@@ -1473,47 +1503,57 @@ void GraphTable::fennel_graph_edge_partition() {
     egde_node_rank_.rehash(part_id, neighbor_nodes[part_id].size());
   }
   // 获取与邻居的边交集数量
-  auto get_inter_cost = [this, &neighbor_nodes] (const uint64_t &key, std::vector<int> *inter_cost) {
-    auto &shard = neighbor_nodes[key % shard_num_per_server];
-    auto it = shard.find(key);
-    CHECK(it != shard.end());
-    for (auto &node : it->second) {
-      if (node->get_id() != key) {
-        continue;
-      }
+  auto get_inter_cost = [this, &neighbor_nodes] (
+      const uint64_t &key, const std::vector<Node*> &nodes, std::vector<int> *inter_cost) {
+    bool find = false;
+    for (auto &node : nodes) {
       for (size_t n_i = 0; n_i < node->get_neighbor_size(); ++n_i) {
         uint64_t d_id = node->get_neighbor_id(n_i);
         int rank = egde_node_rank_.find(d_id);
         if (rank >= 0) {
           ++(*inter_cost)[rank];
+          find = true;
         }
       }
     }
+    return find;
   };
   // 根据score计算当前所属机器
-  auto get_rank_by_score = [this, gamma, alpha, &load_limit, get_inter_cost] (const uint64_t &key)->int {
-    std::vector<int> inter_cost(node_num_, 0);
-    get_inter_cost(key, &inter_cost);
+  auto get_rank_by_score = [this, gamma, alpha, &load_limit, &neighbor_nodes, get_inter_cost] (const uint64_t &key)->int {
+    thread_local std::vector<int> inter_cost(node_num_, 0);
+    auto &shard = neighbor_nodes[key % shard_num_per_server];
+    auto it = shard.find(key);
+    if (it == shard.end()) {
+      VLOG(0) << "get rank by score not found key=" << key;
+      return -1;
+    }
+    if (!get_inter_cost(key, it->second, &inter_cost)) {
+      return -1;
+    }
     int index = -1;
-    double max_score = INT_MIN;
+//    double max_score = INT_MIN;
+    int max_score = INT_MIN;
     for (int i = 0; i < node_num_; ++i) {
       // 计算最大score所在的机器
-      double score = 0.0;
-      if (egde_node_rank_.nodes_num(i) < load_limit) {
-        score = inter_cost[i] - alpha * gamma * pow(egde_node_rank_.nodes_num(i), gamma - 1);
-      } else {
-        score = - alpha * gamma * pow(egde_node_rank_.nodes_num(i), gamma - 1);
-      }
+//      double score = 0.0;
+//      if (egde_node_rank_.nodes_num(i) < load_limit) {
+//        score = inter_cost[i] - alpha * gamma * pow(egde_node_rank_.nodes_num(i), gamma - 1);
+//      } else {
+//        score = - alpha * gamma * pow(egde_node_rank_.nodes_num(i), gamma - 1);
+//      }
+      auto &score = inter_cost[i];
       if (score > max_score) {
         max_score = score;
         index = i;
       }
       inter_cost[i] = 0;
     }
+    CHECK(max_score > 0);
     return index;
   };
   // 查找关系最远点作为起点
-  auto find_farthest_start_node = [this, &neighbor_nodes, get_inter_cost](const int &rank_id) -> uint64_t {
+  auto find_farthest_start_node = [this, &neighbor_nodes, get_inter_cost](
+      const int &rank_id, const int &max_step) -> uint64_t {
     uint64_t key = 0xffffffffffffffffL;
     int min_inter_cost = INT_MAX;
     int step = 0;
@@ -1527,7 +1567,7 @@ void GraphTable::fennel_graph_edge_partition() {
         if (egde_node_rank_.find(it->first) >= 0) {
           continue;
         }
-        get_inter_cost(it->first, &inter_cost);
+        get_inter_cost(it->first, it->second, &inter_cost);
         for (int k = 0; k < node_num_; ++k) {
           if (k == rank_id) {
             inter_cost[k] = 0;
@@ -1540,8 +1580,11 @@ void GraphTable::fennel_graph_edge_partition() {
           inter_cost[k] = 0;
         }
         ++step;
+        if (step >= max_step) {
+          break;
+        }
       }
-      if (step >= 10) {
+      if (step >= max_step) {
         break;
       }
     }
@@ -1566,11 +1609,42 @@ void GraphTable::fennel_graph_edge_partition() {
     }
     return cnt;
   };
+  // 添加所有邻居入队列
+  auto add_neighbor_to_queue = [this, &neighbor_nodes](
+      const uint64_t &key, std::deque<uint64_t> *queue, robin_hood::unordered_set<uint64_t> *unique) {
+    auto &shard = neighbor_nodes[key % shard_num_per_server];
+    if (shard.empty()) {
+      return;
+    }
+    auto it = shard.find(key);
+    if (it == shard.end()) {
+      return;
+    }
+    for (auto &node : it->second) {
+      for (size_t n_i = 0; n_i < node->get_neighbor_size(); ++n_i) {
+        uint64_t d_id = node->get_neighbor_id(n_i);
+        int rank = egde_node_rank_.find(d_id);
+        if (rank >= 0) {
+          continue;
+        }
+        if (unique->find(d_id) != unique->end()) {
+          continue;
+        }
+        unique->insert(d_id);
+        queue->push_back(d_id);
+      }
+    }
+    shard.erase(key);
+  };
 
+  robin_hood::unordered_set<uint64_t> keys_unique;
+  keys_unique.rehash(total_node);
   std::deque<uint64_t> node_queue[node_num_];
   size_t cnt = 0;
   size_t start_print = 0;
   size_t max_node = 0;
+  int max_step = 10;
+  std::vector<size_t> rank_nums(node_num_, 0);
   while (cnt < total_node) {
     int need_proc_node = node_num_;
     for (int rank_id = 0; rank_id < node_num_; ++rank_id) {
@@ -1590,11 +1664,17 @@ void GraphTable::fennel_graph_edge_partition() {
         if (need_proc_node == 1) {
           cnt += add_all_left_node(rank_id);
         } else {
-          uint64_t key = find_farthest_start_node(rank_id);
-          VLOG(0) << "rank id=" << rank_id << ", add first node key=" << key;
+          uint64_t key = find_farthest_start_node(rank_id, max_step);
+          if (max_step == 10 || max_step == 9) {
+            VLOG(0) << "rank id=" << rank_id << ", add first node key=" << key;
+          }
+          if (max_step > 0) {
+            --max_step;
+          }
+          ++rank_nums[rank_id];
           egde_node_rank_.insert(key, rank_id);
-          queue.push_back(key);
           ++cnt;
+          add_neighbor_to_queue(key, &queue, &keys_unique);
         }
         continue;
       }
@@ -1602,32 +1682,19 @@ void GraphTable::fennel_graph_edge_partition() {
       uint64_t key = queue.front();
       queue.pop_front();
 
-      auto &shard = neighbor_nodes[key % shard_num_per_server];
-      if (shard.empty()) {
-        continue;
+      int rank = get_rank_by_score(key);
+      if (rank >= 0) {
+        egde_node_rank_.insert(key, rank);
+        ++cnt;
+        add_neighbor_to_queue(key, &node_queue[rank], &keys_unique);
       }
-      auto it = shard.find(key);
-      if (it == shard.end()) {
-        continue;
-      }
-      for (auto &node : it->second) {
-        for (size_t n_i = 0; n_i < node->get_neighbor_size(); ++n_i) {
-          uint64_t d_id = node->get_neighbor_id(n_i);
-          int rank = egde_node_rank_.find(d_id);
-          if (rank >= 0) {
-            continue;
-          }
-          rank = get_rank_by_score(d_id);
-          egde_node_rank_.insert(d_id, rank);
-          node_queue[rank].push_back(d_id);
-          ++cnt;
-        }
-      }
-      shard.erase(key);
     }
     if (cnt - start_print > 10000000) {
       for (int i = 0; i < node_num_; i++) {
-        VLOG(0) << "current total nodes count=" << cnt << ", egde_node_ids[" << i << "] :" << egde_node_rank_.nodes_num(i);
+        VLOG(0) << "current total nodes count=" << cnt
+            << ", egde_node_ids[" << i << "] :" << egde_node_rank_.nodes_num(i)
+            << ", queue size: " << node_queue[i].size()
+            << ", first size: " << rank_nums[i];
       }
       start_print = cnt;
     }
@@ -1786,6 +1853,63 @@ void GraphTable::fennel_graph_feature_partition() {
   VLOG(0) << "total count=" << total
       << ", delete count=" << del_cnt
       << ", end to process fennel feature shard";
+}
+void GraphTable::stat_graph_edge_info(int type) {
+  std::vector<std::future<std::pair<size_t, size_t>>> shard_tasks;
+  // 获取边是否跨机统计
+  std::function<size_t(Node*)> get_cross_edge_count = nullptr;
+  if (type == 1) {
+    // 贪心
+    get_cross_edge_count = [this](Node *node) {
+      size_t cnt = 0;
+      for (size_t i = 0; i < node->get_neighbor_size(); ++i) {
+        uint64_t nid = node->get_neighbor_id(i);
+        if (egde_node_rank_.find(nid) != node_id_) {
+          ++cnt;
+        }
+      }
+      return cnt;
+    };
+  } else {
+    // 硬拆
+    get_cross_edge_count = [this](Node *node) {
+      size_t cnt = 0;
+      for (size_t i = 0; i < node->get_neighbor_size(); ++i) {
+        uint64_t nid = node->get_neighbor_id(i);
+        if (is_key_for_self_rank(nid)) {
+          ++cnt;
+        }
+      }
+      return cnt;
+    };
+  }
+  for (size_t idx = 0; idx < edge_shards.size(); ++idx) {
+    for (size_t part_id = 0; part_id < shard_num_per_server; ++part_id) {
+      shard_tasks.push_back(
+          load_node_edge_task_pool->enqueue(
+              [this, part_id, idx, get_cross_edge_count]() -> std::pair<size_t, size_t> {
+        size_t total_cnt = 0;
+        size_t cross_cnt = 0;
+        auto &nodes = edge_shards[idx][part_id]->get_bucket();
+        for (auto &node : nodes) {
+          // 统计各节点边分布情况
+          total_cnt += node->get_neighbor_size();
+          cross_cnt += get_cross_edge_count(node);
+        }
+        return {total_cnt, cross_cnt};
+      }));
+    }
+  }
+  size_t all_node_size = 0;
+  size_t all_cross_size = 0;
+  for (auto &t : shard_tasks) {
+    auto res = t.get();
+    all_node_size += res.first;
+    all_cross_size += res.second;
+  }
+  VLOG(0) << "rank=" << node_id_ << ", edge count: "
+      << all_node_size << ", cross count: " << all_cross_size
+      << ", cross rate: " << double(all_cross_size) / double(all_node_size);
 }
 int32_t GraphTable::parse_node_and_load(std::string ntype2files,
                                         std::string graph_data_local_path,
@@ -2062,6 +2186,17 @@ bool GraphTable::is_key_for_self_rank(const uint64_t &id) {
   return ps_wrapper->IsKeyForSelfRank(id);
 #else
   return true;
+#endif
+}
+int GraphTable::partition_key_for_rank(const uint64_t &key) {
+#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
+  thread_local auto ps_wrapper = paddle::framework::PSGPUWrapper::GetInstance();
+  if (FLAGS_graph_edges_split_debug && ps_wrapper->GetRankNum() == 1) {
+    return static_cast<int>((key / 8) % node_num_);
+  }
+  return ps_wrapper->PartitionKeyForRank(key);
+#else
+  return 0;
 #endif
 }
 std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
@@ -3173,7 +3308,7 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
     _shards_task_pool[i].reset(new ::ThreadPool(1));
     _shards_task_rng_pool.push_back(paddle::framework::GetCPURandomEngine(0));
   }
-  load_node_edge_task_pool.reset(new ::ThreadPool(load_thread_num));
+  load_node_edge_task_pool.reset(new ::ThreadPool(load_thread_num_));
 
   auto graph_feature = graph.graph_feature();
   auto node_types = graph.node_types();
