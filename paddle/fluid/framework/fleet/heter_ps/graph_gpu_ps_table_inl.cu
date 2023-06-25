@@ -3061,10 +3061,10 @@ std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree_all2all(
   VLOG(2) << "gather_inter_keys_by_all2all sage get_degree finish, pull_size=" << pull_size << ", len=" << len;
 
   // do single-node multi-card get_node_degree
-  auto result = get_node_degree(gpu_id,
-                                edge_idx,
-                                loc.d_merged_keys,
-                                pull_size);
+  auto result = get_node_degree_single(gpu_id,
+                                       edge_idx,
+                                       loc.d_merged_keys,
+                                       pull_size);
 
   auto node_degree =
       memory::AllocShared(place,
