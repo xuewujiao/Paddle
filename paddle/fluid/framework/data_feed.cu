@@ -3670,8 +3670,6 @@ void GraphDataGenerator::DoSageForTrain() {
             tensor_pair_idx < conf_.tensor_pair_num && is_sage_pass_continue;
             ++tensor_pair_idx) {
       while (ins_buf_pair_len_[tensor_pair_idx] < conf_.batch_size) {
-        // VLOG(0) << "gpuid: " << conf_.gpuid
-        //        << " Begin FillInsBuf";
         int32_t *pair_label_buf = NULL;
         if (conf_.enable_pair_label) {
           pair_label_buf =
@@ -4342,10 +4340,10 @@ void GraphDataGenerator::AllocResource(
   if (!conf_.sage_mode) {
     conf_.slot_num = (feed_vec.size() - id_offset_of_feed_vec_) / 2;
   } else {
-    VLOG(0) << "feed_vec.size(): " << feed_vec.size();
+    VLOG(1) << "feed_vec.size(): " << feed_vec.size();
     conf_.tensor_num_of_one_pair = (feed_vec.size() - 2) / conf_.tensor_pair_num;  // 2 means show and clk
     assert((conf_.tensor_num_of_one_pair * conf_.tensor_pair_num + 2) == feed_vec.size());
-    VLOG(0) << "feed_vec.size(): " << feed_vec.size()
+    VLOG(1) << "feed_vec.size(): " << feed_vec.size()
             << " tensor_num_of_one_pair: " << conf_.tensor_num_of_one_pair
             << " tensor_pair_num: " << conf_.tensor_pair_num;
     uint32_t tensor_num_of_one_sample = 5;
@@ -4358,7 +4356,7 @@ void GraphDataGenerator::AllocResource(
     if (conf_.get_degree) {
       conf_.tensor_num_of_one_subgraph++; // degree_norm
     }
-    VLOG(0) << "conf_.tensor_num_of_one_sample: " << tensor_num_of_one_sample
+    VLOG(1) << "conf_.tensor_num_of_one_sample: " << tensor_num_of_one_sample
             << " conf_.sample.size(): " << conf_.samples.size()
             << " conf_.tensor_num_of_one_subgraph: " << conf_.tensor_num_of_one_subgraph
             << " conf_.accumulate_num: " << conf_.accumulate_num;
@@ -4367,7 +4365,7 @@ void GraphDataGenerator::AllocResource(
       conf_.slot_num = (conf_.tensor_num_of_one_pair - 1 - conf_.tensor_num_of_one_subgraph) / 2;
       assert((1 + conf_.slot_num * 2 + conf_.tensor_num_of_one_subgraph) == conf_.tensor_num_of_one_pair);
 
-      VLOG(0) << "get conf_.slot_num: " << conf_.slot_num;
+      VLOG(1) << "get conf_.slot_num: " << conf_.slot_num;
     } else {
       conf_.slot_num = (feed_vec.size() - 2 * conf_.tensor_num_of_one_subgraph - 6) / 2;
     }
