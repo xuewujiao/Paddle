@@ -38,17 +38,24 @@ DECLARE_bool(graph_get_neighbor_id);
 DECLARE_int32(gpugraph_storage_mode);
 DECLARE_uint64(gpugraph_slot_feasign_max_num);
 DECLARE_bool(graph_metapath_split_opt);
+DECLARE_double(graph_neighbor_size_percent);
 
 PADDLE_DEFINE_EXPORTED_bool(graph_edges_split_only_by_src_id,
                             false,
                             "multi-node split edges only by src id");
-PADDLE_DEFINE_EXPORTED_bool(graph_edges_hard_split_debug,
-                            false,
-                            "graph split hard split by debug");
 PADDLE_DEFINE_EXPORTED_string(
     graph_edges_split_mode,
     "hard",
     "graph split split, optional: [dbh,hard,none], default:hard");
+PADDLE_DEFINE_EXPORTED_bool(graph_edges_split_debug,
+                            false,
+                            "graph split by debug");
+PADDLE_DEFINE_EXPORTED_int32(graph_edges_debug_node_id,
+                            0,
+                            "graph debug node id");
+PADDLE_DEFINE_EXPORTED_int32(graph_edges_debug_node_num,
+                            2,
+                            "graph debug node num");
 
 namespace paddle {
 namespace distributed {
@@ -927,285 +934,6 @@ int32_t GraphTable::make_complementary_graph(int idx, int64_t byte_size) {
 }
 #endif
 
-/*
-int CompleteGraphSampler::run_graph_sampling() {
-  pthread_rwlock_t *rw_lock = graph_table->rw_lock.get();
-  pthread_rwlock_rdlock(rw_lock);
-  std::cout << "in graph sampling" << std::endl;
-  sample_nodes.clear();
-  sample_neighbors.clear();
-  sample_res.clear();
-  sample_nodes.resize(gpu_num);
-  sample_neighbors.resize(gpu_num);
-  sample_res.resize(gpu_num);
-  std::vector<std::vector<std::vector<paddle::framework::GpuPsGraphNode>>>
-      sample_nodes_ex(graph_table->task_pool_size_);
-  std::vector<std::vector<std::vector<int64_t>>> sample_neighbors_ex(
-      graph_table->task_pool_size_);
-  for (int i = 0; i < graph_table->task_pool_size_; i++) {
-    sample_nodes_ex[i].resize(gpu_num);
-    sample_neighbors_ex[i].resize(gpu_num);
-  }
-  std::vector<std::future<int>> tasks;
-  for (size_t i = 0; i < graph_table->shards.size(); ++i) {
-    tasks.push_back(
-        graph_table->_shards_task_pool[i % graph_table->task_pool_size_]
-            ->enqueue([&, i, this]() -> int {
-              if (this->status == GraphSamplerStatus::terminating) return 0;
-              paddle::framework::GpuPsGraphNode node;
-              std::vector<Node *> &v =
-                  this->graph_table->shards[i]->get_bucket();
-              size_t ind = i % this->graph_table->task_pool_size_;
-              for (size_t j = 0; j < v.size(); j++) {
-                size_t location = v[j]->get_id() % this->gpu_num;
-                node.node_id = v[j]->get_id();
-                node.neighbor_size = v[j]->get_neighbor_size();
-                node.neighbor_offset =
-                    static_cast<int>sample_neighbors_ex[ind][location].size();
-                sample_nodes_ex[ind][location].emplace_back(node);
-                for (int k = 0; k < node.neighbor_size; k++)
-                  sample_neighbors_ex[ind][location].push_back(
-                      v[j]->get_neighbor_id(k));
-              }
-              return 0;
-            }));
-  }
-  for (size_t i = 0; i < tasks.size(); i++) tasks[i].get();
-  tasks.clear();
-  for (int i = 0; i < gpu_num; i++) {
-    tasks.push_back(
-        graph_table->_shards_task_pool[i % graph_table->task_pool_size_]
-            ->enqueue([&, i, this]() -> int {
-              if (this->status == GraphSamplerStatus::terminating) return 0;
-              int total_offset = 0;
-              size_t ind = i % this->graph_table->task_pool_size_;
-              for (int j = 0; j < this->graph_table->task_pool_size_; j++) {
-                for (size_t k = 0; k < sample_nodes_ex[j][ind].size(); k++) {
-                  sample_nodes[ind].push_back(sample_nodes_ex[j][ind][k]);
-                  sample_nodes[ind].back().neighbor_offset += total_offset;
-                }
-                size_t neighbor_size = sample_neighbors_ex[j][ind].size();
-                total_offset += neighbor_size;
-                for (size_t k = 0; k < neighbor_size; k++) {
-                  sample_neighbors[ind].push_back(
-                      sample_neighbors_ex[j][ind][k]);
-                }
-              }
-              return 0;
-            }));
-  }
-  for (size_t i = 0; i < tasks.size(); i++) tasks[i].get();
-
-  if (this->status == GraphSamplerStatus::terminating) {
-    pthread_rwlock_unlock(rw_lock);
-    return 0;
-  }
-  for (int i = 0; i < gpu_num; i++) {
-    sample_res[i].node_list = sample_nodes[i].data();
-    sample_res[i].neighbor_list = sample_neighbors[i].data();
-    sample_res[i].node_size = sample_nodes[i].size();
-    sample_res[i].neighbor_size = sample_neighbors[i].size();
-  }
-  pthread_rwlock_unlock(rw_lock);
-  if (this->status == GraphSamplerStatus::terminating) {
-    return 0;
-  }
-  callback(sample_res);
-  return 0;
-}
-void CompleteGraphSampler::init(size_t gpu_num, GraphTable *graph_table,
-                                std::vector<std::string> args) {
-  this->gpu_num = gpu_num;
-  this->graph_table = graph_table;
-}
-
-int BasicBfsGraphSampler::run_graph_sampling() {
-  pthread_rwlock_t *rw_lock = graph_table->rw_lock.get();
-  pthread_rwlock_rdlock(rw_lock);
-  while (rounds > 0 && status == GraphSamplerStatus::running) {
-    for (size_t i = 0; i < sample_neighbors_map.size(); i++) {
-      sample_neighbors_map[i].clear();
-    }
-    sample_neighbors_map.clear();
-    std::vector<int> nodes_left(graph_table->shards.size(),
-                                node_num_for_each_shard);
-    std::promise<int> prom;
-    std::future<int> fut = prom.get_future();
-    sample_neighbors_map.resize(graph_table->task_pool_size_);
-    int task_size = 0;
-    std::vector<std::future<int>> tasks;
-    int init_size = 0;
-    //__sync_fetch_and_add
-    std::function<int(int, int64_t)> bfs = [&, this](int i, int id) -> int {
-      if (this->status == GraphSamplerStatus::terminating) {
-        int task_left = __sync_sub_and_fetch(&task_size, 1);
-        if (task_left == 0) {
-          prom.set_value(0);
-        }
-        return 0;
-      }
-      size_t ind = i % this->graph_table->task_pool_size_;
-      if (nodes_left[i] > 0) {
-        auto iter = sample_neighbors_map[ind].find(id);
-        if (iter == sample_neighbors_map[ind].end()) {
-          Node *node = graph_table->shards[i]->find_node(id);
-          if (node != NULL) {
-            nodes_left[i]--;
-            sample_neighbors_map[ind][id] = std::vector<int64_t>();
-            iter = sample_neighbors_map[ind].find(id);
-            size_t edge_fetch_size =
-                std::min((size_t) this->edge_num_for_each_node,
-                         node->get_neighbor_size());
-            for (size_t k = 0; k < edge_fetch_size; k++) {
-              int64_t neighbor_id = node->get_neighbor_id(k);
-              int node_location = neighbor_id % this->graph_table->shard_num %
-                                  this->graph_table->task_pool_size_;
-              __sync_add_and_fetch(&task_size, 1);
-              graph_table->_shards_task_pool[node_location]->enqueue(
-                  bfs, neighbor_id % this->graph_table->shard_num, neighbor_id);
-              iter->second.push_back(neighbor_id);
-            }
-          }
-        }
-      }
-      int task_left = __sync_sub_and_fetch(&task_size, 1);
-      if (task_left == 0) {
-        prom.set_value(0);
-      }
-      return 0;
-    };
-    for (size_t i = 0; i < graph_table->shards.size(); ++i) {
-      std::vector<Node *> &v = graph_table->shards[i]->get_bucket();
-      if (v.size() > 0) {
-        int search_size = std::min(init_search_size, static_cast<int>v.size());
-        for (int k = 0; k < search_size; k++) {
-          init_size++;
-          __sync_add_and_fetch(&task_size, 1);
-          int64_t id = v[k]->get_id();
-          graph_table->_shards_task_pool[i % graph_table->task_pool_size_]
-              ->enqueue(bfs, i, id);
-        }
-      }  // if
-    }
-    if (init_size == 0) {
-      prom.set_value(0);
-    }
-    fut.get();
-    if (this->status == GraphSamplerStatus::terminating) {
-      pthread_rwlock_unlock(rw_lock);
-      return 0;
-    }
-    VLOG(0) << "BasicBfsGraphSampler finishes the graph searching task";
-    sample_nodes.clear();
-    sample_neighbors.clear();
-    sample_res.clear();
-    sample_nodes.resize(gpu_num);
-    sample_neighbors.resize(gpu_num);
-    sample_res.resize(gpu_num);
-    std::vector<std::vector<std::vector<paddle::framework::GpuPsGraphNode>>>
-        sample_nodes_ex(graph_table->task_pool_size_);
-    std::vector<std::vector<std::vector<int64_t>>> sample_neighbors_ex(
-        graph_table->task_pool_size_);
-    for (int i = 0; i < graph_table->task_pool_size_; i++) {
-      sample_nodes_ex[i].resize(gpu_num);
-      sample_neighbors_ex[i].resize(gpu_num);
-    }
-    tasks.clear();
-    for (size_t i = 0; i < (size_t)graph_table->task_pool_size_; ++i) {
-      tasks.push_back(
-          graph_table->_shards_task_pool[i]->enqueue([&, i, this]() -> int {
-            if (this->status == GraphSamplerStatus::terminating) {
-              return 0;
-            }
-            paddle::framework::GpuPsGraphNode node;
-            auto iter = sample_neighbors_map[i].begin();
-            size_t ind = i;
-            for (; iter != sample_neighbors_map[i].end(); iter++) {
-              size_t location = iter->first % this->gpu_num;
-              node.node_id = iter->first;
-              node.neighbor_size = iter->second.size();
-              node.neighbor_offset =
-                  static_cast<int>sample_neighbors_ex[ind][location].size();
-              sample_nodes_ex[ind][location].emplace_back(node);
-              for (auto k : iter->second)
-                sample_neighbors_ex[ind][location].push_back(k);
-            }
-            return 0;
-          }));
-    }
-
-    for (size_t i = 0; i < tasks.size(); i++) {
-      tasks[i].get();
-      sample_neighbors_map[i].clear();
-    }
-    tasks.clear();
-    if (this->status == GraphSamplerStatus::terminating) {
-      pthread_rwlock_unlock(rw_lock);
-      return 0;
-    }
-    for (size_t i = 0; i < (size_t)gpu_num; i++) {
-      tasks.push_back(
-          graph_table->_shards_task_pool[i % graph_table->task_pool_size_]
-              ->enqueue([&, i, this]() -> int {
-                if (this->status == GraphSamplerStatus::terminating) {
-                  pthread_rwlock_unlock(rw_lock);
-                  return 0;
-                }
-                int total_offset = 0;
-                for (int j = 0; j < this->graph_table->task_pool_size_; j++) {
-                  for (size_t k = 0; k < sample_nodes_ex[j][i].size(); k++) {
-                    sample_nodes[i].push_back(sample_nodes_ex[j][i][k]);
-                    sample_nodes[i].back().neighbor_offset += total_offset;
-                  }
-                  size_t neighbor_size = sample_neighbors_ex[j][i].size();
-                  total_offset += neighbor_size;
-                  for (size_t k = 0; k < neighbor_size; k++) {
-                    sample_neighbors[i].push_back(sample_neighbors_ex[j][i][k]);
-                  }
-                }
-                return 0;
-              }));
-    }
-    for (size_t i = 0; i < tasks.size(); i++) tasks[i].get();
-    if (this->status == GraphSamplerStatus::terminating) {
-      pthread_rwlock_unlock(rw_lock);
-      return 0;
-    }
-    for (int i = 0; i < gpu_num; i++) {
-      sample_res[i].node_list = sample_nodes[i].data();
-      sample_res[i].neighbor_list = sample_neighbors[i].data();
-      sample_res[i].node_size = sample_nodes[i].size();
-      sample_res[i].neighbor_size = sample_neighbors[i].size();
-    }
-    pthread_rwlock_unlock(rw_lock);
-    if (this->status == GraphSamplerStatus::terminating) {
-      return 0;
-    }
-    callback(sample_res);
-    rounds--;
-    if (rounds > 0) {
-      for (int i = 0;
-           i < interval && this->status == GraphSamplerStatus::running; i++) {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-      }
-    }
-    VLOG(0)<<"bfs returning";
-  }
-  return 0;
-}
-void BasicBfsGraphSampler::init(size_t gpu_num, GraphTable *graph_table,
-                                std::vector<std::string> args) {
-  this->gpu_num = gpu_num;
-  this->graph_table = graph_table;
-  init_search_size = args.size() > 0 ? std::stoi(args[0]) : 10;
-  node_num_for_each_shard = args.size() > 1 ? std::stoi(args[1]) : 10;
-  edge_num_for_each_node = args.size() > 2 ? std::stoi(args[2]) : 10;
-  rounds = args.size() > 3 ? std::stoi(args[3]) : 1;
-  interval = args.size() > 4 ? std::stoi(args[4]) : 60;
-}
-
-#endif
-*/
 std::vector<Node *> GraphShard::get_batch(int start, int end, int step) {
   if (start < 0) start = 0;
   std::vector<Node *> res;
@@ -1476,11 +1204,35 @@ int32_t GraphTable::parse_edge_and_load(
           return 0;
         }));
   }
-  for (size_t i = 0; i < tasks.size(); i++) tasks[i].get();
+  for (size_t i = 0; i < tasks.size(); i++) {
+    tasks[i].get();
+  }
+  tasks.clear();
 
   if (node_num_ > 1) {
     graph_partition(true);
   }
+
+  // record all start node id
+  for (size_t idx = 0; idx < edge_shards.size(); ++idx) {
+    for (size_t part_id = 0; part_id < shard_num_per_server; ++part_id) {
+      tasks.push_back(load_node_edge_task_pool->enqueue([this, idx, part_id]() {
+        std::vector<std::vector<uint64_t>> all_keys;
+        edge_shards[idx][part_id]->get_all_id(&all_keys, 1);
+        int cnt = all_keys[0].size();
+        edge_shards_keys_[idx][part_id] = std::move(all_keys[0]);
+        all_keys[0].clear();
+        return cnt;
+      }));
+    }
+  }
+  size_t total_cnt = 0;
+  for (auto &t : tasks) {
+    total_cnt += t.get();
+  }
+  tasks.clear();
+  VLOG(0) << "load all etypes total edge nodes count=" << total_cnt;
+
   return 0;
 }
 void GraphTable::graph_partition(bool is_edge) {
@@ -1495,8 +1247,15 @@ void GraphTable::graph_partition(bool is_edge) {
     VLOG(0) << "Graph partitioning DBH Done";
   } else if (mode == "hard" || mode == "HARD") {
     VLOG(0) << "Graph partitioning Hard Hash Split";
-  } else if (mode == "none" || mode == "NONE") {
-    VLOG(0) << "No Graph partitioning Split";
+    if (is_edge) {
+      stat_graph_edge_info(0);
+    }
+  } else if (strncasecmp(mode.c_str(), "fennel", 6) == 0) {
+    if (is_edge) {
+      fennel_graph_edge_partition();
+    } else {
+      fennel_graph_feature_partition();
+    }
   } else {
     // TODO(danleifeng): Graph partitioning other method.
     VLOG(0) << "Unknown graph partitioning mode " << mode;
@@ -1673,7 +1432,487 @@ void GraphTable::dbh_graph_feature_partition() {
     VLOG(0) << "end to process dbh feature shard";
   }
 }
+// query all ids rank
+void GraphTable::query_all_ids_rank(const size_t &total, const uint64_t *ids, int *ranks) {
+  std::vector<std::future<size_t>> wait_tasks;
+  size_t step = static_cast<size_t>((total + load_thread_num_ - 1) / load_thread_num_);
+  for (size_t start = 0; start < total; start = start + step) {
+    size_t end = (start + step > total) ? total : (start + step);
+    wait_tasks.push_back(
+        load_node_edge_task_pool->enqueue([this, &ids, &ranks, start, end]() {
+      size_t cnt = 0;
+      for (size_t k = start; k < end; ++k) {
+        int rank = egde_node_rank_.find(ids[k]);
+        if (rank < 0) {
+          rank = partition_key_for_rank(ids[k]);
+          ++cnt;
+        }
+        ranks[k] = rank;
+      }
+      return cnt;
+    }));
+  }
+  // all
+  size_t hash_count = 0;
+  for (auto &t : wait_tasks) {
+    hash_count += t.get();
+  }
+  VLOG(0) << "query total keys=" << total << ", hash count=" << hash_count;
+}
+void GraphTable::fennel_graph_edge_partition() {
+  VLOG(0) << "start to process fennel2 egde shard";
+  std::vector<std::future<size_t>> wait_tasks;
+  robin_hood::unordered_flat_map<uint64_t, std::vector<Node *>> neighbor_nodes[shard_num_per_server];
+  // 聚合所有边表关系
+  for (size_t part_id = 0; part_id < shard_num_per_server; ++part_id) {
+    wait_tasks.push_back(load_node_edge_task_pool->enqueue([this, part_id, &neighbor_nodes]() {
+      size_t cnt = 0;
+      auto &n_nodes = neighbor_nodes[part_id];
+      for (size_t idx = 0; idx < edge_shards.size(); ++idx) {
+        auto &shard = edge_shards[idx][part_id];
+        auto &nodes = shard->get_bucket();
+        for (auto &node : nodes) {
+          auto it = n_nodes.find(node->get_id());
+          if (it != n_nodes.end()) {
+            it->second.push_back(node);
+          } else {
+            std::vector<Node *> vec;
+            vec.push_back(node);
+            n_nodes.emplace(node->get_id(), vec);
+            ++cnt;
+          }
+       }
+      }
+      return cnt;
+    }));
+  }
+  // 等待聚合线程结束
+  size_t total_node = 0;
+  for (auto &t : wait_tasks) {
+    total_node += t.get();
+  }
+  size_t load_limit = static_cast<size_t>((total_node + node_num_ - 1) / node_num_);
 
+  const double gamma = 1.5;
+  const double alpha = total_node * pow(node_num_, (gamma - 1)) / pow(total_node, gamma);
+  VLOG(0) << "gather total edge node count=" << total_node
+      << ", load_limit:" << load_limit << ", alpha: " << alpha;
+  // init,每个子图插入一个节点, 记录每台机器子图已有的节点set
+  egde_node_rank_.clear();
+  egde_node_rank_.init(node_num_, shard_num_per_server);
+  for (size_t part_id = 0; part_id < shard_num_per_server; ++part_id) {
+    egde_node_rank_.rehash(part_id, neighbor_nodes[part_id].size());
+  }
+  // 获取与邻居的边交集数量
+  auto get_inter_cost = [this, &neighbor_nodes] (
+      const uint64_t &key, const std::vector<Node*> &nodes, std::vector<int> *inter_cost) {
+    bool find = false;
+    for (auto &node : nodes) {
+      for (size_t n_i = 0; n_i < node->get_neighbor_size(); ++n_i) {
+        uint64_t d_id = node->get_neighbor_id(n_i);
+        int rank = egde_node_rank_.find(d_id);
+        if (rank >= 0) {
+          ++(*inter_cost)[rank];
+          find = true;
+        }
+      }
+    }
+    return find;
+  };
+  // 根据score计算当前所属机器
+  auto get_rank_by_score = [this, gamma, alpha, &load_limit, &neighbor_nodes, get_inter_cost] (const uint64_t &key)->int {
+    thread_local std::vector<int> inter_cost(node_num_, 0);
+    auto &shard = neighbor_nodes[key % shard_num_per_server];
+    auto it = shard.find(key);
+    if (it == shard.end()) {
+//      VLOG(0) << "get rank by score not found key=" << key;
+      return -1;
+    }
+    if (!get_inter_cost(key, it->second, &inter_cost)) {
+      return -1;
+    }
+    int index = -1;
+//    double max_score = INT_MIN;
+    int max_score = INT_MIN;
+    for (int i = 0; i < node_num_; ++i) {
+      // 计算最大score所在的机器
+//      double score = 0.0;
+//      if (egde_node_rank_.nodes_num(i) < load_limit) {
+//        score = inter_cost[i] - alpha * gamma * pow(egde_node_rank_.nodes_num(i), gamma - 1);
+//      } else {
+//        score = - alpha * gamma * pow(egde_node_rank_.nodes_num(i), gamma - 1);
+//      }
+      auto &score = inter_cost[i];
+      if (score > max_score) {
+        max_score = score;
+        index = i;
+      }
+      inter_cost[i] = 0;
+    }
+    CHECK(max_score > 0);
+    return index;
+  };
+  // 查找关系最远点作为起点
+  auto find_farthest_start_node = [this, &neighbor_nodes, get_inter_cost](
+      const int &rank_id, const int &max_step) -> uint64_t {
+    uint64_t key = 0xffffffffffffffffL;
+    int min_inter_cost = INT_MAX;
+    int step = 0;
+    std::vector<int> inter_cost(node_num_, 0);
+    for (size_t shard_id = 0; shard_id < shard_num_per_server; ++shard_id) {
+      auto &n_nodes = neighbor_nodes[shard_id];
+      if (n_nodes.empty()) {
+        continue;
+      }
+      for (auto it = n_nodes.begin(); it != n_nodes.end(); ++it) {
+        if (egde_node_rank_.find(it->first) >= 0) {
+          continue;
+        }
+        get_inter_cost(it->first, it->second, &inter_cost);
+        for (int k = 0; k < node_num_; ++k) {
+          if (k == rank_id) {
+            inter_cost[k] = 0;
+            continue;
+          }
+          if (min_inter_cost > inter_cost[k]) {
+            min_inter_cost = inter_cost[k];
+            key = it->first;
+          }
+          inter_cost[k] = 0;
+        }
+        ++step;
+        if (step >= max_step) {
+          break;
+        }
+      }
+      if (step >= max_step) {
+        break;
+      }
+    }
+    CHECK(key != 0xffffffffffffffffL);
+    return key;
+  };
+  // 其它结点都添加完成，剩余的点就直接放到这个机器上面
+  auto add_all_left_node = [this, &neighbor_nodes](const int &rank_id) -> size_t {
+    size_t cnt = 0;
+    for (size_t shard_id = 0; shard_id < shard_num_per_server; ++shard_id) {
+      auto &n_nodes = neighbor_nodes[shard_id];
+      if (n_nodes.empty()) {
+        continue;
+      }
+      for (auto it = n_nodes.begin(); it != n_nodes.end(); ++it) {
+        if (egde_node_rank_.find(it->first) >= 0) {
+          continue;
+        }
+        egde_node_rank_.insert(it->first, rank_id);
+        ++cnt;
+      }
+    }
+    return cnt;
+  };
+  typedef robin_hood::unordered_flat_set<uint64_t>  UniqueSet;
+  typedef std::deque<uint64_t> NodeQueue;
+  // 添加所有邻居入队列
+  auto add_neighbor_to_queue = [this, &neighbor_nodes](
+      const uint64_t &key, NodeQueue *queue, UniqueSet *unique) {
+    auto &shard = neighbor_nodes[key % shard_num_per_server];
+    if (shard.empty()) {
+      return;
+    }
+    auto it = shard.find(key);
+    if (it == shard.end()) {
+      return;
+    }
+    unique->insert(key);
+    for (auto &node : it->second) {
+      for (size_t n_i = 0; n_i < node->get_neighbor_size(); ++n_i) {
+        uint64_t d_id = node->get_neighbor_id(n_i);
+        if (unique->find(d_id) != unique->end()) {
+          continue;
+        }
+        unique->insert(d_id);
+        queue->push_back(d_id);
+      }
+    }
+    shard.erase(it);
+  };
+
+  UniqueSet keys_unique;
+  keys_unique.rehash(total_node);
+  NodeQueue node_queue[node_num_];
+
+  size_t cnt = 0;
+  size_t start_print = 0;
+  size_t max_node = 0;
+  int max_step = 10;
+  std::vector<size_t> rank_nums(node_num_, 0);
+  while (cnt < total_node) {
+    int need_proc_node = node_num_;
+    for (int rank_id = 0; rank_id < node_num_; ++rank_id) {
+      auto &num = egde_node_rank_.nodes_num(rank_id);
+      if (num >= load_limit) {
+        --need_proc_node;
+        continue;
+      }
+      // 如果发现某一个机器上面点明显变多就让下一个节点处理
+      if (num > max_node) {
+        max_node = num;
+        continue;
+      }
+      auto &queue = node_queue[rank_id];
+      if (queue.empty()) {
+        // 如果其它节点都处理完，这个节点就直接收集所有其它点就可以
+        if (need_proc_node == 1) {
+          cnt += add_all_left_node(rank_id);
+        } else {
+          uint64_t key = find_farthest_start_node(rank_id, max_step);
+          if (max_step == 10 || max_step == 9) {
+            VLOG(0) << "rank id=" << rank_id << ", add first node key=" << key;
+          }
+          if (max_step > 0) {
+            --max_step;
+          }
+          ++rank_nums[rank_id];
+          egde_node_rank_.insert(key, rank_id);
+          ++cnt;
+          add_neighbor_to_queue(key, &queue, &keys_unique);
+        }
+        continue;
+      }
+
+      uint64_t key = queue.front();
+      queue.pop_front();
+
+      int rank = get_rank_by_score(key);
+      if (rank >= 0) {
+        egde_node_rank_.insert(key, rank);
+        ++cnt;
+        add_neighbor_to_queue(key, &node_queue[rank], &keys_unique);
+      }
+    }
+    if (cnt - start_print > 10000000) {
+      for (int i = 0; i < node_num_; i++) {
+        VLOG(0) << "current total nodes count=" << cnt
+            << ", egde_node_ids[" << i << "] :" << egde_node_rank_.nodes_num(i)
+            << ", queue size: " << node_queue[i].size()
+            << ", first size: " << rank_nums[i]
+            << ", keys_unique: " << keys_unique.size();
+      }
+      start_print = cnt;
+    }
+  }
+  // end split nodes
+  for (int i = 0; i < node_num_; i++) {
+    VLOG(0) << " egde_node_ids[" << i << "] :" << egde_node_rank_.nodes_num(i);
+  }
+  filter_graph_edge_nodes();
+  VLOG(0) << "end to process fennel new egde shard";
+}
+void GraphTable::filter_graph_edge_nodes() {
+  VLOG(0) << "begin filter graph edge nodes";
+  // 过滤不属于自己边表信息
+  std::vector<std::future<std::pair<size_t, size_t>>> shard_tasks;
+  std::vector<size_t> total_edge_count(shard_num_per_server, 0);
+  std::vector<size_t> edge_before_count(edge_shards.size(), 0);
+
+  std::vector<std::vector<size_t>> rank_edge_count;
+  std::vector<std::vector<size_t>> cross_edge_count;
+  rank_edge_count.resize(node_num_);
+  cross_edge_count.resize(node_num_);
+  for (int i = 0; i < node_num_; ++i) {
+    rank_edge_count[i].resize(shard_num_per_server, 0);
+    cross_edge_count[i].resize(shard_num_per_server, 0);
+  }
+  // 获取边是否跨机统计
+  auto get_cross_edge_count = [this](const int &rank_id, Node *node) {
+    size_t cnt = 0;
+    for (size_t i = 0; i < node->get_neighbor_size(); ++i) {
+      uint64_t nid = node->get_neighbor_id(i);
+      if (egde_node_rank_.find(nid) != rank_id) {
+        ++cnt;
+      }
+    }
+    return cnt;
+  };
+
+  for (size_t idx = 0; idx < edge_shards.size(); ++idx) {
+    for (size_t part_id = 0; part_id < shard_num_per_server; ++part_id) {
+      edge_before_count[idx] += edge_shards[idx][part_id]->get_size();
+    }
+    for (size_t part_id = 0; part_id < shard_num_per_server; ++part_id) {
+      shard_tasks.push_back(
+          load_node_edge_task_pool->enqueue(
+              [this, part_id, idx, &total_edge_count,
+               &rank_edge_count, &cross_edge_count, get_cross_edge_count]() -> std::pair<size_t, size_t> {
+        size_t total_cnt = 0;
+        size_t remove_cnt = 0;
+
+        auto &shard = edge_shards[idx][part_id];
+        auto &nodes = shard->get_bucket();
+        std::vector<uint64_t> remove_ids;
+        for (auto &node : nodes) {
+          total_edge_count[part_id] += node->get_neighbor_size();
+          auto nid = node->get_id();
+          // 节点插入到对应的机器shard中
+          int rank = egde_node_rank_.find(nid);
+          if (rank != node_id_) {
+            remove_ids.push_back(nid);
+            ++remove_cnt;
+          }
+          // 统计各节点边分布情况
+          cross_edge_count[rank][part_id] += get_cross_edge_count(rank, node);
+          rank_edge_count[rank][part_id] += node->get_neighbor_size();
+
+          ++total_cnt;
+        }
+        // delete
+        for (auto &id : remove_ids) {
+          shard->delete_node(id);
+        }
+        return {total_cnt, remove_cnt};
+      }));
+    }
+  }
+  size_t all_cut_size = 0;
+  size_t all_node_size = 0;
+  for (size_t j = 0; j < shard_tasks.size(); j++) {
+    auto res = shard_tasks[j].get();
+    all_node_size += res.first;
+    all_cut_size += res.second;
+  }
+  // 分类型打印边的分布情况
+  for (size_t idx = 0; idx < edge_shards.size(); ++idx) {
+    size_t total = 0;
+    for (size_t part_id = 0; part_id < shard_num_per_server; ++part_id) {
+      total += edge_shards[idx][part_id]->get_size();
+    }
+    VLOG(0) << "filter edge idx=" << idx << ", total edge nodes="
+        << edge_before_count[idx] << ", left edge nodes count=" << total;
+  }
+  // 统计所有边以及跨节点情况
+  size_t total_edge_cnt = 0;
+  std::vector<size_t> rank_edge_cnt(node_num_, 0);
+  std::vector<size_t> cross_edge_cnt(node_num_, 0);
+  for (size_t part_id = 0; part_id < shard_num_per_server; ++part_id) {
+    total_edge_cnt += total_edge_count[part_id];
+    for (int rank = 0; rank < node_num_; ++rank) {
+      rank_edge_cnt[rank] += rank_edge_count[rank][part_id];
+      cross_edge_cnt[rank] += cross_edge_count[rank][part_id];
+    }
+  }
+  VLOG(0) << "total edge count: " << total_edge_cnt;
+  for (int rank = 0; rank < node_num_; ++rank) {
+    VLOG(0) << "rank=" << rank << ", edge count: "
+        << rank_edge_cnt[rank] << ", cross count: " << cross_edge_cnt[rank]
+        << ", cross rate: " << double(cross_edge_cnt[rank]) / double(rank_edge_cnt[rank]);
+  }
+  VLOG(0) << "total edge start node size: " << all_node_size
+      << ", cut start node size: " << all_cut_size << ", end filter edge";
+}
+void GraphTable::fennel_graph_feature_partition() {
+  VLOG(0) << "start to process fennel feature shard";
+  std::vector<std::future<std::pair<size_t, size_t>>> tasks;
+  for (size_t node_idx = 0; node_idx < feature_shards.size(); ++node_idx) {
+    for (size_t i = 0; i < shard_num_per_server; ++i) {
+      tasks.push_back(load_node_edge_task_pool->enqueue(
+          [&, node_idx, i, this]() -> std::pair<size_t, size_t> {
+        std::vector<uint64_t> remove_keys;
+        auto &shard = feature_shards[node_idx][i];
+        size_t total = shard->get_size();
+        auto &nodes = shard->get_bucket();
+        for (auto node : nodes) {
+          uint64_t id = node->get_id();
+          int rank = egde_node_rank_.find(id);
+          if (rank < 0) { // single node
+            if (!is_key_for_self_rank(id)) {
+              remove_keys.push_back(id);
+            }
+          } else if (rank != node_id_) {
+            remove_keys.push_back(id);
+          }
+        }
+        for (auto &key : remove_keys) {
+          shard->delete_node(key);
+        }
+        return {total, remove_keys.size()};
+      }));
+    }
+  }
+  size_t total = 0;
+  size_t del_cnt = 0;
+  for (auto &task : tasks) {
+    auto it = task.get();
+    total += it.first;
+    del_cnt += it.second;
+  }
+  for (size_t node_idx = 0; node_idx < feature_shards.size(); ++node_idx) {
+    size_t total = 0;
+    for (size_t i = 0; i < shard_num_per_server; ++i) {
+      total += feature_shards[node_idx][i]->get_size();
+    }
+    VLOG(0) << "node idx=" << node_idx << ", filter left node count=" << total;
+  }
+  VLOG(0) << "total count=" << total
+      << ", delete count=" << del_cnt
+      << ", end to process fennel feature shard";
+}
+void GraphTable::stat_graph_edge_info(int type) {
+  std::vector<std::future<std::pair<size_t, size_t>>> shard_tasks;
+  // 获取边是否跨机统计
+  std::function<size_t(Node*)> get_cross_edge_count = nullptr;
+  if (type == 1) {
+    // 贪心
+    get_cross_edge_count = [this](Node *node) {
+      size_t cnt = 0;
+      for (size_t i = 0; i < node->get_neighbor_size(); ++i) {
+        uint64_t nid = node->get_neighbor_id(i);
+        if (egde_node_rank_.find(nid) != node_id_) {
+          ++cnt;
+        }
+      }
+      return cnt;
+    };
+  } else {
+    // 硬拆
+    get_cross_edge_count = [this](Node *node) {
+      size_t cnt = 0;
+      for (size_t i = 0; i < node->get_neighbor_size(); ++i) {
+        uint64_t nid = node->get_neighbor_id(i);
+        if (is_key_for_self_rank(nid)) {
+          ++cnt;
+        }
+      }
+      return cnt;
+    };
+  }
+  for (size_t idx = 0; idx < edge_shards.size(); ++idx) {
+    for (size_t part_id = 0; part_id < shard_num_per_server; ++part_id) {
+      shard_tasks.push_back(
+          load_node_edge_task_pool->enqueue(
+              [this, part_id, idx, get_cross_edge_count]() -> std::pair<size_t, size_t> {
+        size_t total_cnt = 0;
+        size_t cross_cnt = 0;
+        auto &nodes = edge_shards[idx][part_id]->get_bucket();
+        for (auto &node : nodes) {
+          // 统计各节点边分布情况
+          total_cnt += node->get_neighbor_size();
+          cross_cnt += get_cross_edge_count(node);
+        }
+        return {total_cnt, cross_cnt};
+      }));
+    }
+  }
+  size_t all_node_size = 0;
+  size_t all_cross_size = 0;
+  for (auto &t : shard_tasks) {
+    auto res = t.get();
+    all_node_size += res.first;
+    all_cross_size += res.second;
+  }
+  VLOG(0) << "rank=" << node_id_ << ", edge count: "
+      << all_node_size << ", cross count: " << all_cross_size
+      << ", cross rate: " << double(all_cross_size) / double(all_node_size);
+}
 int32_t GraphTable::parse_node_and_load(std::string ntype2files,
                                         std::string graph_data_local_path,
                                         int part_num,
@@ -1718,14 +1957,61 @@ int32_t GraphTable::parse_node_and_load(std::string ntype2files,
       }
     }
   }
-
+  // fix node edge nodes
+  fix_feature_node_shards(load_slot);
   if (node_num_ > 1) {
     graph_partition(false);
   }
 
   return 0;
 }
-
+void GraphTable::fix_feature_node_shards(bool load_slot) {
+  CHECK(load_slot) << "only support feature node mode";
+  VLOG(0) << "begin fix feature node type count="
+      << feature_shards.size() << ", edge count=" << edge_shards.size();
+  std::vector<std::future<std::pair<size_t, size_t>>> tasks;
+  for (size_t idx = 0; idx < feature_shards.size(); ++idx) {
+    for (size_t j = 0; j < feature_shards[idx].size(); ++j) {
+      tasks.push_back(load_node_edge_task_pool->enqueue(
+          [this, idx, j, load_slot]() -> std::pair<size_t, size_t> {
+        size_t cnt = 0;
+        size_t edge_node_cnt = 0;
+        auto &features = feature_shards[idx][j];
+        for (auto edge_idx : nodeid_to_edgeids_[idx]) {
+          auto &shard_keys = edge_shards_keys_[edge_idx][j];
+          edge_node_cnt += shard_keys.size();
+          if (shard_keys.empty()) {
+            continue;
+          }
+          for (auto &key : shard_keys) {
+            if (features->find_node(key) != nullptr) {
+              continue;
+            }
+            features->add_feature_node(key, false, 0);
+            ++cnt;
+          }
+          // clear free memory
+          shard_keys.clear();
+          shard_keys.shrink_to_fit();
+        }
+        size_t total = features->get_size();
+        VLOG(5) << "fix total edge node count=" << edge_node_cnt
+            << ", total feature node count=" << total
+            << ", node idx=" << idx << ", shard id=" << j << ", count=" << cnt;
+        return {total, cnt};
+      }));
+    }
+  }
+  size_t total = 0;
+  size_t add_cnt = 0;
+  for (auto &t : tasks) {
+    auto pair = t.get();
+    total += pair.first;
+    add_cnt += pair.second;
+  }
+  VLOG(0) << "fix feature node count=" << total
+      << ", add count=" << add_cnt << ", with slot=" << load_slot;
+}
 int32_t GraphTable::load_node_and_edge_file(
     std::string etype2files,
     std::string ntype2files,
@@ -1895,16 +2181,24 @@ int32_t GraphTable::get_nodes_ids_by_ranges(
 }
 bool GraphTable::is_key_for_self_rank(const uint64_t &id) {
 #if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
-  if (node_num_ == 1) {
-    if (FLAGS_graph_edges_hard_split_debug) {
-      return (((id / 8) % 2) == 0);
-    }
-    return true;
-  }
   thread_local auto ps_wrapper = paddle::framework::PSGPUWrapper::GetInstance();
+  if (FLAGS_graph_edges_split_debug && ps_wrapper->GetRankNum() == 1) {
+    return (static_cast<int>((id / 8) % node_num_) == node_id_);
+  }
   return ps_wrapper->IsKeyForSelfRank(id);
 #else
   return true;
+#endif
+}
+int GraphTable::partition_key_for_rank(const uint64_t &key) {
+#if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
+  thread_local auto ps_wrapper = paddle::framework::PSGPUWrapper::GetInstance();
+  if (FLAGS_graph_edges_split_debug && ps_wrapper->GetRankNum() == 1) {
+    return static_cast<int>((key / 8) % node_num_);
+  }
+  return ps_wrapper->PartitionKeyForRank(key);
+#else
+  return 0;
 #endif
 }
 std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
@@ -3016,7 +3310,7 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
     _shards_task_pool[i].reset(new ::ThreadPool(1));
     _shards_task_rng_pool.push_back(paddle::framework::GetCPURandomEngine(0));
   }
-  load_node_edge_task_pool.reset(new ::ThreadPool(load_thread_num));
+  load_node_edge_task_pool.reset(new ::ThreadPool(load_thread_num_));
 
   auto graph_feature = graph.graph_feature();
   auto node_types = graph.node_types();
@@ -3024,8 +3318,12 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
 
 #if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
   auto ps_wrapper = paddle::framework::PSGPUWrapper::GetInstance();
-  node_num_ = ps_wrapper->GetRankNum();
   node_id_ = ps_wrapper->GetRankId();
+  node_num_ = ps_wrapper->GetRankNum();
+  if (FLAGS_graph_edges_split_debug && node_num_ == 1) {
+    node_num_ = FLAGS_graph_edges_debug_node_num;
+    node_id_ = FLAGS_graph_edges_debug_node_id;
+  }
 #endif
 
   VLOG(0) << "got " << edge_types.size()
@@ -3078,6 +3376,18 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
               << " shape:" << f_shape << " dtype:" << f_dtype;
     }
   }
+  nodeid_to_edgeids_.resize(feature_to_id.size());
+  for (auto &obj : edge_to_id) {
+    size_t pos = obj.first.find("2");
+    CHECK(pos != std::string::npos);
+    std::string nodetype = obj.first.substr(0, pos);
+    auto it = feature_to_id.find(nodetype);
+    CHECK(it != feature_to_id.end());
+    nodeid_to_edgeids_[it->second].push_back(obj.second);
+    VLOG(0) << "add edge [" <<  obj.first
+        << "=" << obj.second << "] to ["
+        << nodetype << "=" << it->second << "]";
+  }
   // this->table_name = common.table_name();
   // this->table_type = common.name();
   this->table_name = graph.table_name();
@@ -3099,7 +3409,9 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
 #ifdef PADDLE_WITH_HETERPS
   partitions.resize(id_to_edge.size());
 #endif
+  edge_shards_keys_.resize(id_to_edge.size());
   for (size_t k = 0; k < edge_shards.size(); k++) {
+    edge_shards_keys_[k].resize(shard_num_per_server);
     for (size_t i = 0; i < shard_num_per_server; i++) {
       edge_shards[k].push_back(new GraphShard());
     }
@@ -3133,6 +3445,80 @@ void GraphTable::build_graph_total_keys() {
 
   VLOG(0) << "finish insert edge to graph_total_keys, total keys="
           << graph_total_keys_.size();
+}
+
+void GraphTable::calc_edge_type_limit() {
+  std::vector<uint64_t> graph_type_keys_;
+  std::vector<int> graph_type_keys_neighbor_size_;
+  std::vector<std::vector<int>> neighbor_size_array;
+  neighbor_size_array.resize(task_pool_size_);
+
+  int max_neighbor_size;
+  int neighbor_size_limit;
+  size_t size_limit;
+  double neighbor_size_percent = FLAGS_graph_neighbor_size_percent;
+  for (auto &it: this->edge_to_id) {
+    graph_type_keys_.clear();
+    graph_type_keys_neighbor_size_.clear();
+    for (int i = 0; i < task_pool_size_; i++) {
+      neighbor_size_array[i].clear();
+    }
+    auto edge_type = it.first;
+    auto edge_idx = it.second;
+    std::vector<std::vector<uint64_t>> keys;
+    this->get_all_id(GraphTableType::EDGE_TABLE, edge_idx, 1, &keys);
+    graph_type_keys_ = std::move(keys[0]);
+
+    std::vector<std::vector<uint64_t>> bags(task_pool_size_);
+    for (int i = 0; i < task_pool_size_; i++) {
+      auto predsize = graph_type_keys_.size() / task_pool_size_;
+      bags[i].reserve(predsize * 1.2);
+    }
+    for (auto x: graph_type_keys_) {
+      int location = x % task_pool_size_;
+      bags[location].push_back(x);
+    }
+
+    std::vector<std::future<int>> tasks;
+    for (size_t i = 0; i < bags.size(); i++) {
+      if (bags[i].size() > 0) {
+        tasks.push_back(_shards_task_pool[i]->enqueue([&, i, edge_idx, this]() -> int {
+              neighbor_size_array[i].reserve(bags[i].size());
+              for (size_t j = 0; j < bags[i].size(); j++) {
+                auto node_id = bags[i][j];
+                Node *v = find_node(GraphTableType::EDGE_TABLE, edge_idx, node_id);
+                if (v != nullptr) {
+                  int neighbor_size = v->get_neighbor_size();
+                  neighbor_size_array[i].push_back(neighbor_size);
+                } else {
+                  VLOG(0) << "node id:" << node_id << ", not find in type: " << edge_idx;
+                }
+              }
+              return 0;
+            }));
+      }
+    }
+    for (size_t i = 0; i < tasks.size(); i++) tasks[i].get();
+    for (int i = 0; i < task_pool_size_; i++) {
+      graph_type_keys_neighbor_size_.insert(graph_type_keys_neighbor_size_.end(),
+          neighbor_size_array[i].begin(), neighbor_size_array[i].end());
+    }
+    std::sort(graph_type_keys_neighbor_size_.begin(), graph_type_keys_neighbor_size_.end());
+    if (graph_type_keys_neighbor_size_.size() > 0) {
+      max_neighbor_size = graph_type_keys_neighbor_size_[graph_type_keys_neighbor_size_.size() - 1];
+      size_limit = graph_type_keys_neighbor_size_.size() * neighbor_size_percent;
+      if (size_limit < (graph_type_keys_neighbor_size_.size() - 1)) {
+        neighbor_size_limit = graph_type_keys_neighbor_size_[size_limit];
+      } else {
+        neighbor_size_limit = max_neighbor_size;
+      }
+    } else {
+      neighbor_size_limit = 0;
+    }
+    type_to_neighbor_limit_[edge_idx] = neighbor_size_limit;
+    VLOG(0) << "edge_type: " << edge_type << ", edge_idx[" << edge_idx << "] max neighbor_size: "
+              << max_neighbor_size << ", neighbor_size_limit: " << neighbor_size_limit;
+  }
 }
 
 void GraphTable::build_graph_type_keys() {

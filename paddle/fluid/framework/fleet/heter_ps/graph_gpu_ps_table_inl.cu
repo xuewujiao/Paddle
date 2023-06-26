@@ -210,6 +210,7 @@ __global__ void neighbor_sample_kernel_walking(GpuPsCommGraph graph,
                                                uint64_t* res,
                                                int sample_len,
                                                int n,
+                                               int neighbor_size_limit,
                                                int default_value) {
   // graph: The corresponding edge table.
   // node_info_list: The input node query, duplicate nodes allowed.
@@ -243,7 +244,13 @@ __global__ void neighbor_sample_kernel_walking(GpuPsCommGraph graph,
         res[offset + j] = j;
       }
       __syncwarp();
-      for (int j = sample_len + threadIdx.x; j < neighbor_len; j += WARP_SIZE) {
+      int neighbor_num;
+      if (neighbor_len > neighbor_size_limit) {
+        neighbor_num = neighbor_size_limit;
+      } else {
+        neighbor_num = neighbor_len;
+      }
+      for (int j = sample_len + threadIdx.x; j < neighbor_num; j += WARP_SIZE) {
         const int num = curand(&rng) % (j + 1);
         if (num < sample_len) {
           atomicMax(reinterpret_cast<unsigned int*>(res + offset + num),
@@ -1969,6 +1976,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v3(
                                              q.src_nodes,
                                              q.sample_size,
                                              q.len,
+                                             q.neighbor_size_limit,
                                              cpu_switch,
                                              compress,
                                              weighted);
@@ -1980,6 +1988,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v3(
                                                   q.src_nodes,
                                                   q.sample_size,
                                                   q.len,
+                                                  q.neighbor_size_limit,
                                                   cpu_switch,
                                                   compress,
                                                   weighted);
@@ -1992,6 +2001,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v3(
                                            q.src_nodes,
                                            q.sample_size,
                                            q.len,
+                                           q.neighbor_size_limit,
                                            cpu_switch,
                                            compress,
                                            weighted);
@@ -2002,9 +2012,10 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v3(
 NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample(int gpu_id,
                                                             uint64_t* key,
                                                             int sample_size,
-                                                            int len) {
+                                                            int len,
+                                                            int neighbor_size_limit) {
   return graph_neighbor_sample_v2(
-      gpu_id, 0, key, sample_size, len, false, true, false);
+      gpu_id, 0, key, sample_size, len, neighbor_size_limit, false, true, false);
 }
 
 NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all(
@@ -2014,6 +2025,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all(
     uint64_t* d_keys,
     int sample_size,
     int len,
+    int neighbor_size_limit,
     bool cpu_query_switch,
     bool compress,
     bool weighted) {
@@ -2034,6 +2046,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all(
                                          loc.d_merged_keys,
                                          sample_size,
                                          pull_size,
+                                         neighbor_size_limit,
                                          cpu_query_switch,
                                          compress,
                                          weighted);
@@ -2142,6 +2155,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
     uint64_t* key,
     int sample_size,
     int len,
+    int neighbor_size_limit,
     bool cpu_query_switch,
     bool compress,
     bool weighted) {
@@ -2288,6 +2302,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
                                            sample_array,
                                            sample_size,
                                            shard_len,
+                                           neighbor_size_limit,
                                            default_value);
     } else {
       // Weighted sample.
@@ -3020,18 +3035,84 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
   return result;
 }
 
-void GpuPsGraphTable::get_node_degree(
+std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree(
     int gpu_id,
     int edge_idx,
     uint64_t* key,
-    int len,
-    std::shared_ptr<phi::Allocation> node_degree) {
-  int* node_degree_ptr =
-      reinterpret_cast<int*>(node_degree->ptr()) + edge_idx * len;
+    int len) {
+  if (multi_node_ && FLAGS_enable_graph_multi_node_sampling) {
+    // multi node mode
+    auto node_degree = get_node_degree_all2all(
+        gpu_id,
+        edge_idx,
+        key,
+        len);
+    return node_degree;
+  } else {
+    auto node_degree = get_node_degree_single(
+        gpu_id,
+        edge_idx,
+        key,
+        len);
+    return node_degree;
+  }
+}
+
+std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree_all2all(
+    int gpu_id,
+    int edge_idx,
+    uint64_t* key,
+    int len) {
+  platform::CUDADeviceGuard guard(gpu_id);
+  auto &loc = storage_[gpu_id];
+  platform::CUDAPlace place = platform::CUDAPlace(resource_->dev_id(gpu_id));
+  auto stream = resource_->local_stream(gpu_id, 0);
+
+  loc.alloc(len, sizeof(int));
+
+  // all2all mode begins, init resource, partition keys, pull vals by all2all.
+
+  auto pull_size = gather_inter_keys_by_all2all(gpu_id, len, key, stream);
+  VLOG(2) << "gather_inter_keys_by_all2all sage get_degree finish, pull_size=" << pull_size << ", len=" << len;
+
+  // do single-node multi-card get_node_degree
+  auto result = get_node_degree_single(gpu_id,
+                                       edge_idx,
+                                       loc.d_merged_keys,
+                                       pull_size);
+
+  auto node_degree =
+      memory::AllocShared(place,
+                          len * sizeof(int),
+                          phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+
+  // all2all mode finish, scatter degree values by all2all
+  scatter_inter_vals_by_all2all_common(gpu_id,
+                                 len,
+                                 sizeof(int), //value_bytes
+                                 reinterpret_cast<const int*>(result->ptr()), // in
+                                 reinterpret_cast<int*>(node_degree->ptr()), // out
+                                 reinterpret_cast<int*>(loc.d_merged_vals), // tmp hbm
+                                 stream);
+  return node_degree;
+}
+
+std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree_single(
+    int gpu_id,
+    int edge_idx,
+    uint64_t* key,
+    int len) {
   int total_gpu = resource_->total_device();
   platform::CUDAPlace place = platform::CUDAPlace(resource_->dev_id(gpu_id));
   platform::CUDADeviceGuard guard(resource_->dev_id(gpu_id));
   auto stream = resource_->local_stream(gpu_id, 0);
+
+  auto node_degree =
+      memory::AllocShared(place,
+                          len * sizeof(int),
+                          phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  int* node_degree_ptr = reinterpret_cast<int*>(node_degree->ptr());
+
   int grid_size = (len - 1) / block_size_ + 1;
   int h_left[total_gpu];   // NOLINT
   int h_right[total_gpu];  // NOLINT
@@ -3143,6 +3224,7 @@ void GpuPsGraphTable::get_node_degree(
     destroy_storage(gpu_id, i);
   }
   device_mutex_[gpu_id]->unlock();
+  return node_degree;
 }
 
 NodeQueryResult GpuPsGraphTable::graph_node_sample(int gpu_id,

@@ -113,12 +113,14 @@ class GpuPsGraphTable
   NeighborSampleResult graph_neighbor_sample(int gpu_id,
                                              uint64_t *key,
                                              int sample_size,
-                                             int len);
+                                             int len,
+                                             int neighbor_size_limit);
   NeighborSampleResult graph_neighbor_sample_v2(int gpu_id,
                                                 int idx,
                                                 uint64_t *key,
                                                 int sample_size,
                                                 int len,
+                                                int neighbor_size_limit,
                                                 bool cpu_query_switch,
                                                 bool compress,
                                                 bool weighted);
@@ -128,6 +130,7 @@ class GpuPsGraphTable
                                                 uint64_t *key,
                                                 int sample_size,
                                                 int len,
+                                                int neighbor_size_limit,
                                                 bool cpu_query_switch,
                                                 bool compress,
                                                 bool weighted);
@@ -185,11 +188,18 @@ class GpuPsGraphTable
                          bool return_weight);
   std::vector<std::shared_ptr<phi::Allocation>> get_edge_type_graph(
       int gpu_id, int edge_type_len);
-  void get_node_degree(int gpu_id,
+  std::shared_ptr<phi::Allocation> get_node_degree(int gpu_id,
                        int edge_idx,
                        uint64_t *key,
-                       int len,
-                       std::shared_ptr<phi::Allocation> node_degree);
+                       int len);
+  std::shared_ptr<phi::Allocation> get_node_degree_all2all(int gpu_id,
+                       int edge_idx,
+                       uint64_t *key,
+                       int len);
+  std::shared_ptr<phi::Allocation> get_node_degree_single(int gpu_id,
+                       int edge_idx,
+                       uint64_t *key,
+                       int len);
   int get_feature_of_nodes(int gpu_id,
                            uint64_t *d_walk,
                            uint64_t *d_offset,

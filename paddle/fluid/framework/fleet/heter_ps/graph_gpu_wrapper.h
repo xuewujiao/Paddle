@@ -108,11 +108,14 @@ class GraphGpuWrapper {
                           int part_num,
                           bool reverse,
                           const std::vector<bool>& is_reverse_edge_map);
+  void calc_edge_type_limit();
   int set_node_iter_from_file(std::string ntype2files,
                               std::string nodes_file_path,
                               int part_num,
-                              bool training);
-  int set_node_iter_from_graph(bool training);
+                              bool training,
+                              bool shuffle);
+  int set_node_iter_from_graph(bool training, bool shuffle);
+  void shuffle_start_nodes_for_training();
   int32_t load_next_partition(int idx);
   int32_t get_partition_num(int idx);
   void load_node_weight(int type_id, int idx, std::string path);
@@ -163,11 +166,10 @@ class GraphGpuWrapper {
       std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,
       bool weighted,
       bool return_weight);
-  void get_node_degree(int gpu_id,
-                       int edge_idx,
-                       uint64_t* key,
-                       int len,
-                       std::shared_ptr<phi::Allocation> node_degree);
+  std::shared_ptr<phi::Allocation> get_node_degree(int gpu_id,
+                                                   int edge_idx,
+                                                   uint64_t* key,
+                                                   int len);
   gpuStream_t get_local_stream(int gpuid);
   std::vector<uint64_t> graph_neighbor_sample(
       int gpu_id,
@@ -218,6 +220,7 @@ class GraphGpuWrapper {
       std::vector<std::vector<uint64_t>>& lens);
   std::vector<uint64_t>& get_graph_total_keys();
   std::vector<std::vector<uint64_t>>& get_graph_type_keys();
+  std::unordered_map<int, int>& get_type_to_neighbor_limit();
   std::unordered_map<int, int>& get_graph_type_to_index();
   std::string& get_node_type_size(std::string first_node_type);
   std::string& get_edge_type_size();
