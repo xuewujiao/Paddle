@@ -1640,6 +1640,7 @@ void GraphTable::fennel_graph_edge_partition() {
   UniqueSet keys_unique;
   keys_unique.rehash(total_node);
   NodeQueue node_queue[node_num_];
+
   size_t cnt = 0;
   size_t start_print = 0;
   size_t max_node = 0;
