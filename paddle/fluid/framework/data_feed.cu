@@ -1545,16 +1545,16 @@ int GraphDataGenerator::FillSlotFeature(uint64_t *d_walk, size_t key_num, int te
 
   std::shared_ptr<phi::Allocation> d_each_ins_slot_num_inner_prefix =
       memory::AllocShared(place_,
-                          (conf_.slot_num * key_num) * sizeof(uint32_t));
+                          (slot_num * key_num) * sizeof(uint32_t));
   std::shared_ptr<phi::Allocation> d_each_ins_slot_num = memory::AllocShared(
-      place_, (conf_.slot_num * key_num) * sizeof(uint32_t));
+      place_, (slot_num * key_num) * sizeof(uint32_t));
   uint32_t *d_each_ins_slot_num_ptr =
       reinterpret_cast<uint32_t *>(d_each_ins_slot_num->ptr());
   uint32_t *d_each_ins_slot_num_inner_prefix_ptr =
       reinterpret_cast<uint32_t *>(d_each_ins_slot_num_inner_prefix->ptr());
   CUDA_CHECK(cudaMemsetAsync(d_each_ins_slot_num_ptr,
                              0,
-                             conf_.slot_num * key_num * sizeof(uint32_t),
+                             slot_num * key_num * sizeof(uint32_t),
                              train_stream_));
 
   dim3 grid((key_num - 1) / 256 + 1);
@@ -2585,10 +2585,16 @@ std::shared_ptr<phi::Allocation> GetNodeDegree(
                           phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
   auto edge_to_id = gpu_graph_ptr->edge_to_id;
+  int* node_degree_ptr = reinterpret_cast<int*>(node_degree->ptr());
   for (auto &iter : edge_to_id) {
     int edge_idx = iter.second;
-    gpu_graph_ptr->get_node_degree(
-        conf.gpuid, edge_idx, node_ids, len, node_degree);
+    auto sub_node_degree = gpu_graph_ptr->get_node_degree(
+        conf.gpuid, edge_idx, node_ids, len);
+    int* sub_node_degree_ptr = reinterpret_cast<int*>(sub_node_degree->ptr());
+    cudaMemcpy(node_degree_ptr + edge_idx * len,
+               sub_node_degree_ptr,
+               sizeof(int) * len,
+               cudaMemcpyDeviceToDevice);
   }
   return node_degree;
 }
