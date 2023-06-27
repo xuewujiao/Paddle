@@ -1376,12 +1376,16 @@ void PSGPUWrapper::BuildGPUTask(std::shared_ptr<HeterContext> gpu_task) {
     VLOG(2) << i << " card with dynamic mf contains feasign nums total: "
             << feature_keys_count[i];
     size_max = std::max(size_max, feature_keys_count[i]);
-    resource_->set_keys2rank(i, gpu_task->keys2rank_tables_[i]);
+    if (FLAGS_graph_edges_split_mode == "fennel" ||
+            FLAGS_query_dest_rank_by_multi_node) {
+      resource_->set_keys2rank(i, gpu_task->keys2rank_tables_[i]);
+    }
   }
   if (size_max <= 0) {
     VLOG(0) << "Skip build gpu ps cause feasign nums = " << size_max;
     return;
   }
+
   auto accessor_wrapper_ptr =
       GlobalAccessorFactory::GetInstance().GetAccessorWrapper();
   if (HeterPs_ == NULL) {

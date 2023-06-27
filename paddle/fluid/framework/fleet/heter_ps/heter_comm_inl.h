@@ -3161,7 +3161,6 @@ size_t HeterComm<KeyType, ValType, GradType, GPUAccessor>::
     } else {
       cache.remote_keys_ += h_local_part_sizes[i];
     }
-    if (debug) VLOG(0) << "gpu=" << gpu_id << " h_local_part_sizes[" << i << "]=" << h_local_part_sizes[i];
   }
   CHECK_EQ(fea_size, h_local_part_offsets[node_size_]);
 
