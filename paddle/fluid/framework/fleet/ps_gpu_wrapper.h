@@ -444,7 +444,7 @@ class PSGPUWrapper {
     // set build thread_num and shard_num
     thread_keys_thread_num_ = sparse_table.shard_num();
     thread_keys_shard_num_ = sparse_table.shard_num();
-    VLOG(1) << "ps_gpu build phase thread_num:" << thread_keys_thread_num_
+    VLOG(0) << "ps_gpu build phase thread_num:" << thread_keys_thread_num_
             << " shard_num:" << thread_keys_shard_num_;
 
     pull_thread_pool_.resize(thread_keys_shard_num_);

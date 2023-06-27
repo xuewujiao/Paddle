@@ -1433,7 +1433,7 @@ void GraphTable::dbh_graph_feature_partition() {
   }
 }
 // query all ids rank
-void GraphTable::query_all_ids_rank(const size_t &total, const uint64_t *ids, int *ranks) {
+void GraphTable::query_all_ids_rank(const size_t &total, const uint64_t *ids, uint32_t *ranks) {
   std::vector<std::future<size_t>> wait_tasks;
   size_t step = static_cast<size_t>((total + load_thread_num_ - 1) / load_thread_num_);
   for (size_t start = 0; start < total; start = start + step) {

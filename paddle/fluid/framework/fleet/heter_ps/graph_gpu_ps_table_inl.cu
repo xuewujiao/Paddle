@@ -1966,6 +1966,42 @@ void GpuPsGraphTable::build_graph_from_cpu(
   }
 }
 
+void GpuPsGraphTable::seek_keys_rank(int gpu_id,
+        const uint64_t* d_in_keys,
+        int len,
+        uint32_t* d_out_ranks) {
+
+  platform::CUDADeviceGuard guard(gpu_id);
+  platform::CUDAPlace place = platform::CUDAPlace(resource_->dev_id(gpu_id));
+  auto& loc = storage_[gpu_id];
+  auto stream = resource_->local_stream(gpu_id, 0);
+
+  std::vector<uint64_t> h_keys(len);
+  std::vector<uint32_t> h_ranks(len);
+
+  CUDA_CHECK(cudaMemcpyAsync(
+              h_keys.data(),
+              d_in_keys,
+              sizeof(uint64_t) * len,
+              cudaMemcpyDeviceToHost,
+              stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+
+  for (size_t i = 0; i < len; ++i) {
+    bool hit = false;
+    auto & k = h_keys[i];
+    h_ranks[i] = (k / gpu_num) % node_size_;
+  }
+
+  CUDA_CHECK(cudaMemcpyAsync(
+              d_out_ranks,
+              h_ranks.data(),
+              sizeof(uint32_t) * len,
+              cudaMemcpyHostToDevice,
+              stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+}
+
 NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v3(
     NeighborSampleQuery q, bool cpu_switch, bool compress, bool weighted) {
   if (multi_node_ && FLAGS_enable_graph_multi_node_sampling) {
