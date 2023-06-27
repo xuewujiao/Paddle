@@ -22,9 +22,9 @@
 #include "paddle/fluid/framework/data_feed_factory.h"
 #include "paddle/fluid/framework/fleet/fleet_wrapper.h"
 #include "paddle/fluid/framework/io/fs.h"
+#include "paddle/fluid/framework/threadpool.h"
 #include "paddle/fluid/platform/monitor.h"
 #include "paddle/fluid/platform/timer.h"
-#include "paddle/fluid/framework/threadpool.h"
 #ifdef PADDLE_WITH_PSCORE
 #include "paddle/fluid/distributed/ps/wrapper/fleet.h"
 #include "paddle/fluid/framework/fleet/heter_ps/graph_gpu_wrapper.h"
@@ -487,7 +487,7 @@ void DatasetImpl<T>::LoadIntoMemory() {
 
     for (int64_t i = 0; i < thread_num_; ++i) {
       wait_futures.emplace_back(
-                pool[i]->Run([this, i]() { readers_[i]->DoWalkandSage(); }));
+          pool[i]->Run([this, i]() { readers_[i]->DoWalkandSage(); }));
     }
     for (auto& th : wait_futures) {
       th.get();
@@ -499,15 +499,14 @@ void DatasetImpl<T>::LoadIntoMemory() {
     offsets.resize(thread_num_);
 
     for (int i = 0; i < thread_num_; i++) {
-      auto &host_vec = (*readers_[i]->GetHostVec());
+      auto& host_vec = (*readers_[i]->GetHostVec());
       offsets[i] = node_num;
       node_num += host_vec.size();
     }
     gpu_graph_total_keys_.resize(node_num + 1);
     for (int i = 0; i < thread_num_; i++) {
       uint64_t off = offsets[i];
-      wait_futures.emplace_back(
-                      pool[i]->Run([this, i, off]() {
+      wait_futures.emplace_back(pool[i]->Run([this, i, off]() {
         auto& host_vec = (*readers_[i]->GetHostVec());
         for (size_t j = 0; j < host_vec.size(); j++) {
           gpu_graph_total_keys_[off + j] = host_vec[j];
@@ -534,8 +533,12 @@ void DatasetImpl<T>::LoadIntoMemory() {
       }
     }
 
-    VLOG(1) << "end add edge into gpu_graph_total_keys_ size["
-            << node_num << "]";
+    VLOG(1) << "end add edge into gpu_graph_total_keys_ size[" << node_num
+            << "]";
+    timeline.Pause();
+    VLOG(0) << "DatasetImpl<T>::LoadIntoMemory() end"
+            << ", memory data size=" << input_channel_->Size()
+            << ", cost time=" << timeline.ElapsedSec() << " seconds";
 #endif
   } else {
     std::vector<std::thread> load_threads;
@@ -1216,7 +1219,6 @@ void DatasetImpl<T>::ClearSampleState() {
   }
 #endif
 }
-
 
 template <typename T>
 int64_t DatasetImpl<T>::GetPvDataSize() {
@@ -1988,8 +1990,8 @@ void SlotRecordDataset::DynamicAdjustBatchNum() {
       if (batch_num > thread_max_batch_num) {
         thread_max_batch_num = batch_num;
       }
-      VLOG(3) << "ins num:" << ins_num << ", batch size:"
-              << batch_size << ", batch_num:" << thread_max_batch_num;
+      VLOG(3) << "ins num:" << ins_num << ", batch size:" << batch_size
+              << ", batch_num:" << thread_max_batch_num;
     }
 #ifdef PADDLE_WITH_GLOO
     auto gloo_wrapper = paddle::framework::GlooWrapper::GetInstance();
@@ -2000,7 +2002,7 @@ void SlotRecordDataset::DynamicAdjustBatchNum() {
       }
       std::vector<int> thread_batch_num_vec(1, thread_max_batch_num);
       auto thread_max_batch_num_vec =
-                  gloo_wrapper->AllReduce(thread_batch_num_vec, "max");
+          gloo_wrapper->AllReduce(thread_batch_num_vec, "max");
       thread_max_batch_num = thread_max_batch_num_vec[0];
       VLOG(3) << "thread max batch num:" << thread_max_batch_num;
       for (size_t i = 0; i < readers_.size(); i++) {

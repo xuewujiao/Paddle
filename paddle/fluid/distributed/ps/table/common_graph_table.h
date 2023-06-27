@@ -773,10 +773,12 @@ class GraphTable : public Table {
   void fennel_graph_feature_partition();
   void hard_graph_edge_partition();
   void hard_graph_feature_partition();
+  void fix_feature_node_shards(bool load_slot);
 
   std::vector<uint64_t> graph_total_keys_;
   std::vector<std::vector<uint64_t>> graph_type_keys_;
   std::unordered_map<int, int> type_to_index_;
+  std::vector<std::vector<std::vector<uint64_t>>> edge_shards_keys_;
   robin_hood::unordered_set<uint64_t> unique_all_edge_keys_;
   std::vector<robin_hood::unordered_set<uint64_t>> egde_node_ids_;  // fennel
   std::vector<robin_hood::unordered_set<uint64_t>> graph_type_keys_set_;
@@ -805,6 +807,7 @@ class GraphTable : public Table {
   std::string table_name;
   std::string table_type;
   std::vector<std::string> edge_type_size;
+  std::vector<std::vector<int>> nodeid_to_edgeids_;
 
   std::vector<std::shared_ptr<::ThreadPool>> _shards_task_pool;
   std::vector<std::shared_ptr<::ThreadPool>> _cpu_worker_pool;

@@ -802,8 +802,10 @@ class PSGPUWrapper {
     slot_num_for_pull_feature_ = sparse_slot_num;
     float_slot_num_ = float_slot_num;
     auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
-    gpu_graph_ptr->set_feature_info(slot_num_for_pull_feature_, float_slot_num_);
-    VLOG(0) << "slot_num_for_pull_feature_ is " << slot_num_for_pull_feature_ << ", float_slot_num is " << float_slot_num_;
+    gpu_graph_ptr->set_feature_info(slot_num_for_pull_feature_,
+                                    float_slot_num_);
+    VLOG(0) << "slot_num_for_pull_feature_ is " << slot_num_for_pull_feature_
+            << ", float_slot_num is " << float_slot_num_;
   }
   void SetSlotOffsetVector(const std::vector<int>& slot_offset_vector) {
     slot_offset_vector_ = slot_offset_vector;
@@ -916,7 +918,7 @@ class PSGPUWrapper {
   // rank size
   int GetRankNum(void) { return node_size_; }
   // rank id
-  int GetNCCLRankId(const int &device_id) {
+  int GetNCCLRankId(const int& device_id) {
     return (rank_id_ * device_num_ + device_id);
   }
 
@@ -1023,6 +1025,8 @@ class PSGPUWrapper {
   // infer mode
   bool infer_mode_ = false;
   size_t cpu_device_thread_num_ = 16;
+  // std::atomic<size_t> key_in_this_node_count_{0};
+  // std::atomic<size_t> key_all_count_{0};
 
  protected:
   static bool is_initialized_;

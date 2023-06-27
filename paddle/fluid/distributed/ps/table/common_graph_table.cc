@@ -653,17 +653,7 @@ void GraphTable::release_graph_edge() {
       paddle::framework::GpuGraphStorageMode::WHOLE_HBM) {
     build_graph_total_keys();
   }
-  graph_type_keys_set_.clear();
-  graph_type_keys_set_.resize(edge_shards.size());
 
-  for (size_t k = 0; k < edge_shards.size(); k++) {
-    std::vector<std::vector<uint64_t>> all_edge_keys;
-    this->get_all_id(GraphTableType::EDGE_TABLE, k, 1, &all_edge_keys);
-    graph_type_keys_set_[k].insert(all_edge_keys[0].begin(),
-                                   all_edge_keys[0].end());
-    VLOG(1) << "insert graph_type_keys_set_ " << k
-            << "done, size:" << graph_type_keys_set_[k].size();
-  }
   clear_edge_shard();
 }
 
@@ -1487,11 +1477,35 @@ int32_t GraphTable::parse_edge_and_load(
           return 0;
         }));
   }
-  for (size_t i = 0; i < tasks.size(); i++) tasks[i].get();
+  for (size_t i = 0; i < tasks.size(); i++) {
+    tasks[i].get();
+  }
+  tasks.clear();
 
   if (node_num_ > 1) {
     graph_partition(true);
   }
+
+  // record all start node id
+  for (size_t idx = 0; idx < edge_shards.size(); ++idx) {
+    for (size_t part_id = 0; part_id < shard_num_per_server; ++part_id) {
+      tasks.push_back(load_node_edge_task_pool->enqueue([this, idx, part_id]() {
+        std::vector<std::vector<uint64_t>> all_keys;
+        edge_shards[idx][part_id]->get_all_id(&all_keys, 1);
+        int cnt = all_keys[0].size();
+        edge_shards_keys_[idx][part_id] = std::move(all_keys[0]);
+        all_keys[0].clear();
+        return cnt;
+      }));
+    }
+  }
+  size_t total_cnt = 0;
+  for (auto &t : tasks) {
+    total_cnt += t.get();
+  }
+  tasks.clear();
+  VLOG(0) << "load all etypes total edge nodes count=" << total_cnt;
+
   return 0;
 }
 void GraphTable::graph_partition(bool is_edge) {
@@ -1787,6 +1801,55 @@ void GraphTable::dbh_graph_feature_partition() {
   unique_all_edge_keys_.clear();
   VLOG(0) << "end to process dbh feature shard, duplicate_keys_all:"
           << duplicate_keys_all;
+}
+
+void GraphTable::fix_feature_node_shards(bool load_slot) {
+  CHECK(load_slot) << "only support feature node mode";
+  VLOG(0) << "begin fix feature node type count=" << feature_shards.size()
+          << ", edge count=" << edge_shards.size();
+  std::vector<std::future<std::pair<size_t, size_t>>> tasks;
+  for (size_t idx = 0; idx < feature_shards.size(); ++idx) {
+    for (size_t j = 0; j < feature_shards[idx].size(); ++j) {
+      tasks.push_back(load_node_edge_task_pool->enqueue(
+          [this, idx, j, load_slot]() -> std::pair<size_t, size_t> {
+            size_t cnt = 0;
+            size_t edge_node_cnt = 0;
+            auto &features = feature_shards[idx][j];
+            for (auto edge_idx : nodeid_to_edgeids_[idx]) {
+              auto &shard_keys = edge_shards_keys_[edge_idx][j];
+              edge_node_cnt += shard_keys.size();
+              if (shard_keys.empty()) {
+                continue;
+              }
+              for (auto &key : shard_keys) {
+                if (features->find_node(key) != nullptr) {
+                  continue;
+                }
+                features->add_feature_node(key, false, 0);
+                ++cnt;
+              }
+              // clear free memory
+              shard_keys.clear();
+              shard_keys.shrink_to_fit();
+            }
+            size_t total = features->get_size();
+            VLOG(5) << "fix total edge node count=" << edge_node_cnt
+                    << ", total feature node count=" << total
+                    << ", node idx=" << idx << ", shard id=" << j
+                    << ", count=" << cnt;
+            return {total, cnt};
+          }));
+    }
+  }
+  size_t total = 0;
+  size_t add_cnt = 0;
+  for (auto &t : tasks) {
+    auto pair = t.get();
+    total += pair.first;
+    add_cnt += pair.second;
+  }
+  VLOG(0) << "fix feature node count=" << total << ", add count=" << add_cnt
+          << ", with slot=" << load_slot;
 }
 
 void GraphTable::hard_graph_edge_partition() {
@@ -2368,6 +2431,48 @@ void GraphTable::fennel_graph_feature_partition() {
           << " all_keys:" << keys_all;
 }
 
+// void GraphTable::hard_graph_feature_partition() {
+//   // 取边表和节点表的并集作为最终结果
+//   std::vector<std::mutex *> fea_mutex(feature_shards.size());
+//   for (size_t i = 0; i < feature_shards.size(); i++) {
+//     fea_mutex[i] = new std::mutex();
+//   }
+
+//   std::vector<std::future<size_t>> tasks;
+//   for (size_t i = 0; i < all_edge_keys_.size(); i++) {
+//     tasks.push_back(load_node_edge_task_pool->enqueue(
+//         [&, i, this]() -> size_t {
+//       size_t new_add_num = 0;
+//       for (size_t j = 0; j < all_edge_keys_[i].size(); j++) {
+//         int id = all_edge_keys_[i][j];
+//         Node *node = find_node(GraphTableType::FEATURE_TABLE, id);
+//         if (node == nullptr) {
+//           auto edge_type_list =
+//                 paddle::string::split_string<std::string>(id_to_edge[i],
+//                 "2");
+//           if (feature_to_id.find(edge_type_list[0]) == feature_to_id.end()) {
+//             VLOG(0) << "failed to find edge_type:" << edge_type_list[0];
+//             continue;
+//           }
+//           int node_type_id = feature_to_id[edge_type_list[0]];
+//           fea_mutex[node_type_id]->lock();
+//           feature_shards[node_type_id][id % shard_num]->add_feature_node(id,
+//           false, 0); fea_mutex[node_type_id]->unlock(); new_add_num++;
+//         }
+//       }
+//       return new_add_num;
+//     }));
+//   }
+
+//   size_t all_new_add_num = 0;
+//   for (size_t i = 0; i < tasks.size(); ++i) {
+//     all_new_add_num += tasks[i].get();
+
+//   }
+//   VLOG(0) << "hard_graph_feature_partition all_new_add_num:" <<
+//   all_new_add_num;
+// }
+
 void GraphTable::hard_graph_feature_partition() {
   VLOG(0) << "start to process fennel feature shard";
   std::vector<std::vector<GraphShard *>> tmp_feature_shards;
@@ -2471,6 +2576,8 @@ int32_t GraphTable::parse_node_and_load(std::string ntype2files,
     }
   }
 
+  // fix node edge nodes
+  fix_feature_node_shards(load_slot);
   if (node_num_ > 1) {
     graph_partition(false);
   }
@@ -3842,6 +3949,17 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
               << " shape:" << f_shape << " dtype:" << f_dtype;
     }
   }
+  nodeid_to_edgeids_.resize(feature_to_id.size());
+  for (auto &obj : edge_to_id) {
+    size_t pos = obj.first.find("2");
+    CHECK(pos != std::string::npos);
+    std::string nodetype = obj.first.substr(0, pos);
+    auto it = feature_to_id.find(nodetype);
+    CHECK(it != feature_to_id.end());
+    nodeid_to_edgeids_[it->second].push_back(obj.second);
+    VLOG(0) << "add edge [" << obj.first << "=" << obj.second << "] to ["
+            << nodetype << "=" << it->second << "]";
+  }
   // this->table_name = common.table_name();
   // this->table_type = common.name();
   this->table_name = graph.table_name();
@@ -3863,7 +3981,9 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
 #ifdef PADDLE_WITH_HETERPS
   partitions.resize(id_to_edge.size());
 #endif
+  edge_shards_keys_.resize(id_to_edge.size());
   for (size_t k = 0; k < edge_shards.size(); k++) {
+    edge_shards_keys_[k].resize(shard_num_per_server);
     for (size_t i = 0; i < shard_num_per_server; i++) {
       edge_shards[k].push_back(new GraphShard());
     }
@@ -3904,8 +4024,8 @@ void GraphTable::build_graph_type_keys() {
           << this->feature_to_id.size();
   graph_type_keys_.clear();
   graph_type_keys_.resize(this->feature_to_id.size());
-  // graph_type_keys_set_.clear();
-  // graph_type_keys_set_.resize(this->feature_to_id.size());
+  graph_type_keys_set_.clear();
+  graph_type_keys_set_.resize(this->feature_to_id.size());
 
   int cnt = 0;
   uint64_t total_key = 0;
@@ -3915,7 +4035,7 @@ void GraphTable::build_graph_type_keys() {
     this->get_all_id(GraphTableType::FEATURE_TABLE, node_idx, 1, &keys);
     type_to_index_[node_idx] = cnt;
     total_key += keys[0].size();
-    // graph_type_keys_set_[cnt].insert(keys[0].begin(), keys[0].end());
+    graph_type_keys_set_[cnt].insert(keys[0].begin(), keys[0].end());
     graph_type_keys_[cnt++] = std::move(keys[0]);
   }
   VLOG(0) << "finish build_graph_type_keys, total type keys=" << total_key;
@@ -3934,6 +4054,7 @@ void GraphTable::build_graph_type_keys() {
   VLOG(0)
       << "finish insert feature into graph_total_keys, feature embedding keys="
       << graph_total_keys_.size();
+  // add gpu node table
 }
 
 void GraphTable::build_node_iter_type_keys() {

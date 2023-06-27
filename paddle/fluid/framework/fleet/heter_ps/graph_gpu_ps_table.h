@@ -39,11 +39,16 @@ class GpuPsGraphTable
  public:
   inline int get_table_offset(int gpu_id, GraphTableType type, int idx) const {
     int type_id = type;
+    VLOG(1) << "get_table_offset" << gpu_id << " " << type << " " << idx
+            << " graph_table_num_:" << graph_table_num_
+            << "  feature_table_num_:" << feature_table_num_;
     return gpu_id * (graph_table_num_ + feature_table_num_ +
                      float_feature_table_num_) +
            type_id * graph_table_num_ + idx;
   }
   inline int get_graph_list_offset(int gpu_id, int edge_idx) const {
+    VLOG(1) << "get_graph_list_offset" << gpu_id << " " << edge_idx
+            << " res:" << gpu_id * graph_table_num_ + edge_idx;
     return gpu_id * graph_table_num_ + edge_idx;
   }
   inline int get_graph_fea_list_offset(int gpu_id) const {
@@ -318,6 +323,10 @@ class GpuPsGraphTable
   int cpu_table_status;
   bool infer_mode_ = false;
   int task_pool_size_ = 2;
+  std::vector<double> cpu_set_check_time_ = std::vector<double>(8, 0.0);
+  std::vector<double> all2all_time_ = std::vector<double>(8, 0.0);
+  // double cpu_set_check_time_ = 0.0;
+  // double all2all_time_ = 0.0;
 };
 
 };  // namespace framework

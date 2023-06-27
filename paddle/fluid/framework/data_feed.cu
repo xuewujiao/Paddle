@@ -2713,6 +2713,8 @@ int FillWalkBuf(const std::vector<uint64_t> &h_device_keys_len,
                 HashTable<uint64_t, uint64_t> *table,
                 BufState *buf_state,
                 cudaStream_t stream) {
+  platform::Timer timeline;
+  timeline.Start();
   platform::CUDADeviceGuard guard(conf.gpuid);
 
   ////////
@@ -3041,6 +3043,7 @@ int FillWalkBuf(const std::vector<uint64_t> &h_device_keys_len,
       break;
     }
 
+    timeline.Pause();
     VLOG(1) << "sample " << sample_times << " finish, node_type=" << node_type
             << ", path:[" << path[0] << "," << path[1] << "]"
             << ", start:" << start << ", len:" << tmp_len
@@ -3049,7 +3052,8 @@ int FillWalkBuf(const std::vector<uint64_t> &h_device_keys_len,
             << ", key_this_node_size:" << sample_res.key_in_this_node_size
             << ", all_key_size:" << sample_res.all_key_size << " percent:"
             << double(sample_res.key_in_this_node_size) /
-                   double(sample_res.all_key_size);
+                   double(sample_res.all_key_size)
+            << " sample cost time:" << timeline.ElapsedSec();
   }
   buf_state->Reset(*total_row_ptr);
   paddle::memory::ThrustAllocator<cudaStream_t> allocator(place, stream);
