@@ -540,7 +540,7 @@ void DatasetImpl<T>::LoadIntoMemory() {
         keys2rank_tables_[i] = readers_[i]->GetKeys2RankTable();
       }
       keys_vec_[0]->push_back(zerokey);
-      if (readers_[0]->IsTrainMode()) {
+      if (readers_[0]->IsTrainMode() || readers_[0]->GetSageMode()) {
         ranks_vec_[0]->push_back(0);
       }
     }

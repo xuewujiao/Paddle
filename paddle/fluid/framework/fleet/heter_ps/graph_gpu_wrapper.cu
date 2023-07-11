@@ -1069,7 +1069,7 @@ NeighborSampleResult GraphGpuWrapper::graph_neighbor_sample_v3(
 NeighborSampleResultV2 GraphGpuWrapper::graph_neighbor_sample_sage(
     int gpu_id,
     int edge_type_len,
-    uint64_t *key,
+    const uint64_t* d_keys,
     int sample_size,
     int len,
     std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,
@@ -1078,7 +1078,7 @@ NeighborSampleResultV2 GraphGpuWrapper::graph_neighbor_sample_sage(
   return reinterpret_cast<GpuPsGraphTable *>(graph_table)
       ->graph_neighbor_sample_sage(gpu_id,
                                    edge_type_len,
-                                   key,
+                                   d_keys,
                                    sample_size,
                                    len,
                                    edge_type_graphs,

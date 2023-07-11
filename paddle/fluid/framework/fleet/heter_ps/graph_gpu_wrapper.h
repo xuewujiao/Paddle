@@ -164,7 +164,7 @@ class GraphGpuWrapper {
   NeighborSampleResultV2 graph_neighbor_sample_sage(
       int gpu_id,
       int edge_type_len,
-      uint64_t* key,
+      const uint64_t* d_keys,
       int sample_size,
       int len,
       std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,

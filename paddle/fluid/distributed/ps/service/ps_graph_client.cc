@@ -91,12 +91,6 @@ void PsGraphClient::FinalizeWorker() {
     ars[rank].Clear();
   }
 
-  if (keys2rank_vec.size() > 0) {
-    VLOG(0) << "run in cross sharding mode!";
-  } else {
-    VLOG(0) << "run in hard sharding mode!";
-  }
-
   // split keys to rankid
   for (size_t i = 0; i < num; ++i) {
     auto &k = keys[i];

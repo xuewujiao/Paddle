@@ -225,13 +225,19 @@ class PSGPUWrapper {
   void FilterPull(std::shared_ptr<HeterContext> gpu_task,
                   const int shard_id,
                   const int dim_id);
-  // set mode
+  // set infer mode
   void SetMode(bool infer_mode) {
     infer_mode_ = infer_mode;
     if (HeterPs_ != NULL) {
       HeterPs_->set_mode(infer_mode);
     }
     VLOG(0) << "set infer mode=" << infer_mode;
+  }
+
+  // set sage mode
+  void SetSage(bool sage_mode) {
+    sage_mode_ = sage_mode;
+    VLOG(0) << "set sage mode=" << sage_mode;
   }
 
   void Finalize() {
@@ -1022,6 +1028,8 @@ class PSGPUWrapper {
   uint64_t grad_push_count_ = 0;
   // infer mode
   bool infer_mode_ = false;
+  // sage mode
+  bool sage_mode_ = false;
   size_t cpu_device_thread_num_ = 16;
 
  protected:

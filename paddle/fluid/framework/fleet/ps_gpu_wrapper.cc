@@ -382,7 +382,7 @@ void PSGPUWrapper::PreBuildTask(std::shared_ptr<HeterContext> gpu_task,
               int id) {
         keys2rank_maps[id].reserve(pred_size);
         for (size_t i = 0; i < keys_vec.size(); ++i) {
-          if (!infer_mode_) {
+          if (!infer_mode_ || sage_mode_) {
             CHECK(keys_vec[i]->size() == ranks_vec[i]->size());
             for (size_t j = 0; j < keys_vec[i]->size(); ++j) {
               auto & key = (*keys_vec[i])[j];

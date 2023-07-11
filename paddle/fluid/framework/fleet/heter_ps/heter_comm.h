@@ -452,8 +452,6 @@ class HeterComm {
     platform::Timer local_oper_;
     platform::Timer nvcomp_comp_;
     platform::Timer nvcomp_decomp_;
-    size_t send_bytes_ = 0;
-    size_t recv_bytes_ = 0;
     size_t total_keys_ = 0;
     size_t local_keys_ = 0;
     size_t remote_keys_ = 0;

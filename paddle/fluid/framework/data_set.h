@@ -195,7 +195,6 @@ class DatasetImpl : public Dataset {
  public:
   DatasetImpl();
   virtual ~DatasetImpl() {
-    VLOG(0) << "DatasetImpl is destory! this=" << this;
     if (release_thread_ != nullptr) {
       release_thread_->join();
     }

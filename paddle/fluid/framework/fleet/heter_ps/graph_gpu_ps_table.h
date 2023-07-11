@@ -110,10 +110,6 @@ class GpuPsGraphTable
                                                 bool cpu_switch,
                                                 bool compress,
                                                 bool weighted);
-  void seek_keys_rank(int gpu_id,
-      const uint64_t* d_in_keys,
-      int len,
-      uint32_t* d_out_ranks);
   NeighborSampleResult graph_neighbor_sample(int gpu_id,
                                              uint64_t *key,
                                              int sample_size,
@@ -141,7 +137,7 @@ class GpuPsGraphTable
   NeighborSampleResultV2 graph_neighbor_sample_sage(
       int gpu_id,
       int edge_type_len,
-      uint64_t* key,
+      const uint64_t* d_keys,
       int sample_size,
       int len,
       std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,
@@ -150,7 +146,7 @@ class GpuPsGraphTable
   NeighborSampleResultV2 graph_neighbor_sample_all_edge_type(
       int gpu_id,
       int edge_type_len,
-      uint64_t *key,
+      const uint64_t *key,
       int sample_size,
       int len,
       std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,
@@ -160,7 +156,7 @@ class GpuPsGraphTable
   NeighborSampleResultV2 graph_neighbor_sample_sage_all2all(
       int gpu_id,
       int edge_type_len,
-      uint64_t *key,
+      const uint64_t *key,
       int sample_size,
       int len,
       std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,
