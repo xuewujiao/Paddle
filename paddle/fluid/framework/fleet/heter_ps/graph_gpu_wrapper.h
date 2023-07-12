@@ -231,6 +231,7 @@ class GraphGpuWrapper {
   void set_keys2rank(int gpu_id,
           std::shared_ptr<HashTable<uint64_t, uint32_t>> keys2rank);
   void show_mem(const char* msg);
+  void debug(const char* desc) const;
 
   std::unordered_map<std::string, int> edge_to_id, node_to_id;
   std::vector<std::string> id_to_feature, id_to_edge;
