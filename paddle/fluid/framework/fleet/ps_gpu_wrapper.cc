@@ -403,7 +403,7 @@ void PSGPUWrapper::PreBuildTask(std::shared_ptr<HeterContext> gpu_task,
             }
           }
         }
-        VLOG(0) << "build keys2rank_map, shard_idx=" << id
+        VLOG(2) << "build keys2rank_map, shard_idx=" << id
             << " shard_keys=" << keys2rank_maps[id].size();
       };
 

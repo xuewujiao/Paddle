@@ -3386,7 +3386,7 @@ int FillWalkBuf(const std::vector<uint64_t> &h_device_keys_len,
       break;
     }
 
-    VLOG(0) << "gpu=" << conf.gpuid
+    VLOG(2) << "gpu=" << conf.gpuid
         << ", sample " << sample_times << " finish, node_type=" << node_type
         << ", path:[" << path[0] << "," << path[1] << "]"
         << ", start:" << start << ", len:" << tmp_len

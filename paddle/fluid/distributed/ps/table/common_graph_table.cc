@@ -46,7 +46,7 @@ PADDLE_DEFINE_EXPORTED_bool(graph_edges_split_only_by_src_id,
 PADDLE_DEFINE_EXPORTED_string(
     graph_edges_split_mode,
     "hard",
-    "graph split split, optional: [dbh,hard,none], default:hard");
+    "graph split split, optional: [dbh,hard,fennel,none], default:hard");
 PADDLE_DEFINE_EXPORTED_bool(graph_edges_split_debug,
                             false,
                             "graph split by debug");

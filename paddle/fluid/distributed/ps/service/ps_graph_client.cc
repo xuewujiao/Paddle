@@ -163,7 +163,7 @@ void PsGraphClient::FinalizeWorker() {
   }
   wg.wait();
   timeline.Pause();
-  VLOG(0) << "PullSparsePtr local table id=" << table_id
+  VLOG(3) << "PullSparsePtr local table id=" << table_id
           << ", pass id=" << pass_id << ", shard_id=" << shard_id
           << ", dim_id=" << dim_id << ", keys count=" << num
           << ", span=" << timeline.ElapsedSec();
@@ -254,7 +254,7 @@ void PsGraphClient::request_handler(const simple::RpcMessageHead &head,
           }
           shard_mutex.unlock();
 
-          VLOG(0) << "end pull remote table id=" << table_id
+          VLOG(3) << "end pull remote table id=" << table_id
                   << ", pass id=" << GET_PASS_ID(id)
                   << ", shard_id=" << shard_id << ", keys count=" << num
                   << ", span=" << timeline.ElapsedSec();
