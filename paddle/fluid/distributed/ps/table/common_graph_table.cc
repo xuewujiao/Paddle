@@ -357,6 +357,165 @@ paddle::framework::GpuPsCommGraph GraphTable::make_gpu_ps_graph(
   return res;
 }
 
+// paddle::framework::GpuPsCommRankFea GraphTable::make_gpu_ps_rank_fea(
+//     int gpu_id) {
+//   VLOG(0) << " enter make_gpu_ps_rank_fea";
+//   paddle::framework::GpuPsCommRankFea res;
+//   if(egde_node_rank_.empty()) {
+//     return res;
+//   }
+
+//   std::vector<std::vector<uint64_t>> node_array(shard_num_per_server);
+//   std::vector<std::vector<uint32_t>> rank_array(shard_num_per_server);
+//   auto rank_nodes = egde_node_rank_.get_rank_nodes();
+//   // 遍历 rank_nodes[i][shard_num]，分8份，分配到 res
+//   std::vector<std::future<size_t>> tasks;
+//   VLOG(0) << " enter make_gpu_ps_rank_fea 1";
+//   for (size_t shard_id = 0; shard_id < shard_num_per_server; shard_id++) {
+//     size_t pre_size = 0;
+//     for (int i = 0; i < node_num_; i++) {
+//       pre_size +=  rank_nodes[i][shard_id].size() / 8;
+//     }
+//     VLOG(0) << shard_id << " pre_size:" << pre_size;
+//     node_array[shard_id].reserve(pre_size * 4);
+//     rank_array[shard_id].reserve(pre_size * 4);
+//   }
+
+//   auto mutexs = new std::mutex[shard_num_per_server];
+//   for (int i = 0; i < node_num_; i++) {
+//       for (size_t shard_id = 0; shard_id < shard_num_per_server; shard_id++) {
+//         tasks.push_back(_cpu_worker_pool[gpu_id]->enqueue([&, i, gpu_id, shard_id, rank_nodes, this]() -> size_t {
+//           auto rank_node = rank_nodes[i][shard_id];
+//           size_t start = 0;
+          
+//           for (auto it = rank_node.begin(); it != rank_node.end(); it++) {
+//             // VLOG(0) << shard_id << "  for " << i << ", " << gpu_id << " " << *it % 8 << "  " << *it;
+//             if (gpu_id == static_cast<int>(*it % 8)) {
+//               // node_array[shard_id][start] = *it;
+//               mutexs[shard_id].lock();
+//               node_array[shard_id].push_back(*it);
+//               rank_array[shard_id].push_back(i);
+//               mutexs[shard_id].unlock();
+//               // rank_array[shard_id][start++] = i;
+//               start++;
+//             }
+//           }
+//           VLOG(0) << shard_id << " start:" << start << "  " << i << " done, " << gpu_id;
+//           return start;
+//         }));
+//       }
+//   }
+
+//   size_t all_size = 0;
+//   for (size_t i = 0; i < tasks.size(); i++) {
+//     all_size += tasks[i].get();
+//   }
+//   // size_t all_size = 0;
+//   // for (int i = 0; i < node_num_; i++) {
+//   //     for (size_t shard_id = 0; shard_id < shard_num_per_server; shard_id++) {
+//   //       auto rank_node = rank_nodes[i][shard_id];
+//   //       size_t start = 0;
+//   //       for (auto it = rank_node.begin(); it != rank_node.end(); it++) {
+//   //         if (gpu_id == static_cast<int>(*it % 8)) {
+//   //           // node_array[shard_id][start] = *it;
+//   //           node_array[shard_id].push_back(*it);
+//   //           VLOG(0) << " rank fea node id " << i << " shard id " << shard_id << " gpu :" << gpu_id << " push 0";
+//   //           rank_array[shard_id].push_back(i);
+//   //           VLOG(0) << " rank fea node id " << i << " shard id " << shard_id << " gpu :" << gpu_id << " push 1";
+//   //           // rank_array[shard_id][start++] = i;
+//   //           start++;
+//   //         }
+//   //       }
+//   //       all_size += start;
+//   //     }
+//   // }
+//   VLOG(0) << " enter make_gpu_ps_rank_fea  2, all_size:" << all_size;
+
+//   res.init_on_cpu(all_size);
+//   VLOG(0) << " enter make_gpu_ps_rank_fea  3";
+
+//   tasks.clear();
+//   size_t ind = 0;
+//   for (size_t shard_id = 0; shard_id < shard_num_per_server; shard_id++) {
+//     tasks.push_back(
+//         _cpu_worker_pool[gpu_id]->enqueue([&, shard_id, ind, this]() -> size_t {
+//           auto start = ind;
+//           VLOG(0) << shard_id << " =======start " << start << " size:" << node_array[shard_id].size();
+//           node_array[shard_id].shrink_to_fit();
+//           rank_array[shard_id].shrink_to_fit();
+//           for (size_t j = 0; j < node_array[shard_id].size(); j++) {
+//             res.node_list[start] = node_array[shard_id][j];
+//             res.rank_list[start++] = rank_array[shard_id][j];
+//           }
+//           node_array[shard_id].clear();
+//           rank_array[shard_id].clear();
+//           return 0;
+//         }));
+//     ind += node_array[shard_id].size();
+//   }
+//   for (size_t i = 0; i < tasks.size(); i++) tasks[i].get();
+//   VLOG(0) << " enter make_gpu_ps_rank_fea  4";
+//   return res;
+// }
+
+
+paddle::framework::GpuPsCommRankFea GraphTable::make_gpu_ps_rank_fea(
+    int gpu_id) {
+  paddle::framework::GpuPsCommRankFea res;
+  if(egde_node_rank_.empty()) {
+    return res;
+  }
+  std::vector<size_t> node_num_vec(shard_num_per_server, 0);
+  auto rank_nodes = egde_node_rank_.get_rank_nodes();
+  // 遍历 rank_nodes[i][shard_num]，分8份，分配到 res
+  std::vector<std::future<size_t>> tasks;
+
+  auto mutexs = new std::mutex[shard_num_per_server];
+  for (int i = 0; i < node_num_; i++) {
+    for (size_t shard_id = 0; shard_id < shard_num_per_server; shard_id++) {
+      tasks.push_back(_cpu_worker_pool[gpu_id]->enqueue([i, gpu_id, shard_id, &rank_nodes, &node_num_vec, &mutexs]() -> size_t {
+        auto &rank_node = rank_nodes[i][shard_id];
+        size_t start = 0;
+        for (auto it = rank_node.begin(); it != rank_node.end(); it++) {
+          if (gpu_id == static_cast<int>(*it % 8)) {
+            start++;
+          }
+        }
+        mutexs[shard_id].lock();
+        node_num_vec[shard_id] += start;
+        mutexs[shard_id].unlock();
+        return start;
+      }));
+    }
+  }
+  size_t all_size = 0;
+  for (size_t i = 0; i < tasks.size(); i++) {
+    all_size += tasks[i].get();
+  }
+  res.init_on_cpu(all_size);
+  tasks.clear();
+  size_t ind = 0;
+  for (size_t shard_id = 0; shard_id < shard_num_per_server; shard_id++) {
+    tasks.push_back(
+        _cpu_worker_pool[gpu_id]->enqueue([&, shard_id, ind, gpu_id, this]() -> size_t {
+          auto start = ind;
+          for (int i = 0; i < node_num_; i++) {
+            auto &rank_node = rank_nodes[i][shard_id];
+            for (auto it = rank_node.begin(); it != rank_node.end(); it++) {
+              if (gpu_id == static_cast<int>((*it) % 8)) {
+                res.node_list[start] = *it;
+                res.rank_list[start++] = i;
+              }
+            }
+          }
+          return 0;
+        }));
+    ind += node_num_vec[shard_id];
+  }
+  for (size_t i = 0; i < tasks.size(); i++) tasks[i].get();
+  return res;
+}
+
 int32_t GraphTable::add_node_to_ssd(
     int type_id, int idx, uint64_t src_id, char *data, int len) {
   if (_db != NULL) {
@@ -1209,9 +1368,10 @@ int32_t GraphTable::parse_edge_and_load(
   }
   tasks.clear();
 
-  if (node_num_ > 1) {
-    graph_partition(true);
-  }
+  graph_partition(true);
+  // if (node_num_ > 1) {
+  //   graph_partition(true);
+  // }
 
   // record all start node id
   for (size_t idx = 0; idx < edge_shards.size(); ++idx) {
@@ -1959,9 +2119,10 @@ int32_t GraphTable::parse_node_and_load(std::string ntype2files,
   }
   // fix node edge nodes
   fix_feature_node_shards(load_slot);
-  if (node_num_ > 1) {
-    graph_partition(false);
-  }
+  graph_partition(false);
+  // if (node_num_ > 1) {
+  //   graph_partition(false);
+  // }
 
   return 0;
 }
@@ -3402,7 +3563,7 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
   shard_start = _shard_idx * shard_num_per_server;
   shard_end = shard_start + shard_num_per_server;
   VLOG(0) << "in init graph table shard idx = " << _shard_idx << " shard_start "
-          << shard_start << " shard_end " << shard_end;
+          << shard_start << " shard_end " << shard_end << " shard_num_per_server:" << shard_num_per_server;
   edge_shards.resize(id_to_edge.size());
   node_weight.resize(2);
   node_weight[0].resize(id_to_edge.size());
