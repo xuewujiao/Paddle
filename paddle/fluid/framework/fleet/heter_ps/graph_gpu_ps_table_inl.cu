@@ -1654,6 +1654,7 @@ void GpuPsGraphTable::reset_rank_info(int gpu_id,
   if (offset < rank_tables_.size()) {
     delete rank_tables_[offset];
     rank_tables_[offset] = new RankTable(capacity, stream);
+    cudaStreamSynchronize(stream);
   }
 }
 
@@ -1886,7 +1887,6 @@ void GpuPsGraphTable::build_rank_fea_on_single_gpu(const GpuPsCommRankFea& g,
   size_t capacity = std::max((uint64_t)1, g.feature_size) / load_factor_;
   reset_rank_info(gpu_id, capacity, g.feature_size);
   int offset = get_rank_list_offset(gpu_id);
-  auto stream = get_local_stream(gpu_id);
   if (g.feature_size > 0) {
     rank_build_ps(gpu_id,
              g.node_list,
@@ -1897,7 +1897,6 @@ void GpuPsGraphTable::build_rank_fea_on_single_gpu(const GpuPsCommRankFea& g,
   } else {
     rank_build_ps(gpu_id, NULL, NULL, 0, HBMPS_MAX_BUFF, 8);
   }
-  cudaStreamSynchronize(stream);
   VLOG(1) << "gpu rank_feature info card :" << gpu_id 
           << " finish, size:" << g.feature_size;
 }
