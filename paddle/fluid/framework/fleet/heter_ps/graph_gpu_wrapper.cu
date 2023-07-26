@@ -21,7 +21,8 @@
 
 DECLARE_int32(gpugraph_storage_mode);
 DECLARE_bool(graph_metapath_split_opt);
-
+DECLARE_string(graph_edges_split_mode);
+DECLARE_bool(multi_node_sample_use_gpu_table);
 namespace paddle {
 namespace framework {
 
@@ -1019,6 +1020,58 @@ void GraphGpuWrapper::build_gpu_graph_float_fea(
   return;
 }
 
+void GraphGpuWrapper::seek_keys_rank(int gpu_id,
+                      const uint64_t* d_in_keys,
+                      int len,
+                      uint32_t* d_out_ranks) {
+  platform::CUDADeviceGuard guard(gpu_id);
+  platform::CUDAPlace place = platform::CUDAPlace(gpu_id);
+  auto stream = get_local_stream(gpu_id);
+
+
+  if (FLAGS_graph_edges_split_mode == "fennel" ) {
+    if (FLAGS_multi_node_sample_use_gpu_table) {
+      // fennel下，FLAGS_multi_node_sample_use_gpu_table为True
+      GpuPsGraphTable *g = reinterpret_cast<GpuPsGraphTable *>(graph_table);
+      g->get_rank_info_of_nodes(gpu_id, d_in_keys, d_out_ranks, len);
+      return;
+    }
+  } 
+  
+  std::vector<uint64_t> h_keys(len);
+  std::vector<uint32_t> h_ranks(len);
+  CUDA_CHECK(cudaMemcpyAsync(
+              h_keys.data(),
+              d_in_keys,
+              sizeof(uint64_t) * len,
+              cudaMemcpyDeviceToHost,
+              stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+
+  if (FLAGS_graph_edges_split_mode == "fennel") {
+    // fennel下，但 FLAGS_multi_node_sample_use_gpu_table为False
+    reinterpret_cast<GpuPsGraphTable *>(graph_table)
+        ->cpu_graph_table_->query_all_ids_rank(len, h_keys.data(), h_ranks.data());
+  } else {
+    // 硬拆下，cpu上进行取余得到
+    auto gpu_num = reinterpret_cast<GpuPsGraphTable *>(graph_table)
+        ->get_device_num();
+    for (size_t i = 0; i < len; ++i) {
+      bool hit = false;
+      auto & k = h_keys[i];
+      h_ranks[i] = (k / gpu_num) % node_size_;
+    }
+  }
+
+  CUDA_CHECK(cudaMemcpyAsync(
+              d_out_ranks,
+              h_ranks.data(),
+              sizeof(uint32_t) * len,
+              cudaMemcpyHostToDevice,
+              stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+}
+
 NeighborSampleResult GraphGpuWrapper::graph_neighbor_sample_v3(
     NeighborSampleQuery q, bool cpu_switch, bool compress, bool weighted) {
   return reinterpret_cast<GpuPsGraphTable *>(graph_table)
@@ -1028,7 +1081,7 @@ NeighborSampleResult GraphGpuWrapper::graph_neighbor_sample_v3(
 NeighborSampleResultV2 GraphGpuWrapper::graph_neighbor_sample_sage(
     int gpu_id,
     int edge_type_len,
-    uint64_t *key,
+    const uint64_t* d_keys,
     int sample_size,
     int len,
     std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,
@@ -1037,7 +1090,7 @@ NeighborSampleResultV2 GraphGpuWrapper::graph_neighbor_sample_sage(
   return reinterpret_cast<GpuPsGraphTable *>(graph_table)
       ->graph_neighbor_sample_sage(gpu_id,
                                    edge_type_len,
-                                   key,
+                                   d_keys,
                                    sample_size,
                                    len,
                                    edge_type_graphs,
@@ -1239,8 +1292,28 @@ void GraphGpuWrapper::release_graph_edge() {
 }
 
 void GraphGpuWrapper::release_graph_node() {
-  return reinterpret_cast<GpuPsGraphTable *>(graph_table)
+  reinterpret_cast<GpuPsGraphTable *>(graph_table)
       ->cpu_graph_table_->release_graph_node();
+  // fennel 下 构造gpu表
+  if (strncasecmp(FLAGS_graph_edges_split_mode.c_str(), "fennel", 6) == 0 && FLAGS_multi_node_sample_use_gpu_table) {
+    debug_gpu_memory_info("release_graph_node fennel gputable start");
+    VLOG(0) << "begin build rank gpu table";
+    GpuPsGraphTable *g = reinterpret_cast<GpuPsGraphTable *>(graph_table);
+    std::vector<std::future<int>> tasks;
+    for (int i = 0; i < 8; i++) {
+      tasks.push_back(upload_task_pool->enqueue([&, i, this]() -> int {
+        // build rank feature
+        GpuPsCommRankFea sub_graph =
+            g->cpu_graph_table_->make_gpu_ps_rank_fea(i);
+        g->build_rank_fea_on_single_gpu(sub_graph, i);
+        sub_graph.release_on_cpu();
+        return 0;
+      }));
+    }
+    for (size_t i = 0; i < tasks.size(); i++) tasks[i].get();
+    debug_gpu_memory_info("upload_batch feature end");
+    VLOG(0) << "end build rank gpu table";
+  }
 }
 
 std::vector<uint64_t> &GraphGpuWrapper::get_graph_total_keys() {
@@ -1261,6 +1334,11 @@ std::unordered_map<int, int> &GraphGpuWrapper::get_type_to_neighbor_limit() {
 std::unordered_map<int, int> &GraphGpuWrapper::get_graph_type_to_index() {
   return reinterpret_cast<GpuPsGraphTable *>(graph_table)
       ->cpu_graph_table_->type_to_index_;
+}
+
+void GraphGpuWrapper::set_keys2rank(int gpu_id,
+        std::shared_ptr<HashTable<uint64_t, uint32_t>> keys2rank) {
+  reinterpret_cast<GpuPsGraphTable *>(graph_table)->set_keys2rank(gpu_id, keys2rank);
 }
 
 std::string &GraphGpuWrapper::get_node_type_size(std::string first_node_type) {

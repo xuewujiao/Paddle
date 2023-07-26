@@ -495,6 +495,9 @@ class GraphTable : public Table {
       }
       return -1;
     }
+    std::vector<std::vector<robin_hood::unordered_set<uint64_t>>> get_rank_nodes() {
+      return rank_nodes_;
+    }
   private:
     int node_num_ = -1;
     int shard_num_ = -1;
@@ -634,7 +637,7 @@ class GraphTable : public Table {
   Node *find_node(GraphTableType table_type, int idx, uint64_t id);
   Node *find_node(GraphTableType table_type, uint64_t id);
   // query all ids rank
-  void query_all_ids_rank(const size_t &total, const uint64_t *ids, int *ranks);
+  void query_all_ids_rank(const size_t &total, const uint64_t *ids, uint32_t *ranks);
 
   virtual int32_t Pull(TableContext &context) { return 0; }  // NOLINT
   virtual int32_t Push(TableContext &context) { return 0; }  // NOLINT
@@ -718,6 +721,7 @@ class GraphTable : public Table {
       int gpu_id, std::vector<uint64_t> &node_ids, int slot_num);  // NOLINT
   virtual paddle::framework::GpuPsCommGraphFloatFea make_gpu_ps_graph_float_fea(
       int gpu_id, std::vector<uint64_t> &node_ids, int float_slot_num);  // NOLINT
+  virtual paddle::framework::GpuPsCommRankFea make_gpu_ps_rank_fea(int gpu_id);
   int32_t Load_to_ssd(const std::string &path, const std::string &param);
   int64_t load_graph_to_memory_from_ssd(int idx,
                                         std::vector<uint64_t> &ids);  // NOLINT

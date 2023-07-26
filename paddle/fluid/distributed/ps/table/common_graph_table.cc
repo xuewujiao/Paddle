@@ -46,7 +46,7 @@ PADDLE_DEFINE_EXPORTED_bool(graph_edges_split_only_by_src_id,
 PADDLE_DEFINE_EXPORTED_string(
     graph_edges_split_mode,
     "hard",
-    "graph split split, optional: [dbh,hard,none], default:hard");
+    "graph split split, optional: [dbh,hard,fennel,none], default:hard");
 PADDLE_DEFINE_EXPORTED_bool(graph_edges_split_debug,
                             false,
                             "graph split by debug");
@@ -354,6 +354,63 @@ paddle::framework::GpuPsCommGraph GraphTable::make_gpu_ps_graph(
     }
     offset += edge_array[i].size();
   }
+  return res;
+}
+
+paddle::framework::GpuPsCommRankFea GraphTable::make_gpu_ps_rank_fea(
+    int gpu_id) {
+  paddle::framework::GpuPsCommRankFea res;
+  if(egde_node_rank_.empty()) {
+    return res;
+  }
+  std::vector<size_t> node_num_vec(shard_num_per_server, 0);
+  auto rank_nodes = egde_node_rank_.get_rank_nodes();
+  // 遍历 rank_nodes[i][shard_num]，分8份，分配到 res
+  std::vector<std::future<size_t>> tasks;
+
+  auto mutexs = new std::mutex[shard_num_per_server];
+  for (int i = 0; i < node_num_; i++) {
+    for (size_t shard_id = 0; shard_id < shard_num_per_server; shard_id++) {
+      tasks.push_back(_cpu_worker_pool[gpu_id]->enqueue([i, gpu_id, shard_id, &rank_nodes, &node_num_vec, &mutexs]() -> size_t {
+        auto &rank_node = rank_nodes[i][shard_id];
+        size_t start = 0;
+        for (auto it = rank_node.begin(); it != rank_node.end(); it++) {
+          if (gpu_id == static_cast<int>(*it % 8)) {
+            start++;
+          }
+        }
+        mutexs[shard_id].lock();
+        node_num_vec[shard_id] += start;
+        mutexs[shard_id].unlock();
+        return start;
+      }));
+    }
+  }
+  size_t all_size = 0;
+  for (size_t i = 0; i < tasks.size(); i++) {
+    all_size += tasks[i].get();
+  }
+  res.init_on_cpu(all_size);
+  tasks.clear();
+  size_t ind = 0;
+  for (size_t shard_id = 0; shard_id < shard_num_per_server; shard_id++) {
+    tasks.push_back(
+        _cpu_worker_pool[gpu_id]->enqueue([&, shard_id, ind, gpu_id, this]() -> size_t {
+          auto start = ind;
+          for (int i = 0; i < node_num_; i++) {
+            auto &rank_node = rank_nodes[i][shard_id];
+            for (auto it = rank_node.begin(); it != rank_node.end(); it++) {
+              if (gpu_id == static_cast<int>((*it) % 8)) {
+                res.node_list[start] = *it;
+                res.rank_list[start++] = i;
+              }
+            }
+          }
+          return 0;
+        }));
+    ind += node_num_vec[shard_id];
+  }
+  for (size_t i = 0; i < tasks.size(); i++) tasks[i].get();
   return res;
 }
 
@@ -1433,7 +1490,7 @@ void GraphTable::dbh_graph_feature_partition() {
   }
 }
 // query all ids rank
-void GraphTable::query_all_ids_rank(const size_t &total, const uint64_t *ids, int *ranks) {
+void GraphTable::query_all_ids_rank(const size_t &total, const uint64_t *ids, uint32_t *ranks) {
   std::vector<std::future<size_t>> wait_tasks;
   size_t step = static_cast<size_t>((total + load_thread_num_ - 1) / load_thread_num_);
   for (size_t start = 0; start < total; start = start + step) {
@@ -3453,7 +3510,7 @@ void GraphTable::calc_edge_type_limit() {
   std::vector<std::vector<int>> neighbor_size_array;
   neighbor_size_array.resize(task_pool_size_);
 
-  int max_neighbor_size;
+  int max_neighbor_size = 0;
   int neighbor_size_limit;
   size_t size_limit;
   double neighbor_size_percent = FLAGS_graph_neighbor_size_percent;

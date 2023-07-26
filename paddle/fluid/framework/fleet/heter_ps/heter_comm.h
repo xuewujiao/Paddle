@@ -160,28 +160,11 @@ class HeterComm {
 
 #if defined(PADDLE_WITH_CUDA)
   template <typename Sgd>
-  void push_sparse_multi_node(int num,
-                              KeyType* d_keys,
-                              GradType* d_grads,
-                              size_t len,
-                              Sgd& sgd);  // NOLINT
-
-  template <typename Sgd>
   void update_one_table(int num,
                         KeyType* d_keys,
                         GradType* d_grads,
                         size_t len,
                         Sgd& sgd);  // NOLINT
-
-  int gather_one_node_grad(int num,
-                           KeyType* d_keys,
-                           GradType* d_grads,
-                           int len);
-
-  int gather_multi_node_grad(int num,
-                             KeyType* d_keys,
-                             GradType* d_grads,
-                             int len);
 
   void set_nccl_comm_and_size(const std::vector<ncclComm_t>& inner_comms,
                               const std::vector<ncclComm_t>& inter_comms,
@@ -445,6 +428,16 @@ class HeterComm {
     platform::Timer inner_barrier_;
     platform::Timer node_span_;
     platform::Timer node_barrier_;
+
+    platform::Timer node_wait_;
+    platform::Timer node_trans_;
+    platform::Timer node_p2p_;
+    platform::Timer local_oper_;
+    platform::Timer nvcomp_comp_;
+    platform::Timer nvcomp_decomp_;
+    size_t total_keys_ = 0;
+    size_t local_keys_ = 0;
+    size_t remote_keys_ = 0;
   };
 
   void init_path();
@@ -578,7 +571,7 @@ class HeterComm {
   size_t gather_inter_keys_by_all2all(const int& gpu_id,
                                       const size_t& fea_size,
                                       const KeyType* d_in_keys,
-                                      const cudaStream_t& stream);
+                                      const cudaStream_t& stream, bool debug=false);
   void scatter_inter_vals_by_all2all(const int& gpu_id,
                                      const size_t& fea_size,
                                      const char* d_in_vals,
@@ -664,7 +657,7 @@ class HeterComm {
                               const int& trans_id,
                               const size_t& value_bytes,
                               const cudaStream_t& stream);
-  void scatter_inter_vals_by_copy(const int& gpu_id,
+  void scatter_inner_vals_by_copy(const int& gpu_id,
                                   const size_t& fea_size,
                                   const char* d_in_vals,
                                   void* d_out_vals,
@@ -692,7 +685,7 @@ class HeterComm {
                     const void* d_in_grads,
                     void* d_out_grads,
                     const cudaStream_t& stream);
-  size_t gather_inter_gradient_by_copy(const int& gpu_id,
+  size_t gather_inner_gradient_by_copy(const int& gpu_id,
                                        const size_t& push_size,
                                        KeyType* d_keys,
                                        void* d_push_vals,
