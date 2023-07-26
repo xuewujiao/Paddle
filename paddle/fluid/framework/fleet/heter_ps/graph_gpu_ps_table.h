@@ -70,7 +70,6 @@ class GpuPsGraphTable
       VLOG(0) << "float_feature_table_num set to 1";
       this->float_feature_table_num_ = 1;
     }
-
     gpu_num = resource_->total_device();
     memset(global_device_map, -1, sizeof(global_device_map));
 
