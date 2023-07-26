@@ -26,6 +26,7 @@
 #ifdef PADDLE_WITH_HETERPS
 
 DECLARE_double(gpugraph_hbm_table_load_factor);
+DECLARE_bool(multi_node_sample_use_gpu_table);
 
 namespace paddle {
 namespace framework {
@@ -76,7 +77,7 @@ class GpuPsGraphTable
     tables_ = std::vector<Table *>(
         gpu_num * (graph_table_num_ + feature_table_num_ + float_feature_table_num_), NULL);
     
-    if (true) {
+    if (FLAGS_multi_node_sample_use_gpu_table) {
       VLOG(0) << "rank_table_num set to 1";
       this->rank_table_num_ = 1;
       rank_tables_ = std::vector<RankTable *>(gpu_num * rank_table_num_, NULL);
