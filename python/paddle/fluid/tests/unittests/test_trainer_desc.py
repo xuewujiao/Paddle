@@ -49,9 +49,12 @@ class TestTrainerDesc(unittest.TestCase):
         trainer_desc = fluid.trainer_desc.TrainerDesc()
         trainer_desc._set_dump_fields(["a", "b"])
         trainer_desc._set_is_dump_in_simple_mode(True)
+        trainer_desc._set_dump_num_decimals(9)
 
         is_dump_in_simple_mode = trainer_desc.proto_desc.is_dump_in_simple_mode
+        dump_num_decimals = trainer_desc.proto_desc.dump_num_decimals
         self.assertEqual(is_dump_in_simple_mode, 1)
+        self.assertEqual(dump_num_decimals, 9)
 
 
 if __name__ == '__main__':
