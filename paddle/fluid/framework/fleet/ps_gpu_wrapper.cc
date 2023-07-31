@@ -942,13 +942,13 @@ void PSGPUWrapper::PartitionKey(std::shared_ptr<HeterContext> gpu_task) {
 #ifdef PADDLE_WITH_PSCORE
     while (true) {
       auto tt =
-          fleet_ptr_->worker_ptr_->PartitionKey(i,
-                                                this->table_id_,
-                                                local_dim_keys[i][j].data(),
-                                                key_size,
-                                                gpu_task->pass_id_,
-                                                gpu_task->keys2rank_map_vec_,
-                                                j);
+          fleet_ptr_->worker_ptr_->PullSparseKey(i,
+                                                 this->table_id_,
+                                                 local_dim_keys[i][j].data(),
+                                                 key_size,
+                                                 gpu_task->pass_id_,
+                                                 gpu_task->keys2rank_map_vec_,
+                                                 j);
       bool flag = true;
 
       tt.wait();

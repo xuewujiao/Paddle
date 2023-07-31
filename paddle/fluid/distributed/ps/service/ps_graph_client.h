@@ -56,7 +56,7 @@ class PsGraphClient : public PsLocalClient {
       const std::vector<std::unordered_map<uint64_t, uint32_t>> &keys2rank_vec,
       const uint16_t &dim_id = 0);
 
-  virtual ::std::future<int32_t> PartitionKey(
+  virtual ::std::future<int32_t> PullSparseKey(
       int shard_id,
       size_t table_id,
       const uint64_t *keys,
@@ -71,7 +71,7 @@ class PsGraphClient : public PsLocalClient {
  public:
   void request_handler(const simple::RpcMessageHead &head,
                        paddle::framework::BinaryArchive &iar);  // NOLINT
-  void request_partition_key_handler(const simple::RpcMessageHead &head,
+  void request_key_handler(const simple::RpcMessageHead &head,
                                      paddle::framework::BinaryArchive &iar);
   SparseTableInfo &get_table_info(const size_t &table_id);
 

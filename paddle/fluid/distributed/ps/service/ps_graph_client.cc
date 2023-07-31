@@ -34,7 +34,7 @@ PsGraphClient::PsGraphClient() {
   _partition_key_service = simple::global_rpc_server().add_service(
       [this](const simple::RpcMessageHead &head,
              paddle::framework::BinaryArchive &iar) {
-        request_partition_key_handler(head, iar);
+        request_key_handler(head, iar);
       });
   VLOG(0) << "PsGraphClient rank id=" << _rank_id << ", rank num=" << _rank_num;
 }
@@ -182,7 +182,7 @@ void PsGraphClient::FinalizeWorker() {
   return done();
 }
 
-::std::future<int32_t> PsGraphClient::PartitionKey(
+::std::future<int32_t> PsGraphClient::PullSparseKey(
     int shard_id,
     size_t table_id,
     const uint64_t *keys,
@@ -214,7 +214,7 @@ void PsGraphClient::FinalizeWorker() {
       if (it != keys2rank_vec[shard].end()) {
         rank = it->second;
       } else {
-        VLOG(0) << "PartitionKey, miss key " << k << " rank=" << _rank_id;
+        VLOG(0) << "PullSparseKey, miss key " << k << " rank=" << _rank_id;
         CHECK(it != keys2rank_vec[shard].end());
       }
     } else {
@@ -252,7 +252,7 @@ void PsGraphClient::FinalizeWorker() {
 
   wg.wait();
   timeline.Pause();
-  VLOG(3) << "PullSparsePtr local table id=" << table_id
+  VLOG(3) << "PullSparseKey local table id=" << table_id
           << ", pass id=" << pass_id << ", shard_id=" << shard_id
           << ", dim_id=" << dim_id << ", keys count=" << num
           << ", span=" << timeline.ElapsedSec();
@@ -361,7 +361,7 @@ void PsGraphClient::request_handler(const simple::RpcMessageHead &head,
 }
 
 // server pull remote keys (only key)
-void PsGraphClient::request_partition_key_handler(
+void PsGraphClient::request_key_handler(
     const simple::RpcMessageHead &head, paddle::framework::BinaryArchive &iar) {
   size_t table_id = head.consumer_id;
   uint32_t id = 0;

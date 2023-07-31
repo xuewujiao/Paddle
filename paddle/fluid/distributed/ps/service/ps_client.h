@@ -164,7 +164,7 @@ class PSClient {
     promise.set_value(-1);
     return fut;
   }
-  virtual ::std::future<int32_t> PartitionKey(
+  virtual ::std::future<int32_t> PullSparseKey(
       int shard_id,
       size_t table_id,
       const uint64_t *keys,
