@@ -2002,7 +2002,9 @@ void PSGPUWrapper::build_pull_thread() {
     VLOG(3) << "thread build pull start.";
     platform::Timer timer;
     timer.Start();
-    PartitionKey(gpu_task);
+    if (slot_num_for_pull_feature_ > 0 || float_slot_num_ > 0) {
+      PartitionKey(gpu_task);
+    }
     // build cpu ps data process
     BuildPull(gpu_task);
     timer.Pause();
@@ -2118,7 +2120,9 @@ void PSGPUWrapper::SparseTableToHbm() {
 
   add_key_to_local(vec_data);
   add_key_to_gputask(gpu_task);
-  PartitionKey(gpu_task);
+  if (slot_num_for_pull_feature_ > 0 || float_slot_num_ > 0) {
+    PartitionKey(gpu_task);
+  }
   BuildPull(gpu_task);
   MergePull(gpu_task);
   if (!multi_mf_dim_) {
