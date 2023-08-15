@@ -169,6 +169,13 @@ class HashTable {
            size_t len,
            StreamType stream);
 
+  template <typename StreamType>
+  void get_card_ranks(const KeyType* d_keys,
+           ValType* d_vals,
+           size_t len,
+		   int card_num,
+           StreamType stream);
+
   void show();
 
   void set_sparse_sgd(const OptimizerConfig& optimizer_config);

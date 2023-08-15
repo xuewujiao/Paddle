@@ -106,6 +106,18 @@ __global__ void calc_node_shard_index_kernel(KeyType* d_keys,
 }
 
 template <typename KeyType, typename T>
+__global__ void calc_card_shard_index_kernel(KeyType* d_keys,
+                                             const size_t len,
+                                             T* shard_index,
+                                             const int total_gpu,
+                                             const int node_num) {
+  const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < len) {
+    shard_index[i] = ((d_keys[i] / total_gpu) % node_num) * total_gpu + d_keys[i] % total_gpu;
+  }
+}
+
+template <typename KeyType, typename T>
 __global__ void fill_shard_key_kernel(KeyType* d_shard_keys,
                                       KeyType* d_keys,
                                       T* idx,
@@ -373,11 +385,17 @@ void HeterCommKernel::calc_node_shard_index(const KeyType* d_keys,
                                             T* shard_index,
                                             const int& total_devs,
                                             const int& node_num,
-                                            const StreamType& stream) {
+                                            const StreamType& stream,
+                                            bool partition_by_card) {
   int grid_size = (len - 1) / block_size_ + 1;
   size_t c_len = static_cast<size_t>(len);
-  calc_node_shard_index_kernel<<<grid_size, block_size_, 0, stream>>>(
-      d_keys, c_len, shard_index, total_devs, node_num);
+  if (partition_by_card) {
+    calc_card_shard_index_kernel<<<grid_size, block_size_, 0, stream>>>(
+        d_keys, c_len, shard_index, total_devs, node_num);    
+  } else {
+    calc_node_shard_index_kernel<<<grid_size, block_size_, 0, stream>>>(
+        d_keys, c_len, shard_index, total_devs, node_num);
+  }
 }
 
 template <typename KeyType, typename T, typename StreamType>
