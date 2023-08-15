@@ -23,6 +23,7 @@ DECLARE_int32(gpugraph_storage_mode);
 DECLARE_bool(graph_metapath_split_opt);
 DECLARE_string(graph_edges_split_mode);
 DECLARE_bool(multi_node_sample_use_gpu_table);
+DECLARE_bool(enable_async_comm);
 namespace paddle {
 namespace framework {
 
@@ -868,6 +869,11 @@ void GraphGpuWrapper::init_service() {
   graph_table = reinterpret_cast<char *>(g);
   upload_num = gpu_num;
   upload_task_pool.reset(new ::ThreadPool(upload_num));
+  if (multi_node_ && FLAGS_enable_async_comm) {
+    auto async_com = paddle::framework::AsyncContext::GetInstance();
+	async_com->init(node_size_, gpu_num, rank_id_);
+	//todo add runner register and start
+  }
 }
 
 void GraphGpuWrapper::finalize() {

@@ -1120,6 +1120,12 @@ PADDLE_DEFINE_EXPORTED_bool(enable_all2all_use_fp16,
 PADDLE_DEFINE_EXPORTED_bool(enable_sparse_inner_gather,
                             false,
                             "enable sparse inner gather, default false");
+PADDLE_DEFINE_EXPORTED_bool(enable_async_comm,
+                            false,
+                            "enable async comm, default false");
+PADDLE_DEFINE_EXPORTED_bool(enable_split_task_to_card,
+                            false,
+                            "enable split task to card, default false");
 PADDLE_DEFINE_EXPORTED_bool(gpugraph_debug_gpu_memory,
                             false,
                             "enable debug gpu memory, default false");

@@ -166,6 +166,21 @@ __global__ void search_ranks_kernel(Table* table,
   }
 }
 
+template <typename Table>
+__global__ void search_card_ranks_kernel(Table* table,
+                                      const typename Table::key_type* const keys,
+                                      typename Table::mapped_type* const vals,
+                                      size_t len,
+                                      int card_num) {
+  const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < len) {
+    auto it = table->find(keys[i]);
+    if (it != table->end()) {
+      vals[i] = (it->second) * card_num + keys[i] % card_num;    
+    }
+  }
+}
+
 template <typename Table, typename GPUAccessor>
 __global__ void dy_mf_search_kernel_fill(
     Table* table,
@@ -428,6 +443,21 @@ void HashTable<KeyType, ValType>::get_ranks(const KeyType* d_keys,
 
 template <typename KeyType, typename ValType>
 template <typename StreamType>
+void HashTable<KeyType, ValType>::get_card_ranks(const KeyType* d_keys,
+                                      ValType* d_vals,
+                                      size_t len,
+                                      int card_num,
+                                      StreamType stream) {
+  if (len == 0) {
+    return;
+  }
+  const int grid_size = (len - 1) / BLOCK_SIZE_ + 1;
+  search_card_ranks_kernel<<<grid_size, BLOCK_SIZE_, 0, stream>>>(
+      container_, d_keys, d_vals, len, card_num);
+}
+
+template <typename KeyType, typename ValType>
+template <typename StreamType>
 void HashTable<KeyType, ValType>::insert(const KeyType* d_keys,
                                          size_t len,
                                          uint64_t* global_num,
@@ -611,6 +641,13 @@ template void HashTable<uint64_t, unsigned int>::get_ranks<cudaStream_t>(
     unsigned int* d_vals,
     size_t len,
     cudaStream_t stream);
+template void HashTable<uint64_t, unsigned int>::get_card_ranks<cudaStream_t>(
+    const uint64_t* d_keys,
+    unsigned int* d_vals,
+    size_t len,
+    int card_num,
+    cudaStream_t stream);
+    
 // template void
 // HashTable<uint64_t, paddle::framework::FeatureValue>::get<cudaStream_t>(
 //    const uint64_t* d_keys, char* d_vals, size_t len, cudaStream_t

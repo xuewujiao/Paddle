@@ -32,11 +32,14 @@ limitations under the License. */
 #include "paddle/fluid/framework/barrier.h"
 #include "paddle/fluid/framework/fleet/heter_ps/hashtable.h"
 #include "paddle/fluid/framework/fleet/heter_ps/heter_comm_kernel.h"
+#include "paddle/fluid/framework/fleet/heter_ps/heter_async_comm.h"
 #include "paddle/fluid/framework/fleet/heter_ps/heter_resource.h"
 #include "paddle/fluid/memory/allocation/allocator.h"
 #include "paddle/fluid/memory/memory.h"
 #include "paddle/fluid/platform/place.h"
 
+DECLARE_bool(enable_async_comm);
+DECLARE_bool(enable_split_task_to_card);
 #ifdef PADDLE_WITH_HETERPS
 
 namespace paddle {
@@ -44,6 +47,42 @@ namespace framework {
 
 #define TYPEALIGN(ALIGNVAL, LEN) \
   (((uint64_t)(LEN) + ((ALIGNVAL)-1)) & ~((uint64_t)((ALIGNVAL)-1)))
+
+
+//采样与feature拉取的runner 对应 HeterComm<uint64_t, uint64_t, int, CommonFeatureValueAccessor> com
+template <typename GPUAccessor, template <typename T> class GPUOptimizer>
+class PsRunner : public RequestRunner {
+public:
+  PsRunner(Partitioner *partitioner, MemoryAllocatorBase *allocator,
+			HeterComm<FeatureKey, float*, float*, GPUAccessor> *comm, GPUAccessor& gpu_accessor)
+      : RequestRunner(partitioner, allocator) {
+		int gpu_id = partitioner->GetLocalRank();
+	    platform::CUDADeviceGuard guard(gpu_id);
+		cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking));
+		comm_ = comm;
+		opt_ = GPUOptimizer<GPUAccessor>(gpu_accessor);
+  };
+  virtual ~PsRunner() {
+	int gpu_id = partitioner->GetLocalRank();
+	platform::CUDADeviceGuard guard(gpu_id);
+	PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamDestroy(stream_));
+  };
+
+  void RegisterFunctions() override;
+  void ProcessSetup() override;
+  void ProcessCleanUp() override;
+
+  void PullSparse(struct AsyncReqRes *request, struct AsyncReqRes *response);
+  void PushSparse(struct AsyncReqRes *request, struct AsyncReqRes *response);
+  void PullOneSparse(struct AsyncReqRes *request, struct AsyncReqRes *response);
+  void PushOneSparse(struct AsyncReqRes *request, struct AsyncReqRes *response);
+
+private:
+ HeterComm<FeatureKey, float*, float*, GPUAccessor> * comm_;
+ GPUOptimizer<GPUAccessor> opt_;
+ cudaStream_t stream_;
+}
+
 
 template <typename KeyType,
           typename ValType,
@@ -63,6 +102,15 @@ class HeterComm {
   virtual ~HeterComm();
   HeterComm(const HeterComm&) = delete;
   HeterComm& operator=(const HeterComm&) = delete;
+
+  size_t get_pull_type_size() {
+	return pull_type_size_;
+  }
+
+  size_t get_grad_type_size() {
+	return grad_type_size_;
+  }
+
   // reset table
   void reset_table(const int dev_id,
                    size_t capacity,
@@ -164,7 +212,8 @@ class HeterComm {
                         KeyType* d_keys,
                         GradType* d_grads,
                         size_t len,
-                        Sgd& sgd);  // NOLINT
+                        Sgd& sgd,
+						StreamType stream = 0);  // NOLINT
 
   void set_nccl_comm_and_size(const std::vector<ncclComm_t>& inner_comms,
                               const std::vector<ncclComm_t>& inter_comms,
@@ -302,7 +351,7 @@ class HeterComm {
       } else if (need_mem > alloc->size()) {
         if (need_copy) {
           std::shared_ptr<memory::Allocation> tmp =
-              memory::Alloc(place_, need_mem);
+              memory::Alloc(place_, need_mem, stream_);
 #if defined(PADDLE_WITH_CUDA)
           PADDLE_ENFORCE_GPU_SUCCESS(
               cudaMemcpyAsync(tmp->ptr(),  // output
@@ -442,6 +491,11 @@ class HeterComm {
 
   void init_path();
 
+  // async
+  void set_runner(std::vector<RequestRunner *> request_runner) {
+	  _async_request = request_runner;
+  }
+
   template <typename StreamType>
   void sync_stream(const StreamType& stream) {
 #if defined(PADDLE_WITH_CUDA)
@@ -525,12 +579,34 @@ class HeterComm {
                            float* d_vals,
                            const size_t& len);
 
+  // node async pull
+  void pull_sparse_async(const int& gpu_id,
+                         KeyType* d_keys,
+                         float* d_vals,
+                         const size_t& len);
+
+  // node async pull
+  void pull_sparse_async_one(const int& gpu_id,
+                            KeyType* d_keys,
+                            float* d_vals,
+                            const size_t& len);
+
   template <typename Sgd>
   void push_normal_sparse(int num,
                           KeyType* d_keys,
                           float* d_grads,
                           size_t len,
                           Sgd& sgd);  // NOLINT
+
+  void push_sparse_async(int gpu_id,
+                         KeyType* d_keys,
+                         float* d_grads,
+                         size_t len);
+
+  void push_sparse_async_one(int gpu_id,
+                             KeyType* d_keys,
+                             float* d_grads,
+                             size_t len);
 
   void shard_inner_keys(const size_t& total_fea_num,
                         const KeyType* d_keys,
@@ -556,7 +632,8 @@ class HeterComm {
                             KeyType* d_keys_parted,
                             size_t* h_part_sizes,
                             const int& shard_num,
-                            const cudaStream_t& stream);
+                            const cudaStream_t& stream,
+							bool partition_by_card = false);
   size_t send_data_by_all2all(const int& gpu_id,
                               const int& nccl_node_size,
                               const int& nccl_rank_id,
@@ -734,7 +811,7 @@ class HeterComm {
                 const size_t& byte_len) {
     if (alloc->get() == nullptr || byte_len > (*alloc)->size()) {
       alloc->reset();
-      if (resource_->multi_mf()) {
+      if (resource_->multi_mf() && !FLAGS_enable_async_comm) {
         *alloc = memory::Alloc(place, byte_len);
       } else {
         auto stream = resource_->local_stream(place.GetDeviceId(), 0);
@@ -747,7 +824,7 @@ class HeterComm {
   template <typename TPlace>
   std::shared_ptr<memory::Allocation> MemoryAlloc(const TPlace& place,
                                                   const size_t& byte_len) {
-    if (resource_->multi_mf()) {
+    if (resource_->multi_mf() && !FLAGS_enable_async_comm) {
       return memory::Alloc(place, byte_len);
     } else {
       auto stream = resource_->local_stream(place.GetDeviceId(), 0);
@@ -786,6 +863,10 @@ class HeterComm {
   // set compress bound
   float max_value_bound_ = 10.0;
   float max_grad_bound_ = 10.0;
+
+  // async
+  std::vector<RequestRunner *> _async_request;
+
 
 #if defined(PADDLE_WITH_CUDA)
   GpuRDMAChecker* rdma_checker_ = nullptr;

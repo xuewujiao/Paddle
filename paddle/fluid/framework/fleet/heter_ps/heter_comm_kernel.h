@@ -263,7 +263,8 @@ class HeterCommKernel {
                              T* shard_index,
                              const int& total_devs,
                              const int& node_num,
-                             const StreamType& stream);
+                             const StreamType& stream,
+							 bool partition_by_card = false);
 
   template <typename KeyType, typename T, typename StreamType>
   void gather_keys(KeyType* d_shard_keys,
