@@ -42,7 +42,6 @@ limitations under the License. */
 namespace paddle {
 namespace framework {
 
-
 class AsyncComAllocator : public MemoryAllocatorBase {
  public:
  	AsyncComAllocator(int dev_id) : MemoryAllocatorBase() {
@@ -58,6 +57,10 @@ class AsyncComAllocator : public MemoryAllocatorBase {
 	  return new AsyncComMemContext();
   }
 
+  phi::Stream GetCudaMemoryStream() {
+	  return stream_;
+  }
+
   void DestroyMemoryContext(MemoryContextBase* memory_context) {
 	  delete memory_context;
   }
@@ -66,25 +69,33 @@ class AsyncComAllocator : public MemoryAllocatorBase {
                MemoryLocation location,
                DataType data_type,
                size_t element_size) override {
-	  platform::CUDADeviceGuard guard(gpu_id);
-	  if (location != ML_DEVICE) {
-		  VLOG(0) << "don not support not ML_DEVICE type";
+	  if (location == ML_PINNED) {
+	  	VLOG(0) << "don not support ML_PINNED type";
 	  }
-	  auto* async_context = static_cast<AsyncComMemContext*>(memory_context);
-	  size_t need_mem = element_count * GetElementSize(data_type);
-	  async_context->poll_point = memory::Alloc(place_, need_mem, stream_);
-	  return async_context->poll_point->ptr();
+	  if (location == ML_DEVICE) {
+	      platform::CUDADeviceGuard guard(gpu_id);
+	      auto* async_context = static_cast<AsyncComMemContext*>(memory_context);
+	      size_t need_mem = element_count * GetElementSize(data_type);
+	      async_context->poll_point = memory::Alloc(place_, need_mem, stream_);
+	      return async_context->poll_point->ptr();
+	  } else {
+		  size_t need_mem = element_count * GetElementSize(data_type);
+		  async_context->cpu_poll_point.reset(new char[need_mem], [](char * p) {delete[] p;});
+		  return (void *) async_context->cpu_poll_point.get();
+	  }
   }
 
   void Free(MemoryContextBase* memory_context) override {
 	  platform::CUDADeviceGuard guard(gpu_id);
 	  auto* async_context = static_cast<AsyncComMemContext*>(memory_context);
 	  async_context->poll_point = nullptr;
+	  async_context->cpu_poll_point = nullptr;
   }
 
   //data can free by comlib
   MemoryContextBase* ToMemoryContext(std::shared_ptr<phi::Allocation> data, size_t elt_count,
-		  DataType data_type, MemoryLocation location = ML_DEVICE) {
+		  DataType data_type) {
+	  MemoryLocation location = ML_DEVICE;
 	  auto* async_context = static_cast<AsyncComMemContext*>(CreateMemoryContext());
 	  async_context->poll_point = data;
 	  async_context->SetContextInfo(elt_count, location, data_type);
@@ -114,6 +125,7 @@ class  AsyncComMemContext : public MemoryContextBase {
 	 AsyncComMemContext() : MemoryContextBase() {
 	  raw_point = nullptr;
 	  poll_point = nullptr;
+	  cpu_poll_point = nullptr;
   };
   ~ AsyncComMemContext()  override = default;
 
@@ -121,12 +133,16 @@ class  AsyncComMemContext : public MemoryContextBase {
       if (raw_point != nullptr) {
     	  return raw_point;
       }
-      else {
+      else if(poll_point != nullptr) {
     	  return poll_point->ptr();
+      }
+      else{
+    	  return (void*) (cpu_poll_point.get());
       }
   }
   void * raw_point;
   std::shared_ptr<phi::Allocation> poll_point;
+  std::shared_ptr<char> cpu_poll_point;
 
  private:
   // TODO(Baidu): Need to check if this is enough

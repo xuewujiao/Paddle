@@ -58,7 +58,7 @@ public:
       : RequestRunner(partitioner, allocator) {
 		int gpu_id = partitioner->GetLocalRank();
 	    platform::CUDADeviceGuard guard(gpu_id);
-		cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking));
+		cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking);
 		comm_ = comm;
 		opt_ = GPUOptimizer<GPUAccessor>(gpu_accessor);
   };
