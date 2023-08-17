@@ -2105,7 +2105,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all(
 
   // build final.actual_val
   if (compress) {
-    compress_sample(gpu_id, final, stream, stream);
+    compress_sample(gpu_id, final, len, stream, stream);
   }
 
   return final;
@@ -2344,7 +2344,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
   }
 
   if (compress) {
-    compress_sample(gpu_id, result, stream, stream);
+    compress_sample(gpu_id, result, len, stream, stream);
   }
 
   cudaStreamSynchronize(stream);
@@ -2460,7 +2460,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2_one_table(
   }
 
   if (compress) {
-    compress_sample(gpu_id, result, calc_stream, mem_stream);
+    compress_sample(gpu_id, result, len, calc_stream, mem_stream);
   }
 
   cudaStreamSynchronize(calc_stream);
@@ -2575,11 +2575,14 @@ void GpuPsGraphTable::sample_v2_on_cpu(
 
 void GpuPsGraphTable::compress_sample(
     int gpu_id,
-    NeighborSampleResult &  result
+    NeighborSampleResult &  result,
+    int len,
     cudaStream_t calc_stream,
     cudaStream_t mem_stream) {
     
     CUDA_CHECK(cudaStreamSynchronize(calc_stream));
+    int *actual_sample_size = result.actual_sample_size;
+    uint64_t *val = result.val;
     platform::CUDAPlace place = platform::CUDAPlace(resource_->dev_id(gpu_id));
     platform::CUDADeviceGuard guard(resource_->dev_id(gpu_id));
     size_t temp_storage_bytes = 0;

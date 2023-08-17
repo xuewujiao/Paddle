@@ -169,6 +169,7 @@ class GpuPsGraphTable
 
   void compress_sample(int gpu_id,
                        NeighborSampleResult &  result,
+					   int len,
                        cudaStream_t calc_stream,
                        cudaStream_t mem_stream);
 
