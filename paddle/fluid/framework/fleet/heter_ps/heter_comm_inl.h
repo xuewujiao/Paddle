@@ -120,7 +120,7 @@ void PsRunner::RegisterFunctions() {
 
 	  function_info.function_id = function_info_table_.size();
 	  //需确认填1 还是2 demo中 input_data_count 未被使用
-	  function_info.input_data_count = 1;
+	  function_info.input_data_count = 2;
 	  function_info.output_data_count = 0;
 	  function_info.need_response = false;
 	  if (FLAGS_enable_split_task_to_card) {
@@ -134,7 +134,7 @@ void PsRunner::RegisterFunctions() {
 		  };
 	  }
 	  function_info.input_locations[0] = ML_DEVICE;
-	  function_info.output_locations[0] = ML_DEVICE;
+	  function_info.input_locations[1] = ML_DEVICE;
 	  function_info_table_.push_back(function_info);
 }
 
@@ -151,29 +151,6 @@ void PsRunner::PushOneSparse(struct AsyncReqRes *request, struct AsyncReqRes *re
 	comm_->push_normal_sparse(gpu_id, d_keys, d_grads, elt_count, opt_, stream_);
 	CUDA_CHECK(cudaStreamSynchronize(stream_));
 }
-
-template <typename GPUAccessor, template <typename T> class GPUOptimizer>
-void DeepWalkSampleRunner::NeighborSampleOne(struct AsyncReqRes *request, struct AsyncReqRes *response) {
-	  int gpu_id = partitioner_->GetLocalRank();
-	  platform::CUDADeviceGuard guard(gpu_id);
-	  auto* output_context = allocator_->CreateMemoryContext();
-	  size_t data_size =  comm_->get_pull_type_size();
-	  auto input_dt = static_cast<DataType>(request->meta.data_types[0]);
-	  size_t elt_count = request->meta.data_sizes[0] / GetElementSize(input_dt);
-
-	  float *d_vals = static_cast<float*> allocator_->Malloc(output_context,
-	    ML_DEVICE, DT_INT8, elt_count * data_size);
-	  void* input_idx_ptr = static_cast<FeatureKey*> request->MemoryContextBase[0]->GetPointer();
-
-	  comm_->pull_one_table(gpu_id, sample_step, table_idx, d_keys, sample_size, len, neighbor_size_limit, compress, weighted);
-    
-	  CUDA_CHECK(cudaStreamSynchronize(stream_));
-
-	  response->meta.valid_data_count = 1;
-	  response->memory_contexts[0] = output_context;
-	  response->FillMetaByMemoryContext();
-}
-
 
 template <typename KeyType,
           typename ValType,
@@ -2708,7 +2685,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_async(
 	  auto* mem_context = allocator->ToMemoryContext(cache.local_grads +
 		h_local_part_offsets[i] * pull_type_size_, h_local_part_sizes[i] * pull_type_size_,
 		DT_INT8);
-	  request_handles[i].response_->memory_contexts.push_back(mem_context);
+	  request_handles[i].response_->memory_contexts[0]= mem_context;
 	}
 
 	auto* allocator = dynamic_cast<AsyncComAllocator*>(async_communicator->GetMemoryAllocator());
@@ -2776,7 +2753,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_async_one(
 	  auto* mem_context = allocator->ToMemoryContext(cache.local_grads +
 		h_local_part_offsets[i] * pull_type_size_, h_local_part_sizes[i] * pull_type_size_,
 		DT_INT8);
-	  request_handles[i].response_->memory_contexts.push_back(mem_context);
+	  request_handles[i].response_->memory_contexts[0] = mem_context;
 	}
 
 	auto* allocator = dynamic_cast<AsyncComAllocator*>(async_communicator->GetMemoryAllocator());

@@ -211,8 +211,12 @@ public:
   AsyncReqRes* MakePushRequest(MemoryContextBase *indice_context,
                                       MemoryContextBase *grad_context,
 									  int target_global_rank);
-}
 
+  virtual AsyncReqRes* MakeDeepWalkRequest(MemoryContextBase *node_key_context,
+                                           MemoryContextBase *para_int_context,
+                                           int target_global_rank){ return nullptr; }
+  
+};
 
 }  // end namespace framework
 }  // end namespace paddle

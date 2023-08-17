@@ -69,9 +69,6 @@ public:
   };
 
   void RegisterFunctions() override;
-  void ProcessSetup() override;
-  void ProcessCleanUp() override;
-
   void PullSparse(struct AsyncReqRes *request, struct AsyncReqRes *response);
   void PushSparse(struct AsyncReqRes *request, struct AsyncReqRes *response);
   void PullOneSparse(struct AsyncReqRes *request, struct AsyncReqRes *response);
