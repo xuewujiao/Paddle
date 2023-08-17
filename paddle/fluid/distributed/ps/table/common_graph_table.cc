@@ -2302,8 +2302,9 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
     int slot_fea_num = 0;
     if (feat_name.size() > 0) slot_fea_num = feat_name[idx].size();
     int float_fea_num = 0;
-    if (float_feat_id_map.size() > 0)
+    if (float_feat_id_map.size() > 0) {
       float_fea_num = float_feat_id_map[idx].size();
+    }
     if (load_slot) {
       auto node = feature_shards[idx][index]->add_feature_node(
           id, false, float_fea_num);
@@ -2330,7 +2331,7 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
   return {local_count, local_valid_count};
 }
 
-std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
+std::pair<uint64_t, uint64_t> GraphTable::parse_node_file_parallel(
     const std::string &path, bool load_slot) {
   std::ifstream file(path);
   std::string line;
@@ -2343,6 +2344,7 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
 
   int num = 0;
   std::vector<paddle::string::str_ptr> vals;
+  size_t last_shard_id = 0;
 
   while (std::getline(file, line)) {
     vals.clear();
@@ -2354,7 +2356,8 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
     std::string parse_node_type = vals[0].to_string();
     auto it = feature_to_id.find(parse_node_type);
     if (it == feature_to_id.end()) {
-      VLOG(1) << parse_node_type << "type error, please check";
+      VLOG(1) << parse_node_type << "type error, please check, line["
+          << line << "] file[" << path << "]";
       continue;
     }
     idx = it->second;
@@ -2365,6 +2368,14 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
               << ", please check id distribution";
       continue;
     }
+    if (shard_id != last_shard_id && last_shard_id != 0) {
+      VLOG(0) << "Maybe node file hasn't been sharded, file[" << path << "] shard_id["
+          << shard_id << "] last_shard_id[" << last_shard_id << "], exit";
+      VLOG(0) << "auto_shard in config should be set as True";
+      is_parse_node_fail_ = true;
+      return {0, 0};
+    }
+
     local_count++;
     if (FLAGS_graph_edges_split_mode == "hard" ||
         FLAGS_graph_edges_split_mode == "HARD") {
@@ -2376,8 +2387,9 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
     }
     size_t index = shard_id - shard_start;
     int float_fea_num = 0;
-    if (float_feat_id_map.size() > 0)
+    if (float_feat_id_map.size() > 0) {
       float_fea_num = float_feat_id_map[idx].size();
+    }
     if (load_slot) {
       auto node = feature_shards[idx][index]->add_feature_node(
           id, false, float_fea_num);
@@ -2386,7 +2398,8 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
           auto &v = vals[i];
           int ret = parse_feature(idx, v.ptr, v.len, node);
           if (ret != 0) {
-            VLOG(0) << "Fail to parse feature, node_id[" << id << "]";
+            VLOG(0) << "Fail to parse feature, node_id[" << id
+                << "] shard_idx[" << index << "] fea_type_id[" << idx << "]";
             is_parse_node_fail_ = true;
             return {0, 0};
           }
@@ -2396,6 +2409,7 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
       node_shards[idx][index]->add_feature_node(id, false, float_fea_num);
     }
     local_valid_count++;
+    last_shard_id = shard_id;
   }
   VLOG(2) << local_valid_count << "/" << local_count << " nodes from filepath->"
           << path;
@@ -2418,7 +2432,7 @@ int32_t GraphTable::load_nodes(const std::string &path,
     for (size_t i = 0; i < paths.size(); i++) {
       tasks.push_back(load_node_edge_task_pool->enqueue(
           [&, i, this]() -> std::pair<uint64_t, uint64_t> {
-            return parse_node_file(paths[i], load_slot);
+            return parse_node_file_parallel(paths[i], load_slot);
           }));
     }
     for (size_t i = 0; i < tasks.size(); i++) {
@@ -2980,7 +2994,8 @@ int GraphTable::parse_feature(int idx,
       int ret = FeatureNode::parse_value_to_bytes<uint64_t>(
           fea_fields.begin(), fea_fields.end(), fea_ptr);
       if (ret != 0) {
-        VLOG(0) << "Fail to parse value";
+        VLOG(0) << "Fail to parse value, fea_type_id[" << idx << "] fea_str["
+            << feat_str << "] len[" << len << "]";
         return -1;
       }
       return 0;
