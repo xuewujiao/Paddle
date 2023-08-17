@@ -2038,6 +2038,99 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample(
                                   false);
 }
 
+
+
+NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_async_one(
+    int gpu_id,
+    int sample_step,
+    int table_idx,
+    uint64_t* d_keys,
+    int sample_size,
+    int len,
+    int neighbor_size_limit,
+    bool cpu_query_switch,
+    bool compress,
+    bool weighted) {
+
+	AnyDeviceGuard guard(gpu_id);
+	auto &loc = storage_[gpu_id];
+	// get from local table
+	auto stream = resource_->local_stream(gpu_id, 0);
+	auto &res = loc.shard_res;
+	cache.total_keys_ += len;
+
+  loc.alloc(len, sizeof(uint64_t) /*value_bytes*/);
+	int shard_num = node_size_ * device_num_;  
+	loc.init_shard(len, shard_num);
+
+	size_t *h_local_part_sizes = res.h_local_part_sizes.data();
+	size_t *h_local_part_offsets = res.h_local_part_offsets.data();
+	// partition keys
+	partition_shard_keys(gpu_id,
+			                 len,
+						           d_keys,
+	                     res.d_local_idx_parted,
+	                     cache.d_merged_push_keys,
+	                     h_local_part_sizes,
+						           shard_num,
+	                     stream,
+						           true);
+	h_local_part_offsets[0] = 0;
+	for (int i = 0; i < shard_num; ++i) {
+	  h_local_part_offsets[i + 1] =
+	      h_local_part_offsets[i] + h_local_part_sizes[i];
+	}
+	CHECK_EQ(len, h_local_part_offsets[shard_num]);
+
+	std::vector<RequestHandle> request_handles;
+	request_handles.resize(shard_num);
+  auto* allocator = dynamic_cast<AsyncComAllocator*>(async_communicator->GetMemoryAllocator());
+
+  
+
+	//指定返回结果的显存位置  具体实现可能会调整
+	for (int i = 0; i < shard_num; ++i) {
+    
+    auto* val_context = allocator->ToMemoryContext(
+      final.val_mem + h_local_part_offsets[i] * sample_size , h_local_part_sizes[i] * sample_size, DT_UINT64);
+    auto* actual_sample_size_context = allocator->ToMemoryContext(
+      final.actual_sample_size_mem+ h_local_part_offsets[i], h_local_part_sizes[i], DT_INT64);
+
+	  request_handles[i].response_->memory_contexts.push_back(val_context);
+	  request_handles[i].response_->memory_contexts.push_back(actual_sample_size_context);
+	}
+
+	for (int i = 0; i < shard_num; ++i) {
+    auto* node_key_context = allocator->ToMemoryContext(loc.d_merged_keys + h_local_part_offsets[i], h_local_part_sizes[i],
+        DT_UINT64);
+
+    int packed = (cpu_query_switch << 2) | (0 << 1) | weighted;
+    int int_val[4] = {table_idx, sample_size, neighbor_size_limit, packed}; 
+    auto* para_int_context = allocator->ToMemoryContext(loc.d_merged_keys, 3, DT_INT64, ML_HOST);
+        
+    auto* request = _async_request[i]->MakeDeepWalkRequest(node_key_context, para_int_context);
+    _async_com->PutRequestAsync(request, &request_handles[i]);
+	}
+	//等待异步执行结束
+	for(int i = 0; i < shard_num; ++i) {
+		request_handles[i].Wait();
+	}
+	CUDA_CHECK(cudaStreamSynchronize(stream));
+
+  // init neighbor result
+  NeighborSampleResult final;
+  final.set_stream(stream);
+  final.initialize(sample_size, len, gpu_id);
+
+
+  // build final.actual_val
+  if (compress) {
+    compress_sample(gpu_id, final, stream, stream);
+  }
+
+  return final;
+}
+
 NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all(
     int gpu_id,
     int sample_step,
@@ -2631,7 +2724,6 @@ void GpuPsGraphTable::compress_sample(
         len);
     CUDA_CHECK(cudaStreamSynchronize(calc_stream));  // hbm safe
 }
-
 
 NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_sage(
     int gpu_id,

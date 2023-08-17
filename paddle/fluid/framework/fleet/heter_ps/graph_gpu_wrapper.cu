@@ -871,8 +871,22 @@ void GraphGpuWrapper::init_service() {
   upload_task_pool.reset(new ::ThreadPool(upload_num));
   if (multi_node_ && FLAGS_enable_async_comm) {
     auto async_com = paddle::framework::AsyncContext::GetInstance();
-	async_com->init(node_size_, gpu_num, rank_id_);
-	//todo add runner register and start
+	  async_com->init(node_size_, gpu_num, rank_id_);
+    auto com = HeterPs_->get_com();
+    
+	  //runner register and start
+    std::vector<RequestRunner *> request_runners;
+    for (int i = 0; i < gpu_num; i++) {
+      auto registry = async_com->get_registry(i);
+      auto partitioner = async_com->get_partitioner(i);
+      auto memory_allocator = async_com->get_alloctor(i);
+
+      auto deep_walk_sample_runer = new DeepWalkSampleRunner(partitioner, memory_allocator, graph_table);
+      registry->Register(0, deep_walk_sample_runer);
+      deep_walk_sample_runer->StartProcessLoop();
+      request_runners.push_back((RequestRunner *)deep_walk_sample_runer);
+    }
+    graph_table->set_runner(request_runners);
   }
 }
 

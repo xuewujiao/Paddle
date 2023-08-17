@@ -152,6 +152,29 @@ void PsRunner::PushOneSparse(struct AsyncReqRes *request, struct AsyncReqRes *re
 	CUDA_CHECK(cudaStreamSynchronize(stream_));
 }
 
+template <typename GPUAccessor, template <typename T> class GPUOptimizer>
+void DeepWalkSampleRunner::NeighborSampleOne(struct AsyncReqRes *request, struct AsyncReqRes *response) {
+	  int gpu_id = partitioner_->GetLocalRank();
+	  platform::CUDADeviceGuard guard(gpu_id);
+	  auto* output_context = allocator_->CreateMemoryContext();
+	  size_t data_size =  comm_->get_pull_type_size();
+	  auto input_dt = static_cast<DataType>(request->meta.data_types[0]);
+	  size_t elt_count = request->meta.data_sizes[0] / GetElementSize(input_dt);
+
+	  float *d_vals = static_cast<float*> allocator_->Malloc(output_context,
+	    ML_DEVICE, DT_INT8, elt_count * data_size);
+	  void* input_idx_ptr = static_cast<FeatureKey*> request->MemoryContextBase[0]->GetPointer();
+
+	  comm_->pull_one_table(gpu_id, sample_step, table_idx, d_keys, sample_size, len, neighbor_size_limit, compress, weighted);
+    
+	  CUDA_CHECK(cudaStreamSynchronize(stream_));
+
+	  response->meta.valid_data_count = 1;
+	  response->memory_contexts[0] = output_context;
+	  response->FillMetaByMemoryContext();
+}
+
+
 template <typename KeyType,
           typename ValType,
           typename GradType,

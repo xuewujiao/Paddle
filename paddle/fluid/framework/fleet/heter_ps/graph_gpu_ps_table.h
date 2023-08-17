@@ -33,6 +33,98 @@ namespace framework {
 
 typedef paddle::distributed::GraphTableType GraphTableType;
 
+class DeepWalkSampleRunner : public RequestRunner {
+public:
+  DeepWalkSampleRunner(Partitioner *partitioner, MemoryAllocatorBase *allocator, GpuPsGraphTable *graph_table)
+      : RequestRunner(partitioner, allocator) {
+		int gpu_id = partitioner->GetLocalRank();
+	    platform::CUDADeviceGuard guard(gpu_id);
+		cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking);
+		graph_table_ = graph_table;
+  };
+  virtual ~DeepWalkSampleRunner() {
+	int gpu_id = partitioner->GetLocalRank();
+	platform::CUDADeviceGuard guard(gpu_id);
+	PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamDestroy(stream_));
+  };
+
+  void RegisterFunctions() override;
+  void ProcessSetup() override;
+  void ProcessCleanUp() override;
+
+  AsyncReqRes* MakePullRequest(MemoryContextBase *node_key_context, MemoryContextBase *para_int_context, int target_global_rank);
+  void NeighborSampleOne(struct AsyncReqRes *request, struct AsyncReqRes *response);
+  // void PullOneFeature(struct AsyncReqRes *request, struct AsyncReqRes *response);
+
+private:
+ GpuPsGraphTable *graph_table_;
+ cudaStream_t stream_;
+}
+
+void DeepWalkSampleRunner::RegisterFunctions() {
+	  FunctionInfo function_info;
+	  function_info.function_id = function_info_table_.size();
+	  //需确认填1 还是2 demo中 input_data_count 未被使用
+	  function_info.input_data_count = 1;
+	  function_info.output_data_count = 0;
+	  function_info.need_response = false;
+
+    function_info.func_ = [this](struct AsyncReqRes* request, struct AsyncReqRes* response) {
+      NeighborSampleOne(request, response);
+    };
+	  
+	  function_info.input_locations[0] = ML_DEVICE;
+	  function_info.output_locations[0] = ML_DEVICE;
+	  function_info_table_.push_back(function_info);
+}
+
+AsyncReqRes* DeepWalkSampleRunner::MakeDeepWalkRequest(MemoryContextBase *node_key_context,
+                                                      MemoryContextBase *para_int_context,
+                                                      int target_global_rank){             
+	  AsyncReqRes *request = CreateAsyncReqRes();
+	  InitMeta(&request->meta);
+	  request->meta.valid_data_count = 2;
+	  request->memory_contexts[0] = node_key_context;
+	  request->memory_contexts[1] = para_int_context;
+	  request->FillMetaByMemoryContext();
+	  static constexpr int kPsUpdateFuncId = 1;
+	  CreateRequestMeta(&request->meta, target_global_rank, kPsUpdateFuncId);
+	  return request;
+}
+
+void DeepWalkSampleRunner::NeighborSampleOne(struct AsyncReqRes *request, struct AsyncReqRes *response) {
+	  int gpu_id = partitioner_->GetLocalRank();
+	  platform::CUDADeviceGuard guard(gpu_id);
+
+	  auto mem_stream = allocator_->GetCudaMemoryStream();
+    auto calc_stream = stream_;
+	  
+    void* input_idx_ptr = static_cast<uint64_t*> request->MemoryContextBase[0]->GetPointer();
+	  auto input_dt = static_cast<DataType>(request->meta.data_types[0]);
+	  size_t len = request->meta.data_sizes[0] / GetElementSize(input_dt);
+
+    int * int_para = static_cast<int*> request->MemoryContextBase[1]->GetPointer();
+    int table_idx = int_para[0];
+    int sample_size = int_para[1];
+    int neighbor_size_limit = int_para[2];
+
+    int packed = int_para[3];
+    bool cpu_query_switch = (packed >> 2) & 1;
+    bool compress = (packed >> 1) & 1;
+    bool weighted = packed & 1;
+
+	  auto final = graph_table_->graph_neighbor_sample_v2_one_table(
+      gpu_id, table_idx, input_idx_ptr, sample_size, len, neighbor_size_limit, compress, weighted, calc_stream, mem_stream);
+    
+    MemoryContextBase* val_context = ToMemoryContext(final.val_mem, len * sample_size, DT_UINT64);
+    MemoryContextBase* actual_sample_size_context = ToMemoryContext(final.actual_sample_size_mem, len, DT_INT64);
+    
+	  response->meta.valid_data_count = 2;
+	  response->memory_contexts[0] = val_context;
+	  response->memory_contexts[1] = actual_sample_size_context;
+	  response->FillMetaByMemoryContext();
+}
+
 class GpuPsGraphTable
     : public HeterComm<uint64_t, uint64_t, int, CommonFeatureValueAccessor> {
  public:
@@ -148,6 +240,16 @@ class GpuPsGraphTable
                                                 bool cpu_query_switch,
                                                 bool compress,
                                                 bool weighted);
+  NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_async_one(int gpu_id,
+                                                                        int sample_step,
+                                                                        int table_idx,
+                                                                        uint64_t* d_keys,
+                                                                        int sample_size,
+                                                                        int len,
+                                                                        int neighbor_size_limit,
+                                                                        bool cpu_query_switch,
+                                                                        bool compress,
+                                                                        bool weighted);  
   NeighborSampleResult graph_neighbor_sample_v2_one_table(int gpu_id,
                                                           int idx,
                                                           uint64_t *key,
@@ -157,8 +259,8 @@ class GpuPsGraphTable
                                                           bool cpu_query_switch,
                                                           bool compress,
                                                           bool weighted,
-														  cudaStream_t calc_stream,
-														  cudaStream_t mem_stream);
+														                              cudaStream_t calc_stream,
+														                              cudaStream_t mem_stream);
 
   void sample_v2_on_cpu(int gpu_id,
                         uint64_t* key,
