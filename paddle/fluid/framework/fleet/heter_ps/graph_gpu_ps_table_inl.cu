@@ -30,6 +30,7 @@
 
 DECLARE_bool(enable_neighbor_list_use_uva);
 DECLARE_bool(enable_graph_multi_node_sampling);
+DECLARE_bool(enable_async_comm);
 
 namespace paddle {
 namespace framework {
@@ -1994,16 +1995,30 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v3(
                                              weighted);
       return result;
     } else {
-      auto result = graph_neighbor_sample_all2all(global_device_map[q.gpu_id],
-                                                  q.sample_step,
-                                                  q.table_idx,
-                                                  q.src_nodes,
-                                                  q.sample_size,
-                                                  q.len,
-                                                  q.neighbor_size_limit,
-                                                  cpu_switch,
-                                                  compress,
-                                                  weighted);
+      if (FLAGS_enable_async_comm) {
+        auto result = graph_neighbor_sample_all2all_async(global_device_map[q.gpu_id],
+                                                          q.sample_step,
+                                                          q.table_idx,
+                                                          q.src_nodes,
+                                                          q.sample_size,
+                                                          q.len,
+                                                          q.neighbor_size_limit,
+                                                          cpu_switch,
+                                                          compress,
+                                                          weighted);
+      }else{
+        auto result = graph_neighbor_sample_all2all(global_device_map[q.gpu_id],
+                                                    q.sample_step,
+                                                    q.table_idx,
+                                                    q.src_nodes,
+                                                    q.sample_size,
+                                                    q.len,
+                                                    q.neighbor_size_limit,
+                                                    cpu_switch,
+                                                    compress,
+                                                    weighted);
+      }
+      
       return result;
     }
   } else {
@@ -2036,6 +2051,119 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample(
                                   false,
                                   true,
                                   false);
+}
+
+NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all_async(
+    int gpu_id,
+    int sample_step,
+    int table_idx,
+    uint64_t* d_keys,
+    int sample_size,
+    int len,
+    int neighbor_size_limit,
+    bool cpu_query_switch,
+    bool compress,
+    bool weighted) {
+
+	platform::CUDADeviceGuard guard(gpu_id);
+  platform::CUDAPlace place = platform::CUDAPlace(gpu_id);
+	auto stream = resource_->local_stream(gpu_id, 0);
+
+	auto &loc = storage_[gpu_id];
+	auto &res = loc.shard_res;
+	int shard_num = node_size_ * device_num_;  
+	loc.init_shard(len, shard_num);
+
+  auto d_merged_push_keys = memory::Alloc(place,
+                                          len * sizeof(uint64_t),
+                                          phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  uint64_t* d_merged_push_keys_ptr = reinterpret_cast<uint64_t*>(d_merged_push_keys->ptr());
+
+	size_t *h_local_part_sizes = res.h_local_part_sizes.data();
+	size_t *h_local_part_offsets = res.h_local_part_offsets.data();
+	// partition keys
+	partition_shard_keys(gpu_id,
+			                 len,
+						           d_keys,
+	                     res.d_local_idx_parted,
+	                     d_merged_push_keys_ptr,
+	                     h_local_part_sizes,
+						           shard_num,
+	                     stream,
+						           true);
+	h_local_part_offsets[0] = 0;
+	for (int i = 0; i < shard_num; ++i) {
+	  h_local_part_offsets[i + 1] =
+	      h_local_part_offsets[i] + h_local_part_sizes[i];
+	}
+	CHECK_EQ(len, h_local_part_offsets[shard_num]);
+
+  auto res_val = memory::Alloc(place,
+                               len * sample_size * sizeof(uint64_t),
+                               phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  uint64_t* res_val_ptr = reinterpret_cast<uint64_t*>(res_val->ptr());
+
+  auto res_actual_sample_size = memory::Alloc(place,
+                                              len * sizeof(int),
+                                              phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  char* res_actual_sample_size_ptr = reinterpret_cast<char *>(res_actual_sample_size->ptr());
+
+	std::vector<RequestHandle> request_handles;
+	request_handles.resize(shard_num);
+
+	for (int i = 0; i < shard_num; ++i) {
+    auto* val_context = allocator->ToMemoryContext(
+      res_val_ptr + h_local_part_offsets[i] * sample_size, h_local_part_sizes[i] * sample_size, DT_UINT64);
+    
+    auto* actual_sample_size_context = allocator->ToMemoryContext(
+      res_actual_sample_size_ptr + h_local_part_offsets[i] * sizeof(int), h_local_part_sizes[i] * sizeof(int), DT_UINT8)
+
+    request_handles[i].response_->memory_contexts[0] = val_context;
+    request_handles[i].response_->memory_contexts[1] = actual_sample_size_context;
+	}
+
+  int64_t packed = (cpu_query_switch << 2) | (0 << 1) | weighted;
+  int64_t int_para[4] = {table_idx, sample_size, neighbor_size_limit, packed}; 
+
+	for (int i = 0; i < shard_num; ++i) {
+    auto* node_key_context = allocator->ToMemoryContext(
+      d_merged_push_keys_ptr + h_local_part_offsets[i], h_local_part_sizes[i], DT_UINT64);
+    auto* para_int_context = allocator->ToMemoryContext(int_para, 3, DT_INT64, ML_HOST);
+
+    auto* request = _async_request[i]->MakeDeepWalkRequest(node_key_context, para_int_context);
+    _async_com->PutRequestAsync(request, &request_handles[i]);
+	}
+	//等待异步执行结束
+	for(int i = 0; i < shard_num; ++i) {
+		request_handles[i].Wait();
+	}
+
+  NeighborSampleResult final;
+  final.set_stream(stream);
+  final.initialize(sample_size, len, gpu_id);
+
+	// fill vals
+	heter_comm_kernel_->scatter_vals(
+      reinterpret_cast<const uint64_t *>(res_val_ptr),  // in
+      reinterpret_cast<uint64_t *>(final.val),          // out
+      res.d_local_idx_parted,
+      len,
+      sizeof(uint64_t) * sample_size,
+      stream);
+
+	heter_comm_kernel_->scatter_vals(
+      reinterpret_cast<const int*>(res_actual_sample_size_ptr),     // in
+      reinterpret_cast<int*>(final.actual_sample_size),             // out
+      res.d_local_idx_parted,
+      len,
+      sizeof(int),
+      stream);
+
+  if (compress) {
+    compress_sample(gpu_id, final, len, stream, stream);
+  }
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  return final;
 }
 
 NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all(
@@ -2107,6 +2235,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all(
   if (compress) {
     compress_sample(gpu_id, final, len, stream, stream);
   }
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 
   return final;
 }
@@ -2634,7 +2763,6 @@ void GpuPsGraphTable::compress_sample(
         len);
     CUDA_CHECK(cudaStreamSynchronize(calc_stream));  // hbm safe
 }
-
 
 NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_sage(
     int gpu_id,

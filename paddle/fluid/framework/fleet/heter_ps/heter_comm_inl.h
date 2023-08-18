@@ -120,7 +120,7 @@ void PsRunner::RegisterFunctions() {
 
 	  function_info.function_id = function_info_table_.size();
 	  //需确认填1 还是2 demo中 input_data_count 未被使用
-	  function_info.input_data_count = 1;
+	  function_info.input_data_count = 2;
 	  function_info.output_data_count = 0;
 	  function_info.need_response = false;
 	  if (FLAGS_enable_split_task_to_card) {
@@ -134,7 +134,7 @@ void PsRunner::RegisterFunctions() {
 		  };
 	  }
 	  function_info.input_locations[0] = ML_DEVICE;
-	  function_info.output_locations[0] = ML_DEVICE;
+	  function_info.input_locations[1] = ML_DEVICE;
 	  function_info_table_.push_back(function_info);
 }
 
@@ -2685,7 +2685,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_async(
 	  auto* mem_context = allocator->ToMemoryContext(cache.local_grads +
 		h_local_part_offsets[i] * pull_type_size_, h_local_part_sizes[i] * pull_type_size_,
 		DT_INT8);
-	  request_handles[i].response_->memory_contexts.push_back(mem_context);
+	  request_handles[i].response_->memory_contexts[0]= mem_context;
 	}
 
 	auto* allocator = dynamic_cast<AsyncComAllocator*>(async_communicator->GetMemoryAllocator());
@@ -2753,7 +2753,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_async_one(
 	  auto* mem_context = allocator->ToMemoryContext(cache.local_grads +
 		h_local_part_offsets[i] * pull_type_size_, h_local_part_sizes[i] * pull_type_size_,
 		DT_INT8);
-	  request_handles[i].response_->memory_contexts.push_back(mem_context);
+	  request_handles[i].response_->memory_contexts[0] = mem_context;
 	}
 
 	auto* allocator = dynamic_cast<AsyncComAllocator*>(async_communicator->GetMemoryAllocator());
