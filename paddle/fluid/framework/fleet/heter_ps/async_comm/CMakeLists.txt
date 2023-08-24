@@ -10,17 +10,10 @@ if(WITH_GPU)
     async_comm
     SRCS agent.h agent_copy_message.h config.h copy_thread.h cuda_utils.h fifo_utils.h
          ib_utils.h intranode_communicator.h internode_communicator.h log_macros.h memory_allocator.h
-<<<<<<< HEAD
          meta.h net_utils.h partitioner.h runner.h sideband_communicator.h async_communicator.h
          agent.cpp agent_copy_message.cpp config.cpp copy_thread.cpp cuda_utils.cpp fifo_utils.cpp
          ib_utils.cpp intranode_communicator.cpp internode_communicator.cpp log_macros.cpp memory_allocator.cpp
          meta.cpp net_utils.cpp partitioner.cpp runner.cpp sideband_communicator.cpp async_communicator.cpp
-=======
-         meta.h net_utils.h partitioner.h runner.h sideband_communicator.h
-         agent.cpp agent_copy_message.cpp config.cpp copy_thread.cpp cuda_utils.cpp fifo_utils.cpp
-         ib_utils.cpp intranode_communicator.cpp internode_communicator.cpp log_macros.cpp memory_allocator.cpp
-         meta.cpp net_utils.cpp partitioner.cpp runner.cpp sideband_communicator.cpp
->>>>>>> b70926068075f743e312c2faa6267576be78e13b
     DEPS ${IBVERBS_LIB}
    )
 endif()

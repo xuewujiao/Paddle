@@ -33,16 +33,12 @@ if(WITH_GPU)
     DEPS heter_comm)
   nv_library(
     heter_ps
-    SRCS heter_ps.cu heter_async_comm.h
+    SRCS heter_ps.cu
     DEPS heter_comm heter_async_comm)
   if(WITH_PSCORE)
     nv_library(
       graph_gpu_ps
-<<<<<<< HEAD
-      SRCS graph_gpu_ps_table_inl.cu heter_async_comm.h
-=======
       SRCS graph_gpu_ps_table_inl.cu
->>>>>>> b70926068075f743e312c2faa6267576be78e13b
       DEPS heter_comm heter_async_comm async_comm table hashtable_kernel)
     nv_library(
       graph_sampler
@@ -50,7 +46,7 @@ if(WITH_GPU)
       DEPS graph_gpu_ps)
     nv_library(
       graph_gpu_wrapper
-      SRCS graph_gpu_wrapper.cu heter_async_comm.h
+      SRCS graph_gpu_wrapper.cu
       DEPS heter_comm
            heter_async_comm
            async_comm

@@ -521,22 +521,26 @@ class HeterComm {
                    int* h_right,
                    char* src_val,
                    size_t val_size);
-
- protected:
-  void pull_merge_sparse(const int gpu_id,
-                         KeyType* d_keys,
-                         float* d_vals,
-                         size_t len);
   void pull_normal_sparse(const int gpu_id,
-                          KeyType* d_keys,
-                          float* d_vals,
-                          size_t len);
+                           KeyType* d_keys,
+                           float* d_vals,
+                           size_t len);
   void pull_one_table(const int gpu_id,
                       KeyType* d_keys,
                       float* d_vals,
                       const size_t& len,
                       const cudaStream_t& stream);
-
+  template <typename Sgd>
+  void push_normal_sparse(int num,
+                           KeyType* d_keys,
+                           float* d_grads,
+                           size_t len,
+                           Sgd& sgd);  // NOLINT
+ protected:
+  void pull_merge_sparse(const int gpu_id,
+                         KeyType* d_keys,
+                         float* d_vals,
+                         size_t len);
   // node all2all pull
   void pull_sparse_all2all(const int& gpu_id,
                            KeyType* d_keys,
@@ -555,12 +559,6 @@ class HeterComm {
                             float* d_vals,
                             const size_t& len);
 
-  template <typename Sgd>
-  void push_normal_sparse(int num,
-                          KeyType* d_keys,
-                          float* d_grads,
-                          size_t len,
-                          Sgd& sgd);  // NOLINT
   template <typename Sgd>
   void push_sparse_async(int gpu_id,
                          KeyType* d_keys,
@@ -851,14 +849,7 @@ template <typename GPUAccessor, template <typename T> class GPUOptimizer>
 class PsRunner : public RequestRunner {
 public:
   PsRunner(Partitioner *partitioner, MemoryAllocatorBase *allocator,
-            HeterComm<FeatureKey, float*, float*, GPUAccessor> *comm, GPUAccessor& gpu_accessor)
-      : RequestRunner(partitioner, allocator) {
-        int gpu_id = partitioner->GetLocalRank();
-        platform::CUDADeviceGuard guard(gpu_id);
-        cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking);
-        comm_ = comm;
-        opt_ = GPUOptimizer<GPUAccessor>(gpu_accessor);
-  };
+            HeterComm<FeatureKey, float*, float*, GPUAccessor> *comm, GPUAccessor& gpu_accessor);
   virtual ~PsRunner() {
     int gpu_id = partitioner_->GetLocalRank();
     platform::CUDADeviceGuard guard(gpu_id);

@@ -68,46 +68,25 @@ template <typename GPUAccessor, template <typename T> class GPUOptimizer>
 HeterPs<GPUAccessor, GPUOptimizer>::~HeterPs() {}
 
 template <typename GPUAccessor, template <typename T> class GPUOptimizer>
-void HeterPs<GPUAccessor, GPUOptimizer>::init_async_com(int optimizer_type, int device_num) {
-       auto async_com = paddle::framework::AsyncContext::GetInstance();
-       async_com->init(node_size_, device_num, rank_id_);
-       auto* accessor_wrapper_ptr =
-                GlobalAccessorFactory::GetInstance().GetAccessorWrapper();
-       CommonFeatureValueAccessor* gpu_accessor =
-                ((AccessorWrapper<CommonFeatureValueAccessor>*)accessor_wrapper_ptr)
-                    ->AccessorPtr();
-       std::vector<RequestRunner *> request_runners;
-       for (int i = 0; i < device_num; i++) {
-           auto registry = async_com->get_registry(i);
-           auto partitioner = async_com->get_partitioner(i);
-           auto memory_allocator = async_com->get_alloctor(i);
-           if (optimizer_type_ == 1) {
-             auto ps_runer = new PsRunner<CommonFeatureValueAccessor, SparseAdagradOptimizer>(partitioner, memory_allocator, com, *gpu_accessor);
-             registry->Register(1, ps_runer);
-             ps_runer->StartProcessLoop();
-             request_runners.push_back((RequestRunner *)ps_runer);
-           }
-           else if(optimizer_type_ == 3) {
-             auto ps_runer = new PsRunner<CommonFeatureValueAccessor, SparseAdamOptimizer>(partitioner, memory_allocator, com, *gpu_accessor);
-             registry->Register(1, ps_runer);
-             ps_runer->StartProcessLoop();
-             request_runners.push_back((RequestRunner *)ps_runer);
-           }
-           else if(optimizer_type == 4) {
-             auto ps_runer = new PsRunner<CommonFeatureValueAccessor, SparseAdamSharedOptimizer>(partitioner, memory_allocator, com, *gpu_accessor);
-             registry->Register(1, ps_runer);
-             ps_runer->StartProcessLoop();
-             request_runners.push_back((RequestRunner *)ps_runer);
-           }
-           else if(optimizer_type == 5) {
-             auto ps_runer = new PsRunner<CommonFeatureValueAccessor, SparseAdagradV2Optimizer>(partitioner, memory_allocator, com, *gpu_accessor);
-             registry->Register(1, ps_runer);
-             ps_runer->StartProcessLoop();
-             request_runners.push_back((RequestRunner *)ps_runer);
-           }
-      }
-      comm_->set_runner(request_runner);
-      async_com->start();
+void HeterPs<GPUAccessor, GPUOptimizer>::init_async_com(int optimizer_type, int device_num, int node_size, int rank_id) {
+        auto async_com = paddle::framework::AsyncContext::GetInstance();
+        async_com->init(node_size, device_num, rank_id);
+        auto* accessor_wrapper_ptr =
+                 GlobalAccessorFactory::GetInstance().GetAccessorWrapper();
+        CommonFeatureValueAccessor* gpu_accessor =
+                 ((AccessorWrapper<CommonFeatureValueAccessor>*)accessor_wrapper_ptr)
+                     ->AccessorPtr();
+        std::vector<RequestRunner *> request_runners;
+        for (int i = 0; i < device_num; i++) {
+            auto registry = async_com->get_registry(i);
+            auto partitioner = async_com->get_partitioner(i);
+            auto memory_allocator = async_com->get_alloctor(i);
+            auto ps_runer = new PsRunner<GPUAccessor, GPUOptimizer>(partitioner, memory_allocator, comm_.get(), *gpu_accessor);
+            registry->Register(1, ps_runer);
+            ps_runer->StartProcessLoop();
+            request_runners.push_back((RequestRunner *)ps_runer);
+       }       comm_->set_runner(request_runners);
+       async_com->start();
 }
 
 

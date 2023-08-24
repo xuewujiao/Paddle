@@ -47,6 +47,17 @@ inline int64_t tick_usec() {
 }
 
 template <typename GPUAccessor, template <typename T> class GPUOptimizer>
+PsRunner<GPUAccessor, GPUOptimizer> :: PsRunner(Partitioner *partitioner, MemoryAllocatorBase *allocator,
+            HeterComm<FeatureKey, float*, float*, GPUAccessor> *comm, GPUAccessor& gpu_accessor)
+      : RequestRunner(partitioner, allocator) {
+        int gpu_id = partitioner->GetLocalRank();
+        platform::CUDADeviceGuard guard(gpu_id);
+        cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking);
+        comm_ = comm;
+        opt_ = GPUOptimizer<GPUAccessor>(gpu_accessor);
+};
+
+template <typename GPUAccessor, template <typename T> class GPUOptimizer>
 void PsRunner<GPUAccessor, GPUOptimizer>::PullSparse(struct AsyncReqRes *request, struct AsyncReqRes *response) {
 	  int gpu_id = partitioner_->GetLocalRank();
 	  platform::CUDADeviceGuard guard(gpu_id);
@@ -55,7 +66,7 @@ void PsRunner<GPUAccessor, GPUOptimizer>::PullSparse(struct AsyncReqRes *request
 	  auto input_dt = static_cast<::DataType>(request->meta.data_types[0]);
 	  size_t elt_count = request->meta.data_sizes[0] / GetElementSize(input_dt);
 	  float *d_vals = static_cast<float*> (allocator_->Malloc(output_context, ML_DEVICE, DT_INT8, elt_count * data_size));
-	  void* input_idx_ptr = static_cast<FeatureKey*> (request->memory_contexts[0]->GetPointer());
+	  FeatureKey* input_idx_ptr = static_cast<FeatureKey*> (request->memory_contexts[0]->GetPointer());
 
       // 显存可能不安全（已改过一遍）  以及使用的stream和部分训练冲突
 	  comm_->pull_normal_sparse(
@@ -88,7 +99,7 @@ void PsRunner<GPUAccessor, GPUOptimizer>::PullOneSparse(struct AsyncReqRes *requ
 
 	  float *d_vals = static_cast<float*> (allocator_->Malloc(output_context,
 	    ML_DEVICE, DT_INT8, elt_count * data_size));
-	  void* input_idx_ptr = static_cast<FeatureKey*> (request->memory_contexts[0]->GetPointer());
+	  FeatureKey * input_idx_ptr = static_cast<FeatureKey*> (request->memory_contexts[0]->GetPointer());
 	  comm_->pull_one_table(gpu_id, input_idx_ptr, d_vals, elt_count, stream_);
 	  CUDA_CHECK(cudaStreamSynchronize(stream_));
 
@@ -147,8 +158,8 @@ void PsRunner<GPUAccessor, GPUOptimizer>::PushOneSparse(struct AsyncReqRes *requ
 	size_t elt_count = request->meta.data_sizes[0] / GetElementSize(input_dt);
 	FeatureKey* d_keys = static_cast<FeatureKey*> (request->memory_contexts[0]->GetPointer());
 	float* d_grads = static_cast<float*> (request->memory_contexts[1]->GetPointer());
-	comm_->push_normal_sparse(gpu_id, d_keys, d_grads, elt_count, opt_, stream_);
-	CUDA_CHECK(cudaStreamSynchronize(stream_));
+	comm_->push_normal_sparse(gpu_id, d_keys, d_grads, elt_count, opt_);
+	//CUDA_CHECK(cudaStreamSynchronize(stream_));
 }
 
 template <typename KeyType,
@@ -2150,8 +2161,6 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_normal_sparse(
   }
 }
 
-#elif defined(PADDLE_WITH_XPU_KP)
-
 template <typename KeyType,
           typename ValType,
           typename GradType,
@@ -2166,6 +2175,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_async(
 	if (len == 0) {
 	  return;
 	}
+    auto stream = resource_->local_stream(gpu_id, 0);
 	auto &cache = storage_[gpu_id];//使用pull申请的显存
 	  // scale grad
 	if (multi_node_) {
@@ -2177,8 +2187,8 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_async(
 	                                 gpu_accessor_);
 	}
 
-	cache.init_shard(fea_size, node_size_);
-	auto &res = my_cache.shard_res;
+	cache.init_shard(len, node_size_);
+	auto &res = cache.shard_res;
 
 	size_t *h_local_part_sizes = res.h_local_part_sizes.data();
 	size_t *h_local_part_offsets = res.h_local_part_offsets.data();
@@ -2199,7 +2209,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_async(
 	CHECK_EQ(len, h_local_part_offsets[node_size_]);
 
 	heter_comm_kernel_->gather_vals(
-	     reinterpret_cast<float *>(cache.d_merged_vals, // out
+	     reinterpret_cast<float *>(cache.d_merged_vals), // out
 	     reinterpret_cast<const float *>(d_grads),  // in
 	     res.d_local_idx_parted,
 		 len,
@@ -2241,6 +2251,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_async_one(
 	  return;
 	}
 	auto &cache = storage_[gpu_id];//使用pull申请的显存
+    auto stream = resource_->local_stream(gpu_id, 0);
 	  // scale grad
 	if (multi_node_) {
 	  heter_comm_kernel_->scale_grad(len,
@@ -2253,8 +2264,8 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_async_one(
 
 	size_t value_bytes = grad_type_size_;
 	int shard_num = node_size_ * device_num_;
-	cache.init_shard(fea_size, shard_num);
-	auto &res = my_cache.shard_res;
+	cache.init_shard(len, shard_num);
+	auto &res = cache.shard_res;
 
 	size_t *h_local_part_sizes = res.h_local_part_sizes.data();
 	size_t *h_local_part_offsets = res.h_local_part_offsets.data();
@@ -2276,14 +2287,14 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_async_one(
 	CHECK_EQ(len, h_local_part_offsets[node_size_]);
 
 	heter_comm_kernel_->gather_vals(
-	     reinterpret_cast<float *>(cache.d_merged_vals, // out
+	     reinterpret_cast<float *>(cache.d_merged_vals), // out
 	     reinterpret_cast<const float *>(d_grads),  // in
 	     res.d_local_idx_parted,
 		 len,
 	     value_bytes,
 	     stream);
 
-	std::vector<RequestHandle> request_handles(shard_num)
+	std::vector<RequestHandle> request_handles(shard_num);
 	// fill shard vals
 	auto* allocator = dynamic_cast<AsyncComAllocator*>(_async_request[gpu_id]->get_allocator());
 	for (int i = 0; i < shard_num; ++i) {
@@ -2302,6 +2313,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_async_one(
 	}
 }
 
+#elif defined(PADDLE_WITH_XPU_KP)
 
 template <typename KeyType,
           typename ValType,

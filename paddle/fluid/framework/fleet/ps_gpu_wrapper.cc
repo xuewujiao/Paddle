@@ -1723,7 +1723,7 @@ void PSGPUWrapper::BuildGPUTask(std::shared_ptr<HeterContext> gpu_task) {
     HeterPs_->set_sparse_sgd(optimizer_config_);
     HeterPs_->set_embedx_sgd(optimizer_config_);
     if (node_size_ > 1  && FLAGS_enable_async_comm) {
-       HeterPs_->init_async_com(optimizer_type_, device_num);
+       HeterPs_->init_async_com(optimizer_type_, device_num, node_size_, rank_id_);
     }
 
 #endif

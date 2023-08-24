@@ -20,6 +20,8 @@ limitations under the License. */
 namespace paddle {
 namespace framework {
 
+std::shared_ptr<AsyncContext> AsyncContext::s_instance_;
+Config AsyncContext::config;
 
 AsyncReqRes* RequestRunner::MakePullRequest(MemoryContextBase* memory_context, int target_global_rank) {
 	AsyncReqRes *request = CreateAsyncReqRes();
