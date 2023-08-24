@@ -15,7 +15,7 @@ limitations under the License. */
 #include <vector>
 
 #include "paddle/fluid/framework/fleet/heter_ps/heter_ps.h"
-
+#include "paddle/fluid/framework/fleet/heter_ps/heter_async_comm.h"
 #ifdef PADDLE_WITH_HETERPS
 
 namespace paddle {
@@ -128,6 +128,29 @@ void HeterPs<GPUAccessor, GPUOptimizer>::set_nccl_comm_and_size(
     int comm_size,
     int rank_id) {
   comm_->set_nccl_comm_and_size(inner_comms, inter_comms, comm_size, rank_id);
+}
+
+template <typename GPUAccessor, template <typename T> class GPUOptimizer>
+void HeterPs<GPUAccessor, GPUOptimizer>::init_async_com(int optimizer_type, int device_num, int node_size, int rank_id) {
+       auto async_com = paddle::framework::AsyncContext::GetInstance();
+       async_com->init(node_size, device_num, rank_id);
+       auto* accessor_wrapper_ptr =
+                GlobalAccessorFactory::GetInstance().GetAccessorWrapper();
+       CommonFeatureValueAccessor* gpu_accessor =
+                ((AccessorWrapper<CommonFeatureValueAccessor>*)accessor_wrapper_ptr)
+                    ->AccessorPtr();
+       std::vector<RequestRunner *> request_runners;
+       for (int i = 0; i < device_num; i++) {
+           auto registry = async_com->get_registry(i);
+           auto partitioner = async_com->get_partitioner(i);
+           auto memory_allocator = async_com->get_alloctor(i);
+           auto ps_runer = new PsRunner<GPUAccessor, GPUOptimizer>(partitioner, memory_allocator, comm_.get(), *gpu_accessor);
+           registry->Register(1, ps_runer);
+           ps_runer->StartProcessLoop();
+           request_runners.push_back((RequestRunner *)ps_runer);
+      }
+      comm_->set_runner(request_runners);
+      async_com->start();
 }
 
 template <typename GPUAccessor, template <typename T> class GPUOptimizer>

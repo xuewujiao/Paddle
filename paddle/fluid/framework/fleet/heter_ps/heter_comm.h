@@ -48,39 +48,6 @@ namespace framework {
 #define TYPEALIGN(ALIGNVAL, LEN) \
   (((uint64_t)(LEN) + ((ALIGNVAL)-1)) & ~((uint64_t)((ALIGNVAL)-1)))
 
-
-//采样与feature拉取的runner 对应 HeterComm<uint64_t, uint64_t, int, CommonFeatureValueAccessor> com
-template <typename GPUAccessor, template <typename T> class GPUOptimizer>
-class PsRunner : public RequestRunner {
-public:
-  PsRunner(Partitioner *partitioner, MemoryAllocatorBase *allocator,
-			HeterComm<FeatureKey, float*, float*, GPUAccessor> *comm, GPUAccessor& gpu_accessor)
-      : RequestRunner(partitioner, allocator) {
-		int gpu_id = partitioner->GetLocalRank();
-	    platform::CUDADeviceGuard guard(gpu_id);
-		cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking);
-		comm_ = comm;
-		opt_ = GPUOptimizer<GPUAccessor>(gpu_accessor);
-  };
-  virtual ~PsRunner() {
-	int gpu_id = partitioner->GetLocalRank();
-	platform::CUDADeviceGuard guard(gpu_id);
-	PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamDestroy(stream_));
-  };
-
-  void RegisterFunctions() override;
-  void PullSparse(struct AsyncReqRes *request, struct AsyncReqRes *response);
-  void PushSparse(struct AsyncReqRes *request, struct AsyncReqRes *response);
-  void PullOneSparse(struct AsyncReqRes *request, struct AsyncReqRes *response);
-  void PushOneSparse(struct AsyncReqRes *request, struct AsyncReqRes *response);
-
-private:
- HeterComm<FeatureKey, float*, float*, GPUAccessor> * comm_;
- GPUOptimizer<GPUAccessor> opt_;
- cudaStream_t stream_;
-}
-
-
 template <typename KeyType,
           typename ValType,
           typename GradType,
@@ -210,7 +177,7 @@ class HeterComm {
                         GradType* d_grads,
                         size_t len,
                         Sgd& sgd,
-						StreamType stream = 0);  // NOLINT
+						cudaStream_t stream = 0);  // NOLINT
 
   void set_nccl_comm_and_size(const std::vector<ncclComm_t>& inner_comms,
                               const std::vector<ncclComm_t>& inter_comms,
@@ -554,22 +521,26 @@ class HeterComm {
                    int* h_right,
                    char* src_val,
                    size_t val_size);
-
- protected:
-  void pull_merge_sparse(const int gpu_id,
-                         KeyType* d_keys,
-                         float* d_vals,
-                         size_t len);
   void pull_normal_sparse(const int gpu_id,
-                          KeyType* d_keys,
-                          float* d_vals,
-                          size_t len);
+                           KeyType* d_keys,
+                           float* d_vals,
+                           size_t len);
   void pull_one_table(const int gpu_id,
                       KeyType* d_keys,
                       float* d_vals,
                       const size_t& len,
                       const cudaStream_t& stream);
-
+  template <typename Sgd>
+  void push_normal_sparse(int num,
+                           KeyType* d_keys,
+                           float* d_grads,
+                           size_t len,
+                           Sgd& sgd);  // NOLINT
+ protected:
+  void pull_merge_sparse(const int gpu_id,
+                         KeyType* d_keys,
+                         float* d_vals,
+                         size_t len);
   // node all2all pull
   void pull_sparse_all2all(const int& gpu_id,
                            KeyType* d_keys,
@@ -589,21 +560,17 @@ class HeterComm {
                             const size_t& len);
 
   template <typename Sgd>
-  void push_normal_sparse(int num,
-                          KeyType* d_keys,
-                          float* d_grads,
-                          size_t len,
-                          Sgd& sgd);  // NOLINT
-
   void push_sparse_async(int gpu_id,
                          KeyType* d_keys,
                          float* d_grads,
-                         size_t len);
-
+                         size_t len,
+                         Sgd& sgd);
+  template <typename Sgd>
   void push_sparse_async_one(int gpu_id,
                              KeyType* d_keys,
                              float* d_grads,
-                             size_t len);
+                             size_t len,
+                             Sgd& sgd);
 
   void shard_inner_keys(const size_t& total_fea_num,
                         const KeyType* d_keys,
@@ -875,6 +842,30 @@ class HeterComm {
 #endif
   int64_t start_time_ = 0;
   bool is_infer_mode_ = false;
+};
+
+//采样与feature拉取的runner 对应 HeterComm<uint64_t, uint64_t, int, CommonFeatureValueAccessor> com
+template <typename GPUAccessor, template <typename T> class GPUOptimizer>
+class PsRunner : public RequestRunner {
+public:
+  PsRunner(Partitioner *partitioner, MemoryAllocatorBase *allocator,
+            HeterComm<FeatureKey, float*, float*, GPUAccessor> *comm, GPUAccessor& gpu_accessor);
+  virtual ~PsRunner() {
+    int gpu_id = partitioner_->GetLocalRank();
+    platform::CUDADeviceGuard guard(gpu_id);
+    PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamDestroy(stream_));
+  };
+
+  void RegisterFunctions() override;
+  void PullSparse(struct AsyncReqRes *request, struct AsyncReqRes *response);
+  void PushSparse(struct AsyncReqRes *request, struct AsyncReqRes *response);
+  void PullOneSparse(struct AsyncReqRes *request, struct AsyncReqRes *response);
+  void PushOneSparse(struct AsyncReqRes *request, struct AsyncReqRes *response);
+
+private:
+ HeterComm<FeatureKey, float*, float*, GPUAccessor> * comm_;
+ GPUOptimizer<GPUAccessor> opt_;
+ cudaStream_t stream_;
 };
 
 }  // end namespace framework

@@ -1,0 +1,47 @@
+cmake_minimum_required(VERSION 3.16)
+project(async_comm LANGUAGES CXX CUDA)
+
+set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CUDA_ARCHITECTURES 60-real 70-real 80-real 86)
+
+find_package(Threads REQUIRED)
+find_package(CUDA REQUIRED 11.0)
+
+find_library(IBVERBS_LIB ibverbs)
+if(NOT IBVERBS_LIB)
+    message(FATAL_ERROR "ibverbs library not found")
+endif()
+message(INFO " IBVERBS_LIB=${IBVERBS_LIB}")
+
+set(CMAKE_BUILD_TYPE Release)
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -g -U NDEBUG")
+
+include_directories(${CUDA_INCLUDE_DIRS})
+
+add_executable(rdma_test rdma_test.cpp ib_utils.cpp net_utils.cpp)
+target_link_libraries(rdma_test ${CMAKE_THREAD_LIBS_INIT} ${CUDA_LIBRARIES} ${IBVERBS_LIB})
+
+add_executable(demo_application
+        agent.cpp
+        agent_copy_message.cpp
+        async_communicator.cpp
+        config.cpp
+        copy_thread.cpp
+        cuda_utils.cpp
+        demo_application.cpp
+        demo_memory_allocator.cpp
+        demo_kernels.cu
+        demo_runner.cpp
+        fifo_utils.cpp
+        ib_utils.cpp
+        intranode_communicator.cpp
+        internode_communicator.cpp
+        log_macros.cpp
+        memory_allocator.cpp
+        meta.cpp
+        net_utils.cpp
+        partitioner.cpp
+        runner.cpp
+        sideband_communicator.cpp
+        )
+target_link_libraries(demo_application ${CMAKE_THREAD_LIBS_INIT} ${CUDA_LIBRARIES} ${IBVERBS_LIB})

@@ -1107,7 +1107,8 @@ HeterCommKernel::calc_node_shard_index<uint64_t, int, cudaStream_t>(
     int* shard_index,
     const int& total_devs,
     const int& node_num,
-    const cudaStream_t& stream);
+    const cudaStream_t& stream,
+    bool partition_by_card);
 
 template void
 HeterCommKernel::calc_node_shard_index<int64_t, int, cudaStream_t>(
@@ -1116,7 +1117,8 @@ HeterCommKernel::calc_node_shard_index<int64_t, int, cudaStream_t>(
     int* shard_index,
     const int& total_devs,
     const int& node_num,
-    const cudaStream_t& stream);
+    const cudaStream_t& stream,
+    bool partition_by_card);
 
 template void
 HeterCommKernel::calc_node_shard_index<uint64_t, uint32_t, cudaStream_t>(
@@ -1125,7 +1127,8 @@ HeterCommKernel::calc_node_shard_index<uint64_t, uint32_t, cudaStream_t>(
     uint32_t* shard_index,
     const int& total_devs,
     const int& node_num,
-    const cudaStream_t& stream);
+    const cudaStream_t& stream,
+    bool partition_by_card);
 
 template void
 HeterCommKernel::calc_node_shard_index<int64_t, uint32_t, cudaStream_t>(
@@ -1134,7 +1137,8 @@ HeterCommKernel::calc_node_shard_index<int64_t, uint32_t, cudaStream_t>(
     uint32_t* shard_index,
     const int& total_devs,
     const int& node_num,
-    const cudaStream_t& stream);
+    const cudaStream_t& stream,
+    bool partition_by_card);
 
 template void HeterCommKernel::fill_shard_key<int64_t, int, cudaStream_t>(
     int64_t* d_shard_keys,
