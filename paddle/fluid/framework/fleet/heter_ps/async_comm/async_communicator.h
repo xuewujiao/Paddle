@@ -109,10 +109,17 @@ class AsyncCommunicator {
  private:
   void SendStopSignalToSingleRank(int global_rank);
 
+<<<<<<< HEAD
   Partitioner* partitioner_ = nullptr;
   MemoryAllocatorBase* allocator_ = nullptr;
   RunnerRegistry* runner_registry_ = nullptr;
   Config* config_ = nullptr;
+=======
+  Config* config_ = nullptr;
+  Partitioner* partitioner_ = nullptr;
+  MemoryAllocatorBase* allocator_ = nullptr;
+  RunnerRegistry* runner_registry_ = nullptr;
+>>>>>>> b70926068075f743e312c2faa6267576be78e13b
 
   MessageQueue<AsyncReqRes*> response_queue_;
 
@@ -123,4 +130,8 @@ class AsyncCommunicator {
   std::unordered_map<uint64_t, RequestHandle*> pending_mapping_;
 
   std::unique_ptr<SideBandCommunicator> sideband_communicator_;
+<<<<<<< HEAD
 };
+=======
+};
+>>>>>>> b70926068075f743e312c2faa6267576be78e13b
