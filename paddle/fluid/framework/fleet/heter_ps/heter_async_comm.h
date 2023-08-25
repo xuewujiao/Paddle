@@ -249,6 +249,10 @@ public:
   virtual AsyncReqRes* MakeDeepWalkRequest(MemoryContextBase *node_key_context,
                                            MemoryContextBase *para_int_context,
                                            int target_global_rank){ return nullptr; }
+  virtual AsyncReqRes* MakeFloatFeaturePullRequest(MemoryContextBase *node_key_context,
+                                              int target_global_rank){ return nullptr; }
+  virtual AsyncReqRes* MakeUintFeaturePullRequest(MemoryContextBase *node_key_context,
+                                              int target_global_rank){ return nullptr; }
   
 };
 

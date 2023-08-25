@@ -886,6 +886,18 @@ void GraphGpuWrapper::init_service() {
       deep_walk_sample_runer->StartProcessLoop();
       request_runners.push_back((RequestRunner *)deep_walk_sample_runer);
     }
+
+    for (int i = 0; i < gpu_num; i++) {
+      auto registry = async_com->get_registry(i);
+      auto partitioner = async_com->get_partitioner(i);
+      auto memory_allocator = async_com->get_alloctor(i);
+
+      auto feature_pull_runer = new FeaturePullRunner(partitioner, memory_allocator, g);
+      registry->Register(2, feature_pull_runer);
+      feature_pull_runer->StartProcessLoop();
+      request_runners.push_back((RequestRunner *)feature_pull_runer);
+    }
+
     g->set_runner(request_runners);
   }
 }
