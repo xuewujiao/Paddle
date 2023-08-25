@@ -12,7 +12,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License. */
 
-#include "paddle/fluid/framework/fleet/heter_ps/heter_ps.h"
+#include "paddle/fluid/framework/fleet/heter_ps/heter_async_comm.h"
 #include <vector>
 
 #ifdef PADDLE_WITH_HETERPS
@@ -20,6 +20,8 @@ limitations under the License. */
 namespace paddle {
 namespace framework {
 
+std::shared_ptr<AsyncContext> AsyncContext::s_instance_;
+Config AsyncContext::config;
 
 AsyncReqRes* RequestRunner::MakePullRequest(MemoryContextBase* memory_context, int target_global_rank) {
 	AsyncReqRes *request = CreateAsyncReqRes();

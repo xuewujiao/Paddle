@@ -64,9 +64,10 @@ class HeterPs : public HeterPsBase {
   int get_index_by_devid(int devid) override;
   void show_one_table(int gpu_num) override;
   void push_sparse(int num, FeatureKey* d_keys, float* d_grads, size_t len);
-  HeterComm<FeatureKey, float*, float*, GPUAccessor> * get_com() {
-	  return comm_.get();
+  void * get_com() {
+	  return (void*) comm_.get();
   }
+  void init_async_com(int optimizer_type, int device_num, int node_size, int rank_id);
   void show_table_collisions() override;
 #if defined(PADDLE_WITH_CUDA)
   // dedup

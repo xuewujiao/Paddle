@@ -239,16 +239,6 @@ class GpuPsGraphTable
                                                 bool cpu_query_switch,
                                                 bool compress,
                                                 bool weighted);
-  NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all_async(int gpu_id,
-                                                                            int sample_step,
-                                                                            int table_idx,
-                                                                            uint64_t* d_keys,
-                                                                            int sample_size,
-                                                                            int len,
-                                                                            int neighbor_size_limit,
-                                                                            bool cpu_query_switch,
-                                                                            bool compress,
-                                                                            bool weighted);  
   NeighborSampleResult graph_neighbor_sample_v2_one_table(int gpu_id,
                                                           int idx,
                                                           uint64_t *key,
@@ -262,6 +252,7 @@ class GpuPsGraphTable
 														                              cudaStream_t mem_stream);
 
   void sample_v2_on_cpu(int gpu_id,
+                        int idx,
                         uint64_t* key,
                         int len,
                         int sample_size,
@@ -271,6 +262,7 @@ class GpuPsGraphTable
   void compress_sample(int gpu_id,
                        NeighborSampleResult &  result,
 					   int len,
+                       int sample_size,
                        cudaStream_t calc_stream,
                        cudaStream_t mem_stream);
 
@@ -484,6 +476,32 @@ class GpuPsGraphTable
   bool infer_mode_ = false;
   using RankTable = HashTable<uint64_t, uint32_t>;
   std::vector<RankTable *> rank_tables_;
+};
+
+class DeepWalkSampleRunner : public RequestRunner {
+public:
+  DeepWalkSampleRunner(Partitioner *partitioner, MemoryAllocatorBase *allocator, GpuPsGraphTable *graph_table)
+      : RequestRunner(partitioner, allocator) {
+        int gpu_id = partitioner->GetLocalRank();
+      platform::CUDADeviceGuard guard(gpu_id);
+        cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking);
+        graph_table_ = graph_table;
+  };
+  virtual ~DeepWalkSampleRunner() {
+    int gpu_id = partitioner_->GetLocalRank();
+    platform::CUDADeviceGuard guard(gpu_id);
+    PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamDestroy(stream_));
+  };
+
+  void RegisterFunctions() override;
+  AsyncReqRes* MakeDeepWalkRequest(MemoryContextBase *node_key_context,
+                                                      MemoryContextBase *para_int_context,
+                                                      int target_global_rank) override;
+  void NeighborSample(struct AsyncReqRes *request, struct AsyncReqRes *response);
+
+private:
+ GpuPsGraphTable *graph_table_;
+ cudaStream_t stream_;
 };
 
 };  // namespace framework

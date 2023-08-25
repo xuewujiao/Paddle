@@ -89,6 +89,8 @@ class HeterPsBase {
                            const OptimizerConfig& embedx_config,
                            bool infer_mode) = 0;
   virtual void set_mode(bool infer_mode) = 0;
+  virtual void * get_com() = 0;
+  virtual void init_async_com(int optimizer_type, int device_num, int node_id, int rank_id) = 0;
 };
 
 }  // end namespace framework
