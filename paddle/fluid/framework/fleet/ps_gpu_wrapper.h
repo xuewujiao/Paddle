@@ -778,6 +778,7 @@ class PSGPUWrapper {
                           ? 1
                           : static_cast<int>(config["optimizer_type"]);
 
+    init_heter_ps();
     VLOG(0) << "InitializeGPUServer optimizer_type_:" << optimizer_type_
             << " nodeid_slot:" << nodeid_slot
             << " feature_learning_rate:" << feature_learning_rate;
@@ -898,6 +899,7 @@ class PSGPUWrapper {
   void ShowOneTable(int index) { HeterPs_->show_one_table(index); }
 
   int UseAfsApi() { return use_afs_api_; }
+  void init_heter_ps(size_t size = 100);
 
 #ifdef PADDLE_WITH_PSLIB
   std::shared_ptr<paddle::ps::AfsReader> OpenReader(

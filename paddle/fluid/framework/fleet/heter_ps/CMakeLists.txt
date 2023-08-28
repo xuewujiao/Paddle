@@ -18,8 +18,8 @@ if(WITH_GPU)
     DEPS ${HETERPS_DEPS})
   nv_library(
     heter_async_comm
-    SRCS heter_async_comm.h heter_async_comm.cpp mem_pool.h
-    DEPS ${HETERPS_DEPS} async_comm
+    SRCS heter_async_comm.h heter_async_comm.cpp mem_pool.h heter_resource.cc heter_resource.h
+    DEPS ${HETERPS_DEPS} async_comm 
   )  
 
   nv_library(
