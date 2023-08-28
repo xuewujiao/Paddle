@@ -133,7 +133,7 @@ void SetupConnection() {
 static struct IbPeerInfo local_info, remote_info;
 
 void FillAndExchangeIbPeerInfo() {
-  FillIbPeerInfo(&local_info, g_ib_port, &g_ib_local_context.port_attr, g_qp);
+  FillIbPeerInfo(&local_info, g_ib_port, &g_ib_local_context.port_attr, g_qp, &g_ib_local_context);
   SingleSend(server_client_fd, &local_info, sizeof(local_info));
   SingleRecv(server_client_fd, &remote_info, sizeof(remote_info));
 }

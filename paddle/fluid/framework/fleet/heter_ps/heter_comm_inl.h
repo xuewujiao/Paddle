@@ -3204,8 +3204,12 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::partition_shard_keys(
   } else {
     // get dest rank by sharding
     //VLOG(0) << "hard sharding";
+	int node_num = shard_num;
+	if (partition_by_card) {
+		node_num = shard_num / device_num_;
+	}
     heter_comm_kernel_->calc_node_shard_index(
-          d_keys, len, d_shard_index_tmp_ptr, device_num_, shard_num, stream, partition_by_card);
+          d_keys, len, d_shard_index_tmp_ptr, device_num_, node_num, stream, partition_by_card);
 
   }
 

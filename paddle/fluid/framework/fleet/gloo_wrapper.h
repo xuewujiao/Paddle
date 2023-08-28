@@ -175,6 +175,10 @@ class GlooWrapper {
     hdfs_ugi_ = fs_ugi;
   }
 
+  std::string GetHttpIp() {
+    return http_ip_;
+  }
+
   void SetHttpStore(const std::string& ip, int port, const std::string& scope) {
     store_type_ = GlooStoreType::HTTP;
     http_ip_ = ip;
