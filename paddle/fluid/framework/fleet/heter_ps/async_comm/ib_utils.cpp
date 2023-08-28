@@ -90,7 +90,7 @@ void DestroyLocalContext(IbLocalContext* ib_local_context) {
   ib_local_context->clear();
 }
 
-void FillIbPeerInfo(IbPeerInfo *peer_info, int port_id, struct ibv_port_attr *port_attr, struct ibv_qp *qp) {
+void FillIbPeerInfo(IbPeerInfo *peer_info, int port_id, struct ibv_port_attr *port_attr, struct ibv_qp *qp, IbLocalContext* ib_local_context) {
   peer_info->lid = port_attr->lid;
   peer_info->qpn = qp->qp_num;
   peer_info->ib_port = port_id;
@@ -101,10 +101,10 @@ void FillIbPeerInfo(IbPeerInfo *peer_info, int port_id, struct ibv_port_attr *po
     peer_info->spn = 0;
     peer_info->iid = 0;
   } else {
-    ibv_gid *local_gid = nullptr;
-    //ibv_query_gid(ib_context, ib_port, 1, &comm->gidInfo.localGid);
-    peer_info->spn = local_gid->global.subnet_prefix;
-    peer_info->iid = local_gid->global.interface_id;
+    ibv_gid local_gid;
+    CALL_CHECK(ibv_query_gid(ib_local_context->context, ib_local_context->port_id, g_ib_envs.gid_index, &local_gid));
+    peer_info->spn = local_gid.global.subnet_prefix;
+    peer_info->iid = local_gid.global.interface_id;
   }
 }
 
@@ -239,7 +239,7 @@ void QpRtr(ibv_qp *qp, IbPeerInfo *local_info, IbPeerInfo *remote_info) {
   qpAttr.dest_qp_num = remote_info->qpn;
   qpAttr.rq_psn = 0;
   qpAttr.max_dest_rd_atomic = 1;
-  qpAttr.min_rnr_timer = 0x12;
+  qpAttr.min_rnr_timer = 12;
   BOOL_CHECK(local_info->link_layer == remote_info->link_layer);
   if (local_info->link_layer == IBV_LINK_LAYER_ETHERNET) {
     qpAttr.ah_attr.is_global = 1;
@@ -267,7 +267,7 @@ void QpRts(struct ibv_qp *qp) {
   struct ibv_qp_attr qpAttr;
   memset(&qpAttr, 0, sizeof(struct ibv_qp_attr));
   qpAttr.qp_state = IBV_QPS_RTS;
-  qpAttr.timeout = 14;
+  qpAttr.timeout = 22;
   qpAttr.retry_cnt = 7;
   qpAttr.rnr_retry = 7;
   qpAttr.sq_psn = 0;

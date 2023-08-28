@@ -872,8 +872,10 @@ void GraphGpuWrapper::init_service() {
   upload_task_pool.reset(new ::ThreadPool(upload_num));
   if (multi_node_ && FLAGS_enable_async_comm) {
     auto async_com = paddle::framework::AsyncContext::GetInstance();
-	  async_com->init(node_size_, gpu_num, rank_id_);
-    
+	async_com->init(node_size_, gpu_num, rank_id_);
+	paddle::framework::AsyncContext::config.sideband_server_name = gloo->GetHttpIp();
+	VLOG(0) << " node 0 ip is " << paddle::framework::AsyncContext::config.sideband_server_name;
+    VLOG(0) << " sample runner init ";
 	  //runner register and start
     std::vector<RequestRunner *> request_runners;
     for (int i = 0; i < gpu_num; i++) {
@@ -887,6 +889,9 @@ void GraphGpuWrapper::init_service() {
       request_runners.push_back((RequestRunner *)deep_walk_sample_runer);
     }
     g->set_runner(request_runners);
+    VLOG(0) << " sample runner init  end";
+    async_com->start();
+    VLOG(0) << "async_com  start"; 
   }
 }
 

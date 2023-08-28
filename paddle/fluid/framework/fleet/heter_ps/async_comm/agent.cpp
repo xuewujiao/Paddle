@@ -73,8 +73,8 @@ void Agent::CreateResources() {
   remote_node_infos_.resize(partitioner_->GetNodeCount());
   for (int i = 0; i < partitioner_->GetNodeCount(); i++) {
     if (i == partitioner_->GetNodeID()) continue;
-    FillIbPeerInfo(&local_node_infos_[i].peer_recv_info, ib_port, &ib_local_context_.port_attr, recv_qps_[i]);
-    FillIbPeerInfo(&local_node_infos_[i].peer_send_info, ib_port, &ib_local_context_.port_attr, send_qps_[i]);
+    FillIbPeerInfo(&local_node_infos_[i].peer_recv_info, ib_port, &ib_local_context_.port_attr, recv_qps_[i], &ib_local_context_);
+    FillIbPeerInfo(&local_node_infos_[i].peer_send_info, ib_port, &ib_local_context_.port_attr, send_qps_[i], &ib_local_context_);
     FillIbMemInfo(&local_node_infos_[i].recv_mem_info, recv_mr_);
     FillIbMemInfo(&local_node_infos_[i].credit_mem_info, credit_mr_);
     PrintIbPeerInfo("recv_qp", partitioner_->GetGlobalRank(), i, &local_node_infos_[i].peer_recv_info);
@@ -265,15 +265,15 @@ void Agent::PollCQThreadFunc() {
       auto& wc = wcs[idx];
       // 3 types of completion event may be received
       // (completion event of add credit from send side is not used, because only imm is used in this case)
-      if (wc.opcode != IBV_WC_RDMA_WRITE && wc.opcode != IBV_WC_RECV_RDMA_WITH_IMM) {
-        LOG_FATAL("wc.opcode=%d, not IBV_WC_RDMA_WRITE(%d) or IBV_WC_RECV_RDMA_WITH_IMM(%d)",
-                  wc.opcode, IBV_WC_RDMA_WRITE, IBV_WC_RECV_RDMA_WITH_IMM);
+      if (wc.opcode != IBV_WC_RDMA_WRITE && wc.opcode != IBV_WC_SEND && wc.opcode != IBV_WC_RECV_RDMA_WITH_IMM) {
+            LOG_FATAL("wc.opcode=%d, not IBV_WC_RDMA_WRITE(%d), IBV_WC_SEND(%d) or IBV_WC_RECV_RDMA_WITH_IMM(%d)",
+                      wc.opcode, IBV_WC_RDMA_WRITE, IBV_WC_SEND, IBV_WC_RECV_RDMA_WITH_IMM);
       }
-      BOOL_CHECK(wc.opcode == IBV_WC_RDMA_WRITE || wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM);
+      BOOL_CHECK(wc.opcode == IBV_WC_RDMA_WRITE || wc.opcode == IBV_WC_SEND || wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM);
       if (wc.status != IBV_WC_SUCCESS) {
         LOG_FATAL("wc.status=%s", ibv_wc_status_str(wc.status));
       }
-      if (wc.opcode == IBV_WC_RDMA_WRITE) {
+      if (wc.opcode == IBV_WC_RDMA_WRITE || wc.opcode == IBV_WC_SEND) {
         // 1. completion of data send (required by ibv_post_send)
         AgentCopyMessage agent_copy_message;
         WrId wr_id;

@@ -27,7 +27,7 @@ limitations under the License. */
 #include "paddle/fluid/memory/allocation/allocator.h"
 #include "paddle/fluid/memory/memory.h"
 #include "paddle/fluid/platform/place.h"
-
+#include "paddle/fluid/framework/fleet/heter_ps/heter_resource.h"
 #include "paddle/fluid/framework/fleet/heter_ps/async_comm/async_communicator.h"
 #include "paddle/fluid/framework/fleet/heter_ps/async_comm/config.h"
 #include "paddle/fluid/framework/fleet/heter_ps/async_comm/ib_utils.h"
@@ -173,22 +173,51 @@ public:
 	 bool _is_init = false;
 	 bool _start = false;
 	 int _card_num = 0;
-     void init(int node_num, int card_num, int node_id) {
+     void init (int node_num, int card_num, int node_id) {
        if (!_is_init) {
     	 _is_init = true;
          _card_num = card_num;
+         auto rdma_checker = GpuRDMAChecker::get(card_num);
+         config.agent_local_rank.clear();
+         config.ib_device_name.clear();
+         if (rdma_checker->need_rdma_trans()) {
+             for (int gpu_id = 0; gpu_id < card_num; gpu_id++) {
+               if (!rdma_checker->is_device_support_rdma(gpu_id)){
+                  int trans_id = (gpu_id + 4) % card_num;
+                  config.agent_local_rank.push_back(trans_id);
+              }
+             else{
+            	 config.agent_local_rank.push_back(gpu_id);
+             }
+           }
+         } else{
+        	 for (int gpu_id = 0; gpu_id < card_num; gpu_id++) {
+        		 config.agent_local_rank.push_back(gpu_id);
+        	 }
+         }
+         for (int gpu_id = 0; gpu_id < card_num; gpu_id++) {
+        	 if (config.agent_local_rank[gpu_id] < 4) {
+        		 config.ib_device_name.push_back("mlx5_1");
+        	 }
+        	 else{
+        		 config.ib_device_name.push_back("mlx5_2");
+        	 }
+         }
     	 IbInit();
     	 config.node_count = node_num;
     	 config.sideband_server_name = "localhost";
     	 config.sideband_server_port = 24680;
-    	 config.agent_local_rank = {2, 3, 2, 3, 4, 5, 4, 5};
-    	 config.ib_device_name = {"mlx5_1", "mlx5_1","mlx5_1","mlx5_1",
-    			  "mlx5_2", "mlx5_2", "mlx5_2", "mlx5_2"};
     	 config.ib_port = {1, 1, 1, 1, 1, 1, 1, 1};
-    	 partitioners.resize(card_num);
-         async_com_allocators.resize(card_num);
-         registrys.resize(card_num);
-         async_coms.resize(card_num);
+    	 partitioners.reserve(card_num);
+         async_com_allocators.reserve(card_num);
+         registrys.reserve(card_num);
+         async_coms.reserve(card_num);
+         VLOG(0) << "node num is " << node_num << " card num is " << card_num << " node id is " << node_id;
+         for (int i = 0; i < card_num; i++) {
+        	 VLOG(0) << "card: " << i << " use network "
+        	   << config.ib_device_name[i] << " agent " << config.agent_local_rank[i];
+         }
+
     	 for (int i = 0; i < card_num; i++) {
     	   partitioners.push_back(std::shared_ptr<Partitioner>(new Partitioner(node_num, card_num, node_id, i)));
     	   async_com_allocators.push_back(std::shared_ptr<AsyncComAllocator>( new AsyncComAllocator(i)));
@@ -200,11 +229,20 @@ public:
 
      void start() {
        if (!_start) {
-    	 _start = true;
+         _start = true;
+         VLOG(0) << "async com begin start";
+         std::vector<std::unique_ptr<std::thread>> init_threads(_card_num);
          for (int i = 0; i < _card_num; i++) {
-           async_coms[i]->CreateResources();
-           async_coms[i]->Start();
-    	 }
+           init_threads[i] = std::make_unique<std::thread>([this,i]() {
+             platform::CUDADeviceGuard guard(i);
+             async_coms[i]->CreateResources();
+             async_coms[i]->Start();
+           });
+         }
+         for (int i = 0; i < _card_num; i++) {
+           init_threads[i]->join();
+         }
+         VLOG(0) <<"async com start end";
        }
      }
 

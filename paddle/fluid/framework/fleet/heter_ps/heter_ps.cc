@@ -77,6 +77,7 @@ void HeterPs<GPUAccessor, GPUOptimizer>::init_async_com(int optimizer_type, int 
                  ((AccessorWrapper<CommonFeatureValueAccessor>*)accessor_wrapper_ptr)
                      ->AccessorPtr();
         std::vector<RequestRunner *> request_runners;
+        VLOG(0) << "heter ps init async com begin";
         for (int i = 0; i < device_num; i++) {
             auto registry = async_com->get_registry(i);
             auto partitioner = async_com->get_partitioner(i);
@@ -85,8 +86,8 @@ void HeterPs<GPUAccessor, GPUOptimizer>::init_async_com(int optimizer_type, int 
             registry->Register(1, ps_runer);
             ps_runer->StartProcessLoop();
             request_runners.push_back((RequestRunner *)ps_runer);
-       }       comm_->set_runner(request_runners);
-       async_com->start();
+       }
+       comm_->set_runner(request_runners);
 }
 
 

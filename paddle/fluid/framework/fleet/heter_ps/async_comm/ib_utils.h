@@ -51,7 +51,7 @@ void CreateLocalContext(IbLocalContext* ib_local_context, const std::string& dev
 
 void DestroyLocalContext(IbLocalContext* ib_local_context);
 
-void FillIbPeerInfo(IbPeerInfo *peer_info, int port_id, struct ibv_port_attr *port_attr, struct ibv_qp *qp);
+void FillIbPeerInfo(IbPeerInfo *peer_info, int port_id, struct ibv_port_attr *port_attr, struct ibv_qp *qp, IbLocalContext* ib_local_context);
 
 void FillIbMemInfo(IbMemInfo *mem_info, struct ibv_mr *mr);
 
