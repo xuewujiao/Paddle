@@ -32,10 +32,39 @@ static int GetIntEnv(const char* env_name, int default_value) {
   return value;
 }
 
+static int GetIntEnv(const char* env_name, const char* second_env_name, int default_value) {
+  char* str_env = nullptr;
+  int value;
+  str_env = getenv(env_name);
+  if (str_env && strlen(str_env) > 0) {
+    errno = 0;
+    value = strtol(str_env, nullptr, 0);
+    if (errno) {
+      printf("Invalid value %s for %s.", str_env, env_name);
+    } else {
+      printf("%s set by environment to %d", env_name, value);
+      return value;
+    }
+  }
+  str_env = getenv(second_env_name);
+  if (str_env && strlen(str_env) > 0) {
+    errno = 0;
+    value = strtol(str_env, nullptr, 0);
+    if (errno) {
+      printf("Invalid value %s for %s.", str_env, second_env_name);
+    } else {
+      printf("%s set by environment to %d", second_env_name, value);
+      return value;
+    }
+  }
+
+  return default_value;
+}
+
 static void GetIbEnvsFromEnv() {
-  g_ib_envs.gid_index = GetIntEnv("AC_IB_GID_INDEX", 0);
-  g_ib_envs.service_level = GetIntEnv("AC_IB_TC", 0);
-  g_ib_envs.traffic_class = GetIntEnv("AC_IB_SL", 0);
+  g_ib_envs.gid_index = GetIntEnv("AC_IB_GID_INDEX", "NCCL_IB_GID_INDEX", 0);
+  g_ib_envs.service_level = GetIntEnv("AC_IB_SL", "NCCL_IB_SL", 0);
+  g_ib_envs.traffic_class = GetIntEnv("AC_IB_TC", "NCCL_IB_TC", 0);
 }
 
 void IbInit() {
@@ -51,7 +80,7 @@ void IbDeInit() {
 
 void PrintIbPeerInfo(const char* prefix, int rank, int id, IbPeerInfo* ib_peer_info) {
   printf("Rank=%d, %s[%d] IbPeerInfo:\n"
-         "    lid=%u, qpn=%u, spn=%u, iid=%u, ib_port=%u\n",
+         "    lid=%u, qpn=%u, spn=%lu, iid=%lu, ib_port=%u\n",
          rank, prefix, id,
          ib_peer_info->lid, ib_peer_info->qpn, ib_peer_info->spn, ib_peer_info->iid, (uint32_t) ib_peer_info->ib_port);
 }

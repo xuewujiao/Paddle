@@ -11,8 +11,8 @@ void IbDeInit();
 struct IbPeerInfo {
   uint32_t lid;
   uint32_t qpn;
-  uint32_t spn;
-  uint32_t iid;
+  uint64_t spn;
+  uint64_t iid;
   uint8_t ib_port;
   uint8_t link_layer;
   enum ibv_mtu mtu = IBV_MTU_4096;
@@ -39,9 +39,9 @@ struct IbLocalContext{
   void clear() {
     device = nullptr;
     context = nullptr;
-    device_attr = ibv_device_attr{};
+    memset(&device_attr, 0, sizeof(ibv_device_attr));
     port_id = 0;
-    port_attr = ibv_port_attr{};
+    memset(&port_attr, 0, sizeof(ibv_port_attr));
     pd = nullptr;
     default_cq = nullptr;   
   }
