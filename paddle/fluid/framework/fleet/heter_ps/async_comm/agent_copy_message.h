@@ -44,8 +44,8 @@ struct AgentCopyMessage {
   }
   void* buffer_ptr = nullptr;
   size_t data_size;
-  int src_global_rank =15;
-  int dst_global_rank = 15;
+  int src_global_rank : 15;
+  int dst_global_rank : 15;
   uint64_t has_data : 1;
   uint64_t is_stop_signal : 1;
 };

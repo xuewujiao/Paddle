@@ -48,8 +48,8 @@ void Agent::CreateResources() {
   int old_dev_id;
   CUDA_CHECK(cudaGetDevice(&old_dev_id));
   CUDA_CHECK(cudaSetDevice(config_->agent_local_rank[partitioner_->GetLocalRank()]));
-  CUDA_CHECK(cudaMallocHost(reinterpret_cast<void **>(&send_reg_mem_), all_reg_mem_size));
-  CUDA_CHECK(cudaMallocHost(reinterpret_cast<void **>(&recv_reg_mem_), all_reg_mem_size));
+  CUDA_CHECK(cudaMalloc(reinterpret_cast<void **>(&send_reg_mem_), all_reg_mem_size));
+  CUDA_CHECK(cudaMalloc(reinterpret_cast<void **>(&recv_reg_mem_), all_reg_mem_size));
   CUDA_CHECK(cudaSetDevice(old_dev_id));
   credit_reg_mem_ = (char *) malloc(kCreditRegMemSize);
   size_t all_imm_size = 2 * kRegBufferCount * partitioner_->GetNodeCount() * sizeof(int64_t);
@@ -271,7 +271,7 @@ void Agent::PollCQThreadFunc() {
       }
       BOOL_CHECK(wc.opcode == IBV_WC_RDMA_WRITE || wc.opcode == IBV_WC_SEND || wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM);
       if (wc.status != IBV_WC_SUCCESS) {
-        LOG_FATAL("wc.status=%s", ibv_wc_status_str(wc.status));
+        LOG_FATAL("wc.opcode=%d, imm.u32=%u wc.status=%s", wc.opcode, GetImmDataFromWc(&wc), ibv_wc_status_str(wc.status));
       }
       if (wc.opcode == IBV_WC_RDMA_WRITE || wc.opcode == IBV_WC_SEND) {
         // 1. completion of data send (required by ibv_post_send)

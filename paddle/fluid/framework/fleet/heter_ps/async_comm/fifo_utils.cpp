@@ -23,7 +23,7 @@ std::string GetFifoNamePrefix() {
 
 int CreateFifo(const std::string& fifo_name) {
   struct stat st;
-
+  memset(&st, 0, sizeof(struct stat));
   if (stat(fifo_name.c_str(), &st) == 0) {
     LOG_FATAL("fifo %s already exist, use SetFifoNamePrefix to set a new prefix or you may need to remove that.",
               fifo_name.c_str());
@@ -54,7 +54,7 @@ int CreateFifo(const std::string& fifo_name) {
 
 int WaitAndOpenFifo(const std::string& fifo_name) {
   struct stat st;
-
+  memset(&st, 0, sizeof(struct stat));
   int time_since_last_print = 0;
   while(true) {
     // Check if fifo is already exist.
@@ -86,7 +86,7 @@ int WaitAndOpenFifo(const std::string& fifo_name) {
 
 void UnlinkFifo(const std::string& fifo_name) {
   struct stat st;
-
+  memset(&st, 0, sizeof(struct stat));
   if (stat(fifo_name.c_str(), &st) == 0) {
     if (unlink(fifo_name.c_str()) == -1) {
       LOG_FATAL("unlink fifo %s failed.", fifo_name.c_str());
