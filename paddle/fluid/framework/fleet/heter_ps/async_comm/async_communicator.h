@@ -17,6 +17,7 @@
 #include "partitioner.h"
 #include "runner.h"
 #include "sideband_communicator.h"
+#include "glog/logging.h"
 
 class RequestHandle;
 

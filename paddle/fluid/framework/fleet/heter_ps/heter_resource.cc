@@ -181,9 +181,9 @@ bool GpuRDMAChecker::check_device_status(const int &device_count,
     fprintf(stdout, "%s\n", str.c_str());
     return false;
   }
-  std::vector<std::string> gpu_mlxs;
+  gpu_mlxs_.clear();
   gpu_status->resize(device_count, 0);
-  gpu_mlxs.resize(device_count);
+  gpu_mlxs_.resize(device_count);
   for (auto line : lines) {
     std::vector<std::string> tags = paddle::string::split_string(line);
     if (tags.size() < static_cast<size_t>(device_count + 1)) {
@@ -211,10 +211,10 @@ bool GpuRDMAChecker::check_device_status(const int &device_count,
         continue;
       }
       (*gpu_status)[j] = 1;
-      if (!gpu_mlxs[j].empty()) {
-        gpu_mlxs[j].append(",");
+      if (!gpu_mlxs_[j].empty()) {
+        gpu_mlxs_[j].append(",");
       }
-      gpu_mlxs[j].append(card_name);
+      gpu_mlxs_[j].append(card_name);
     }
   }
   int not_trans_cnt = 0;
@@ -223,7 +223,7 @@ bool GpuRDMAChecker::check_device_status(const int &device_count,
   for (int j = 0; j < device_count; ++j) {
     if ((*gpu_status)[j] > 0) {
       fprintf(
-          stdout, "GPU%d: rdma check ok, used %s\n", j, gpu_mlxs[j].c_str());
+          stdout, "GPU%d: rdma check ok, used %s\n", j, gpu_mlxs_[j].c_str());
       continue;
     }
     int trans_id = (j + device_count / 2) % device_count;

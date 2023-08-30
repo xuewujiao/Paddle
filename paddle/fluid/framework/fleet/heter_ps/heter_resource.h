@@ -111,6 +111,9 @@ class GpuRDMAChecker {
   int device_num(void) { return device_num_; }
   // topo_aware
   bool topo_aware(void) { return topo_aware_; }
+  std::vector<std::string> get_gpu_mlxs() {
+    return gpu_mlxs_;
+  }
 
  private:
   bool check_device_status(const int& device_count,
@@ -122,6 +125,7 @@ class GpuRDMAChecker {
   // rdma
   bool rdma_trans_ = false;
   std::vector<int> rdma_status_;
+  std::vector<std::string> gpu_mlxs_;
 };
 #endif
 

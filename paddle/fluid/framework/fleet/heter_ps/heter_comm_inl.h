@@ -2225,7 +2225,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_async(
 				   DT_UINT64);
 	  auto* mem_value_context = allocator->ToMemoryContext(cache.d_merged_vals + h_local_part_offsets[i] * grad_type_size_, h_local_part_sizes[i] * grad_type_size_,
 					   DT_UINT8);
-	  auto* request = _async_request[i]->MakePushRequest(mem_key_context, mem_value_context, i, gpu_id);
+	  auto* request = _async_request[gpu_id]->MakePushRequest(mem_key_context, mem_value_context, i, gpu_id);
 	  auto* async_com = paddle::framework::AsyncContext::GetInstance()->get_async_com(gpu_id);
       request_handles[i].request_ = request;
 	  async_com->PutRequestAsync(&request_handles[i]);
@@ -2302,7 +2302,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_async_one(
 				   DT_UINT64);
 	  auto* mem_value_context = allocator->ToMemoryContext(cache.d_merged_vals + h_local_part_offsets[i] * grad_type_size_, h_local_part_sizes[i] * grad_type_size_,
 					   DT_UINT8);
-	  auto* request = _async_request[i]->MakePushRequest(mem_key_context, mem_value_context, i);
+	  auto* request = _async_request[gpu_id]->MakePushRequest(mem_key_context, mem_value_context, i);
 	  auto* async_com = paddle::framework::AsyncContext::GetInstance()->get_async_com(gpu_id);
       request_handles[i].request_ = request;
 	  async_com->PutRequestAsync(&request_handles[i]);
@@ -2701,13 +2701,14 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_async(
 	  auto* mem_context = allocator->ToMemoryContext(cache.local_grads +
 		h_local_part_offsets[i] * pull_type_size_, h_local_part_sizes[i] * pull_type_size_,
 		DT_INT8);
+      request_handles[i].response_ = CreateAsyncReqRes();
 	  request_handles[i].response_->memory_contexts[0]= mem_context;
 	}
 
 	for (int i = 0; i < node_size_; ++i) {
 	   auto* mem_context = allocator->ToMemoryContext(cache.d_merged_push_keys + h_local_part_offsets[i], h_local_part_sizes[i],
 			   DT_UINT64);
-	   auto* request = _async_request[i]->MakePullRequest(mem_context, i, gpu_id);
+	   auto* request = _async_request[gpu_id]->MakePullRequest(mem_context, i, gpu_id);
 	   auto* async_com = paddle::framework::AsyncContext::GetInstance()->get_async_com(gpu_id);
        request_handles[i].request_ = request;
 	   async_com->PutRequestAsync(&request_handles[i]);
@@ -2769,13 +2770,14 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_async_one(
 	  auto* mem_context = allocator->ToMemoryContext(cache.local_grads +
 		h_local_part_offsets[i] * pull_type_size_, h_local_part_sizes[i] * pull_type_size_,
 		DT_INT8);
+      request_handles[i].response_ = CreateAsyncReqRes();
 	  request_handles[i].response_->memory_contexts[0] = mem_context;
 	}
 
 	for (int i = 0; i < shard_num; ++i) {
 	   auto* mem_context = allocator->ToMemoryContext(cache.d_merged_push_keys + h_local_part_offsets[i], h_local_part_sizes[i],
 			   DT_UINT64);
-	   auto* request = _async_request[i]->MakePullRequest(mem_context, i); 
+	   auto* request = _async_request[gpu_id]->MakePullRequest(mem_context, i); 
 	   auto* async_com = paddle::framework::AsyncContext::GetInstance()->get_async_com(gpu_id);
        request_handles[i].request_ = request;
 	   async_com->PutRequestAsync(&request_handles[i]);

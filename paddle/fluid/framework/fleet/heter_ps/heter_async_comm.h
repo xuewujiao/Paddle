@@ -195,13 +195,10 @@ public:
         		 config.agent_local_rank.push_back(gpu_id);
         	 }
          }
+         auto gpu_mlxs = rdma_checker->get_gpu_mlxs();
          for (int gpu_id = 0; gpu_id < card_num; gpu_id++) {
-        	 if (config.agent_local_rank[gpu_id] < 4) {
-        		 config.ib_device_name.push_back("mlx5_1");
-        	 }
-        	 else{
-        		 config.ib_device_name.push_back("mlx5_2");
-        	 }
+             auto agent_id = config.agent_local_rank[gpu_id];
+             config.ib_device_name.push_back(gpu_mlxs[agent_id]);
          }
     	 IbInit();
     	 config.node_count = node_num;
