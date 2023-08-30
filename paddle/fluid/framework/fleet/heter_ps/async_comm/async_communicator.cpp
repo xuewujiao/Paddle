@@ -147,9 +147,13 @@ void AsyncCommunicator::PutRequestAsync(RequestHandle *request_handle, bool need
   }
   request_handle->SetStarted();
   if (need_response) {
+	VLOG(0) << " request id " << request->meta.request_id << " need response ";
     BOOL_CHECK(request_handle->response_ != nullptr);
     std::unique_lock<std::mutex> mlock(mutex_);
     pending_mapping_.insert(std::make_pair(request->meta.request_id, request_handle));
+  }
+  else{
+	  VLOG(0) << " request id " << request->meta.request_id << "not need response ";
   }
   if (IsLocalNode(&request->meta)) {
     intra_node_communicator_->Send(request);
@@ -227,9 +231,16 @@ void AsyncCommunicator::OnReceiveResponse(AsyncReqRes *response) {
   {
     std::unique_lock<std::mutex> mlock(mutex_);
     auto it = pending_mapping_.find(response->meta.request_id);
+    if (it == pending_mapping_.end()) {
+    	VLOG(0) << "request id " << response->meta.request_id << "not find";
+    }
+    else {
+    	VLOG(0) << "request id " << response->meta.request_id << "find";
+    }
     BOOL_CHECK(it != pending_mapping_.end());
     request_handle = it->second;
     pending_mapping_.erase(response->meta.request_id);
+    VLOG(0) << "request id is delete ";
   }
   BOOL_CHECK(request_handle->response_ == response);
   request_handle->SetCompleted();
@@ -241,6 +252,12 @@ AsyncReqRes* AsyncCommunicator::OnRunnerGetResponse(AsyncReqRes* request) {
     // [Optimization] Local GPU can just pick response from pending_map_ to save one copy.
     std::unique_lock<std::mutex> mlock(mutex_);
     auto it = pending_mapping_.find(request->meta.request_id);
+    if (it == pending_mapping_.end()) {
+       	VLOG(0) << "request id " << response->meta.request_id << "not find";
+    }
+    else {
+       	VLOG(0) << "request id " << response->meta.request_id << "find";
+    }
     BOOL_CHECK(it != pending_mapping_.end());
     auto* request_handle = it->second;
     response = request_handle->response_;

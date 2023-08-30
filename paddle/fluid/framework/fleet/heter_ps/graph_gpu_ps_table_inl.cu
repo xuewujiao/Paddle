@@ -2120,7 +2120,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all_async(
     
     auto* actual_sample_size_context = allocator->ToMemoryContext(
       res_actual_sample_size_ptr + h_local_part_offsets[i] * sizeof(int), h_local_part_sizes[i] * sizeof(int), DT_UINT8);
-
+    request_handles[i].response_ = CreateAsyncReqRes();
     request_handles[i].response_->memory_contexts[0] = val_context;
     request_handles[i].response_->memory_contexts[1] = actual_sample_size_context;
 	}
@@ -2131,13 +2131,14 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all_async(
 	for (int i = 0; i < shard_num; ++i) {
     auto* node_key_context = allocator->ToMemoryContext(
       d_merged_push_keys_ptr + h_local_part_offsets[i], h_local_part_sizes[i], DT_UINT64);
-    auto* para_int_context = allocator->ToMemoryContext(int_para, 3, DT_INT64, ML_HOST);
+    auto* para_int_context = allocator->ToMemoryContext(int_para, 4, DT_INT64, ML_HOST);
 
-    auto* request = _async_request[i]->MakeDeepWalkRequest(node_key_context, para_int_context, i);
+    auto* request = _async_request[gpu_id]->MakeDeepWalkRequest(node_key_context, para_int_context, i);
     request_handles[i].request_ = request;
     auto* async_com = paddle::framework::AsyncContext::GetInstance()->get_async_com(gpu_id);
     async_com->PutRequestAsync(&request_handles[i]);
 	}
+    VLOG(0) << "put request end";
 	//等待异步执行结束
 	for(int i = 0; i < shard_num; ++i) {
 		request_handles[i].Wait();

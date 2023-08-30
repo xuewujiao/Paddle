@@ -14,6 +14,6 @@ if(WITH_GPU)
          agent.cpp agent_copy_message.cpp config.cpp copy_thread.cpp cuda_utils.cpp fifo_utils.cpp
          ib_utils.cpp intranode_communicator.cpp internode_communicator.cpp log_macros.cpp memory_allocator.cpp
          meta.cpp net_utils.cpp partitioner.cpp runner.cpp sideband_communicator.cpp async_communicator.cpp
-    DEPS ${IBVERBS_LIB}
+    DEPS glog ${IBVERBS_LIB}
    )
 endif()
