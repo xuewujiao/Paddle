@@ -37,6 +37,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/program_utils.h"
 #include "paddle/fluid/framework/data_type_transform.h"
 
+DECLARE_bool(enable_async_comm);
 DECLARE_bool(enable_exit_when_partial_worker);
 DECLARE_int32(enable_adjust_op_order);
 PADDLE_DEFINE_EXPORTED_bool(
@@ -1458,7 +1459,7 @@ void HogwildWorker::TrainFiles() {
       if (!CheckBatchNum(cur_batch)) {
         break;
       }
-    } else if (train_mode && is_multi_node) {
+    } else if (train_mode && is_multi_node && !FLAGS_enable_async_comm) {
       bool sage_mode = device_reader_->GetSageMode();
       if (!sage_mode) {
         int pass_end = device_reader_->get_pass_end();
