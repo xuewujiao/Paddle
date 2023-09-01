@@ -3,6 +3,7 @@
 #include "async_communicator.h"
 #include "check_macros.h"
 #include "log_macros.h"
+#include "glog/logging.h"
 
 void MemoryAllocatorBase::AllocateReqResByMeta(AsyncReqRes* req_res) {
   int data_count = req_res->meta.valid_data_count;

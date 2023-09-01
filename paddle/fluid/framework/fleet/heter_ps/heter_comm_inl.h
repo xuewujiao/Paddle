@@ -61,18 +61,16 @@ template <typename GPUAccessor, template <typename T> class GPUOptimizer>
 void PsRunner<GPUAccessor, GPUOptimizer>::PullSparse(struct AsyncReqRes *request, struct AsyncReqRes *response) {
 	  int gpu_id = partitioner_->GetLocalRank();
 	  platform::CUDADeviceGuard guard(gpu_id);
-	  auto* output_context = allocator_->CreateMemoryContext();
 	  size_t data_size =  comm_->get_pull_type_size();
 	  auto input_dt = static_cast<::DataType>(request->meta.data_types[0]);
 	  size_t elt_count = request->meta.data_sizes[0] / GetElementSize(input_dt);
-	  float *d_vals = static_cast<float*> (allocator_->Malloc(output_context, ML_DEVICE, DT_INT8, elt_count * data_size));
+	  float *d_vals = static_cast<float*> (allocator_->AllocateOrUseExistContextPointer(response, 0, ML_DEVICE, DT_INT8, elt_count * data_size));
 	  FeatureKey* input_idx_ptr = static_cast<FeatureKey*> (request->memory_contexts[0]->GetPointer());
 
       // 显存可能不安全（已改过一遍）  以及使用的stream和部分训练冲突
 	  comm_->pull_normal_sparse(
 			  gpu_id, input_idx_ptr, d_vals, elt_count);
 	  response->meta.valid_data_count = 1;
-	  response->memory_contexts[0] = output_context;
 	  response->FillMetaByMemoryContext();
 }
 
@@ -92,19 +90,15 @@ template <typename GPUAccessor, template <typename T> class GPUOptimizer>
 void PsRunner<GPUAccessor, GPUOptimizer>::PullOneSparse(struct AsyncReqRes *request, struct AsyncReqRes *response) {
 	  int gpu_id = partitioner_->GetLocalRank();
 	  platform::CUDADeviceGuard guard(gpu_id);
-	  auto* output_context = allocator_->CreateMemoryContext();
 	  size_t data_size =  comm_->get_pull_type_size();
 	  auto input_dt = static_cast<::DataType>(request->meta.data_types[0]);
 	  size_t elt_count = request->meta.data_sizes[0] / GetElementSize(input_dt);
-
-	  float *d_vals = static_cast<float*> (allocator_->Malloc(output_context,
-	    ML_DEVICE, DT_INT8, elt_count * data_size));
+	  float *d_vals = static_cast<float*> (allocator_->AllocateOrUseExistContextPointer(response, 0, ML_DEVICE, DT_INT8, elt_count * data_size));
 	  FeatureKey * input_idx_ptr = static_cast<FeatureKey*> (request->memory_contexts[0]->GetPointer());
 	  comm_->pull_one_table(gpu_id, input_idx_ptr, d_vals, elt_count, stream_);
 	  CUDA_CHECK(cudaStreamSynchronize(stream_));
 
 	  response->meta.valid_data_count = 1;
-	  response->memory_contexts[0] = output_context;
 	  response->FillMetaByMemoryContext();
 }
 

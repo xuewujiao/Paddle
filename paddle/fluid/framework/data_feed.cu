@@ -42,6 +42,7 @@ DECLARE_double(gpugraph_hbm_table_load_factor);
 DECLARE_bool(enable_graph_multi_node_sampling);
 DECLARE_bool(query_dest_rank_by_multi_node);
 DECLARE_string(graph_edges_split_mode);
+DECLARE_bool(enable_async_comm);
 
 namespace paddle {
 namespace framework {
@@ -1189,7 +1190,7 @@ int GraphDataGenerator::GenerateBatch() {
               train_stream_);
           if (res == -1) {
             if (ins_buf_pair_len_[tensor_pair_idx] == 0) {
-              if (conf_.is_multi_node) {
+              if (conf_.is_multi_node && !FLAGS_enable_async_comm ) {
                 pass_end_ = 1;
                 if (total_row_[tensor_pair_idx] != 0) {
                   buf_state_[tensor_pair_idx].Reset(
@@ -3099,7 +3100,7 @@ int FillWalkBuf(const std::vector<uint64_t> &h_device_keys_len,
   while (1) {
     if (i > remain_size) {
       // scenarios 1: d_walk is full
-      if (FLAGS_enable_graph_multi_node_sampling) {
+      if (FLAGS_enable_graph_multi_node_sampling && !FLAGS_enable_async_comm ) {
         sample_flag = EVENT_WALKBUF_FULL;
       } else {
         break;
@@ -3126,7 +3127,7 @@ int FillWalkBuf(const std::vector<uint64_t> &h_device_keys_len,
       finish_node_type_ptr->insert(node_type);
       if (finish_node_type_ptr->size() == node_type_start_ptr->size()) {
         // scenarios 2: epoch finish
-        if (FLAGS_enable_graph_multi_node_sampling) {
+        if (FLAGS_enable_graph_multi_node_sampling && !FLAGS_enable_async_comm ) {
           sample_flag = EVENT_FINISH_EPOCH;
         } else {
           cursor = 0;
@@ -3136,7 +3137,7 @@ int FillWalkBuf(const std::vector<uint64_t> &h_device_keys_len,
       }
 
       // scenarios 3: switch metapath
-      if (FLAGS_enable_graph_multi_node_sampling) {
+      if (FLAGS_enable_graph_multi_node_sampling && !FLAGS_enable_async_comm) {
         if (sample_flag == EVENT_CONTINUE_SAMPLE) {
           // Switching only occurs when multi machine sampling continues
           switch_flag = EVENT_SWTICH_METAPATH;
@@ -3149,7 +3150,7 @@ int FillWalkBuf(const std::vector<uint64_t> &h_device_keys_len,
 
     // Perform synchronous information exchange between multiple machines
     // to decide whether to continue sampling
-    if (FLAGS_enable_graph_multi_node_sampling) {
+    if (FLAGS_enable_graph_multi_node_sampling && !FLAGS_enable_async_comm) {
       switch_command = multi_node_sync_sample(
           switch_flag, ncclProd, place, multi_node_sync_stat_ptr);
       VLOG(2) << "gpuid:" << conf.gpuid << " multi node sample sync"
@@ -3251,7 +3252,7 @@ int FillWalkBuf(const std::vector<uint64_t> &h_device_keys_len,
     *jump_rows_ptr = sample_res.total_sample_size;
     total_samples += sample_res.total_sample_size;
 
-    if (FLAGS_enable_graph_multi_node_sampling) {
+    if (FLAGS_enable_graph_multi_node_sampling && !FLAGS_enable_async_comm) {
       int flag = *jump_rows_ptr > 0 ? 1 : 0;
       int command = multi_node_sync_sample(
           flag, ncclMax, place, multi_node_sync_stat_ptr);
@@ -3296,7 +3297,7 @@ int FillWalkBuf(const std::vector<uint64_t> &h_device_keys_len,
     step++;
     size_t path_len = path.size();
     for (; step < conf.walk_len; step++) {
-      if (FLAGS_enable_graph_multi_node_sampling) {
+      if (FLAGS_enable_graph_multi_node_sampling && !FLAGS_enable_async_comm) {
         // Step synchronization for multi-step sampling in multi node
         int flag = sample_res.total_sample_size > 0 ? 1 : 0;
         int command = multi_node_sync_sample(

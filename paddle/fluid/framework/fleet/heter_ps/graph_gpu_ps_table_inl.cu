@@ -2112,23 +2112,22 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all_async(
   char* res_actual_sample_size_ptr = reinterpret_cast<char *>(res_actual_sample_size->ptr());
   auto* allocator = dynamic_cast<AsyncComAllocator*>(_async_request[gpu_id]->get_allocator());
 
-	std::vector<RequestHandle> request_handles(shard_num);
-    VLOG(0) << "start to context ";
-	for (int i = 0; i < shard_num; ++i) {
+  std::vector<RequestHandle> request_handles(shard_num);
+  for (int i = 0; i < shard_num; ++i) {
     auto* val_context = allocator->ToMemoryContext(
       res_val_ptr + h_local_part_offsets[i] * sample_size, h_local_part_sizes[i] * sample_size, DT_UINT64);
-    
+     VLOG(0) << " shard " << i << " size is " << h_local_part_sizes[i];
     auto* actual_sample_size_context = allocator->ToMemoryContext(
       res_actual_sample_size_ptr + h_local_part_offsets[i] * sizeof(int), h_local_part_sizes[i] * sizeof(int), DT_UINT8);
     request_handles[i].response_ = CreateAsyncReqRes();
     request_handles[i].response_->memory_contexts[0] = val_context;
     request_handles[i].response_->memory_contexts[1] = actual_sample_size_context;
-	}
+  }
 
   int64_t packed = (cpu_query_switch << 2) | (0 << 1) | weighted;
   int64_t int_para[4] = {table_idx, sample_size, neighbor_size_limit, packed}; 
-  VLOG(0) << "start async sample";
-	for (int i = 0; i < shard_num; ++i) {
+   
+  for (int i = 0; i < shard_num; ++i) {
     auto* node_key_context = allocator->ToMemoryContext(
       d_merged_push_keys_ptr + h_local_part_offsets[i], h_local_part_sizes[i], DT_UINT64);
     auto* para_int_context = allocator->ToMemoryContext(int_para, 4, DT_INT64, ML_HOST);
@@ -2137,14 +2136,13 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all_async(
     request_handles[i].request_ = request;
     auto* async_com = paddle::framework::AsyncContext::GetInstance()->get_async_com(gpu_id);
     async_com->PutRequestAsync(&request_handles[i]);
-	}
-    VLOG(0) << "put request end";
+  }
+  
 	//等待异步执行结束
-	for(int i = 0; i < shard_num; ++i) {
-		request_handles[i].Wait();
-	}
-	VLOG(0) << "end async sample";
-
+  for(int i = 0; i < shard_num; ++i) {
+    request_handles[i].Wait();
+  }
+		
   NeighborSampleResult final;
   final.set_stream(stream);
   final.initialize(sample_size, len, gpu_id);
@@ -2721,7 +2719,6 @@ void GpuPsGraphTable::compress_sample(
     
     CUDA_CHECK(cudaStreamSynchronize(calc_stream));
     int *actual_sample_size = result.actual_sample_size;
-    uint64_t *val = result.val;
     platform::CUDAPlace place = platform::CUDAPlace(resource_->dev_id(gpu_id));
     platform::CUDADeviceGuard guard(resource_->dev_id(gpu_id));
     size_t temp_storage_bytes = 0;
@@ -2766,9 +2763,9 @@ void GpuPsGraphTable::compress_sample(
     result.set_total_sample_size(total_sample_size);
     int grid_size = (len - 1) / block_size_ + 1; 
     fill_actual_vals<<<grid_size, block_size_, 0, calc_stream>>>(
-        val,
+        result.val,
         result.actual_val,
-        actual_sample_size,
+        result.actual_sample_size,
         cumsum_actual_sample_size_p,
         sample_size,
         len);
@@ -4557,25 +4554,51 @@ void DeepWalkSampleRunner::NeighborSample(struct AsyncReqRes *request, struct As
       auto input_dt = static_cast<::DataType>(request->meta.data_types[0]);
       size_t len = request->meta.data_sizes[0] / GetElementSize(input_dt);
 
-    int * int_para = static_cast<int*> (request->memory_contexts[1]->GetPointer());
-    int table_idx = int_para[0];
-    int sample_size = int_para[1];
-    int neighbor_size_limit = int_para[2];
+    int64_t * int_para = static_cast<int64_t*> (request->memory_contexts[1]->GetPointer());
+    int64_t table_idx = int_para[0];
+    int64_t sample_size = int_para[1];
+    int64_t neighbor_size_limit = int_para[2];
 
     int64_t packed = int_para[3];
     bool cpu_query_switch = (packed >> 2) & 1;
     bool compress = (packed >> 1) & 1;
     bool weighted = packed & 1;
-
-      auto final = graph_table_->graph_neighbor_sample_v2_one_table(
-      gpu_id, table_idx, input_idx_ptr, sample_size, len, neighbor_size_limit, cpu_query_switch, compress, weighted, calc_stream, mem_stream); 
-    MemoryContextBase* val_context = allocator->ToMemoryContext(final.val_mem, len * sample_size, DT_UINT64);
-    MemoryContextBase* actual_sample_size_context = allocator->ToMemoryContext(final.actual_sample_size_mem, len * sizeof(int), DT_UINT8);
+    auto final = graph_table_->graph_neighbor_sample_v2_one_table(
+    gpu_id, table_idx, input_idx_ptr, sample_size, len, neighbor_size_limit, cpu_query_switch, compress, weighted, calc_stream, mem_stream); 
+    if (len == 0) {
+      VLOG(0) << "len is 0  error";
+    } 
+    response->meta.valid_data_count = 2;  
+    // 自己发给自己 
+    if (response->memory_contexts[0] != nullptr) {
+        PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(calc_stream));
+        VLOG(0) << " processing request from node_id " << request->meta.requester_node_id  << " card id " <<(int)request->meta.requester_lane_id  << " runner rank id  " << partitioner_->GetGlobalRank();
+        PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyAsync(response->memory_contexts[0]->GetPointer(),
+                                             final.val_mem->ptr(),
+                                             len * sample_size * sizeof(int64_t),
+                                             cudaMemcpyDeviceToDevice,
+                                             calc_stream));  
+        PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(calc_stream));
+    }
+    else {
+       MemoryContextBase* val_context = allocator->ToMemoryContext(final.val_mem, len * sample_size, DT_UINT64);
+       response->memory_contexts[0] = val_context;
+    }
     
-      response->meta.valid_data_count = 2;
-      response->memory_contexts[0] = val_context;
-      response->memory_contexts[1] = actual_sample_size_context;
-      response->FillMetaByMemoryContext();
+    if (response->memory_contexts[1] != nullptr) {
+        PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(calc_stream));
+        PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyAsync(response->memory_contexts[1]->GetPointer(),
+                                             final.actual_sample_size_mem->ptr(),
+                                             len * sizeof(int),
+                                             cudaMemcpyDeviceToDevice,
+                                             calc_stream));
+        PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(calc_stream));
+    }
+    else {
+        MemoryContextBase* actual_sample_size_context = allocator->ToMemoryContext(final.actual_sample_size_mem, len * sizeof(int), DT_UINT8);
+        response->memory_contexts[1] = actual_sample_size_context;
+    }
+    response->FillMetaByMemoryContext();
 }
 
 };  // namespace framework
