@@ -169,8 +169,8 @@ bool GpuRDMAChecker::check_device_status(const int &device_count,
   if (!FLAGS_enable_auto_detect_gpu_topo) {
     return false;
   }
-  // a100
-  std::string str = excute_cmd_result("source ~/.bashrc && nvidia-smi topo -m");
+  // a100, a800 cuda12
+  std::string str = excute_cmd_result("source ~/.bashrc && nvidia-smi topo -m | grep -E '(mlx5|NIC)'");
   if (str.empty()) {  // a100 auto gpu card rdma status
     return false;
   }
@@ -202,7 +202,8 @@ bool GpuRDMAChecker::check_device_status(const int &device_count,
       }
       continue;
     }
-    if (strncmp(card_name.c_str(), "mlx5", 4) != 0) {
+    if ((strncmp(card_name.c_str(), "mlx5", 4) != 0) \
+            && (strncmp(card_name.c_str(), "NIC", 4) != 0)) {
       continue;
     }
     for (int j = 0; j < device_count; ++j) {
