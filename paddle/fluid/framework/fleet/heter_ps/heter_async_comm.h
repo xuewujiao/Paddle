@@ -98,11 +98,13 @@ class AsyncComAllocator : public MemoryAllocatorBase {
 	  if (location == ML_DEVICE) {
 	      platform::CUDADeviceGuard guard(gpu_id_);
 	      size_t need_mem = element_count * GetElementSize(data_type);
-	      async_context->poll_point = memory::Alloc(place_, need_mem, phi::Stream(reinterpret_cast<phi::StreamId>(stream_)));
+	      async_context->poll_point = memory::AllocShared(place_, need_mem, phi::Stream(reinterpret_cast<phi::StreamId>(stream_)));
+	      async_context->SetContextInfo(element_count, location, data_type);
 	      return async_context->poll_point->ptr();
 	  } else {
 		  size_t need_mem = element_count * GetElementSize(data_type);
 		  async_context->cpu_poll_point.reset(new char[need_mem], [](char * p) {delete[] p;});
+		  async_context->SetContextInfo(element_count, location, data_type);
 		  return (void *) async_context->cpu_poll_point.get();
 	  }
   }
@@ -115,7 +117,7 @@ class AsyncComAllocator : public MemoryAllocatorBase {
   }
 
   //data can free by comlib
-  MemoryContextBase* ToMemoryContext(std::shared_ptr<phi::Allocation> data, size_t elt_count,
+  MemoryContextBase* ToMemoryContext(std::shared_ptr<phi::Allocation>& data, size_t elt_count,
 		  ::DataType data_type) {
 	  MemoryLocation location = ML_DEVICE;
 	  auto* async_context = static_cast<AsyncComMemContext*>(CreateMemoryContext());

@@ -381,7 +381,7 @@ void SlotRecordInMemoryDataFeed::FillSlotValueOffset(
                                         float_offsets,
                                         float_slot_size,
                                         used_slots);
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
 __global__ void CopyForTensorKernel(const int used_slot_num,
@@ -466,7 +466,7 @@ void SlotRecordInMemoryDataFeed::CopyForTensor(
                                   float_ins_lens,
                                   float_slot_size,
                                   used_slots);
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
 __global__ void GraphFillCVMKernel(int64_t *tensor, int len) {
@@ -870,7 +870,7 @@ int GraphDataGenerator::FillGraphIdShowClkTensorAccum(int index) {
                     sizeof(int64_t) * uniq_instance,
                     cudaMemcpyDeviceToDevice,
                     train_stream_);
-    cudaStreamSynchronize(train_stream_);
+    CUDA_CHECK(cudaStreamSynchronize(train_stream_));
 
     VLOG(1) << conf_.gpuid << ": finish show, cvm and id for " << accum
             << " uniq_instance: " << uniq_instance;
@@ -963,7 +963,7 @@ int GraphDataGenerator::FillGraphIdShowClkTensorAccum(int index) {
                     sizeof(int) * total_instance,
                     cudaMemcpyDeviceToDevice,
                     train_stream_);
-    cudaStreamSynchronize(train_stream_);
+    CUDA_CHECK(cudaStreamSynchronize(train_stream_));
   }  // end for (int accum = 0; accum < fake_accumulate_num;
 
   VLOG(1) << conf_.gpuid << ": Finish FillGraphIdAccum";
@@ -1082,7 +1082,7 @@ int MakeInsPair(const std::shared_ptr<phi::Allocation> &d_walk,        // input
   int h_pair_num;
   cudaMemcpyAsync(
       &h_pair_num, d_pair_num, sizeof(int), cudaMemcpyDeviceToHost, stream);
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
   ins_buf_pair_len += h_pair_num;
 
   if (conf.debug_mode) {
@@ -1320,7 +1320,7 @@ int GraphDataGenerator::GenerateBatch() {
     }
   }
 
-  cudaStreamSynchronize(train_stream_);
+  CUDA_CHECK(cudaStreamSynchronize(train_stream_));
   if (!conf_.gpu_graph_training) return 1;
   if (!conf_.sage_mode) {
     ins_buf_pair_len_[0] -= total_instance / 2;
@@ -1609,7 +1609,7 @@ void FillOneStep(
                                            len,
                                            stream));
 
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 
   if (step == 1) {
     GraphFillFirstStepKernel<<<GET_BLOCKS(len), CUDA_NUM_THREADS, 0, stream>>>(
@@ -1670,7 +1670,7 @@ void FillOneStep(
     delete[] h_actual_size;
     delete[] h_offset2idx;
   }
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
   *cur_sampleidx2row = 1 - *cur_sampleidx2row;
 }
 
@@ -2318,7 +2318,7 @@ uint64_t CopyUniqueNodes(
                     sizeof(uint64_t),
                     cudaMemcpyDeviceToHost,
                     stream);
-    cudaStreamSynchronize(stream);
+    CUDA_CHECK(cudaStreamSynchronize(stream));
 
     // prepare temp hbm resource
     auto d_uniq_node = memory::AllocShared(
@@ -2351,7 +2351,7 @@ uint64_t CopyUniqueNodes(
     } else {
       table->get_keys(d_uniq_node_ptr, d_node_cursor_ptr, stream);
     }
-    cudaStreamSynchronize(stream);
+    CUDA_CHECK(cudaStreamSynchronize(stream));
 
     // copy keys to host_vec for pass pull
     host_vec_ptr->resize(h_uniq_node_num + copy_unique_len);
@@ -2366,7 +2366,7 @@ uint64_t CopyUniqueNodes(
                     sizeof(uint32_t) * h_uniq_node_num,
                     cudaMemcpyDeviceToHost,
                     stream);
-    cudaStreamSynchronize(stream);
+    CUDA_CHECK(cudaStreamSynchronize(stream));
 
     return h_uniq_node_num;
   }
@@ -2400,7 +2400,7 @@ int InsertTable(int gpu_id,
                   sizeof(uint64_t),
                   cudaMemcpyDeviceToHost,
                   stream);
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 
   if (conf.gpu_graph_training) {
     VLOG(2) << "table capacity: " << conf.train_table_cap << ", "
@@ -2537,7 +2537,7 @@ std::vector<std::shared_ptr<phi::Allocation>> SampleNeighbors(
                                            cumsum_actual_sample_size_ptr + 1,
                                            len * conf.edge_to_id_len,
                                            stream));
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 
   edges_split_num_ptr->resize(conf.edge_to_id_len);
   for (int i = 0; i < conf.edge_to_id_len; i++) {
@@ -2593,7 +2593,7 @@ std::vector<std::shared_ptr<phi::Allocation>> SampleNeighbors(
                                   len,
                                   conf.return_weight);
   *neighbor_len = all_sample_size;
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 
   std::vector<std::shared_ptr<phi::Allocation>> sample_results;
   sample_results.emplace_back(final_sample_val);
@@ -2653,7 +2653,7 @@ std::shared_ptr<phi::Allocation> FillReindexHashTable(
                   sizeof(int),
                   cudaMemcpyDeviceToHost,
                   stream);
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 
   auto unique_items =
       memory::AllocShared(place,
@@ -2672,7 +2672,7 @@ std::shared_ptr<phi::Allocation> FillReindexHashTable(
                                                                keys,
                                                                values,
                                                                key_index);
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
   return unique_items;
 }
 
@@ -2731,7 +2731,7 @@ std::shared_ptr<phi::Allocation> GetReindexResult(
                   cudaMemcpyDeviceToDevice,
                   stream);
 
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 
   auto final_nodes = FillReindexHashTable(all_nodes_data,
                                           node_len + neighbor_len,
@@ -2751,7 +2751,7 @@ std::shared_ptr<phi::Allocation> GetReindexResult(
           d_reindex_table_key_ptr,
           d_reindex_table_value_ptr);
 
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
   return final_nodes;
 }
 
@@ -2998,7 +2998,7 @@ int get_multi_node_global_flag(int local_flag,
   int *send_buff_ptr = reinterpret_cast<int *>(send_buff->ptr());
   cudaMemcpyAsync(
       send_buff_ptr, &local_flag, sizeof(int), cudaMemcpyHostToDevice, stream);
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
   auto comm = platform::NCCLCommContext::Instance().Get(0, place.GetDeviceId());
   PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllReduce(&send_buff_ptr[0],
                                                               &send_buff_ptr[1],
@@ -3013,7 +3013,7 @@ int get_multi_node_global_flag(int local_flag,
                   sizeof(int),
                   cudaMemcpyDeviceToHost,
                   stream);
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
   return global_flag;
 }
 
@@ -3432,7 +3432,6 @@ int FillWalkBuf(const std::vector<uint64_t> &h_device_keys_len,
       assert(false);
       break;
     }
-
     VLOG(2) << "gpu=" << conf.gpuid << ", sample " << sample_times
             << " finish, node_type=" << node_type << ", path:[" << path[0]
             << "," << path[1] << "]"
@@ -3488,7 +3487,7 @@ int FillWalkBuf(const std::vector<uint64_t> &h_device_keys_len,
                     thrust::device_pointer_cast(d_random_row_col_shift),
                     RandInt(0, conf.walk_len));
 
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
   *shuffle_seed_ptr = engine();
 
   if (conf.debug_mode) {
@@ -3503,7 +3502,6 @@ int FillWalkBuf(const std::vector<uint64_t> &h_device_keys_len,
     delete[] h_random_row;
     delete[] h_walk;
   }
-
   return *total_row_ptr != 0;
 }
 
@@ -3781,7 +3779,7 @@ int FillWalkBufMultiPath(
                     thrust::device_pointer_cast(d_random_row_col_shift),
                     RandInt(0, conf.walk_len));
 
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
   *shuffle_seed_ptr = engine();
 
   if (conf.debug_mode) {
@@ -3818,7 +3816,7 @@ void GraphDataGenerator::DoWalkandSage() {
         DoSageForTrain();
       }
     } else {
-      if (conf_.sage_mode) {
+      if (conf_.sage_mode && !FLAGS_enable_async_comm) {
         global_train_flag_ = get_multi_node_global_flag(
             local_train_flag, ncclProd, place_, sample_stream_);
         VLOG(1) << "gpu_id: " << conf_.gpuid
@@ -3916,7 +3914,6 @@ bool GraphDataGenerator::DoWalkForTrain() {
           sample_stream_);
     }
   }
-
   return train_flag;
 }
 
@@ -4101,7 +4098,7 @@ void GraphDataGenerator::DoSageForTrain() {
         pair_label_vec_.emplace_back(pair_label);
       }
 
-      cudaStreamSynchronize(sample_stream_);
+      CUDA_CHECK(cudaStreamSynchronize(sample_stream_));
 
       ins_buf_pair_len_[tensor_pair_idx] -= total_instance / 2;
     }  // end for (int tensor_pair_idx = 0;
@@ -4192,7 +4189,7 @@ void GraphDataGenerator::DoSageForInfer() {
                           sample_stream_);
         node_degree_vec_.emplace_back(node_degrees);
       }
-      cudaStreamSynchronize(sample_stream_);
+      CUDA_CHECK(cudaStreamSynchronize(sample_stream_));
 
       sage_batch_num_ += 1;
 
@@ -4229,7 +4226,7 @@ int dynamic_adjust_total_row_for_infer(int local_reach_end,
                   sizeof(int),
                   cudaMemcpyHostToDevice,
                   stream);
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
   auto comm = platform::NCCLCommContext::Instance().Get(0, place.GetDeviceId());
   PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllReduce(&send_buff_ptr[0],
                                                               &send_buff_ptr[1],
@@ -4244,7 +4241,7 @@ int dynamic_adjust_total_row_for_infer(int local_reach_end,
                   sizeof(int),
                   cudaMemcpyDeviceToHost,
                   stream);
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
   return global_reach_end;
 }
 
@@ -4352,7 +4349,7 @@ bool FillInferBuf(
                       sizeof(uint64_t) * *total_row_ptr,
                       cudaMemcpyDeviceToHost,
                       stream);
-      cudaStreamSynchronize(stream);
+      CUDA_CHECK(cudaStreamSynchronize(stream));
     }
     VLOG(1) << "gpuid: " << conf.gpuid << " cursor: " << infer_cursor
             << " start: " << global_infer_node_type_start[infer_cursor]
@@ -4389,7 +4386,7 @@ bool GraphDataGenerator::DoWalkForInfer() {
                                d_uniq_node_num_,
                                place_,
                                sample_stream_);
-    cudaStreamSynchronize(sample_stream_);
+    CUDA_CHECK(cudaStreamSynchronize(sample_stream_));
   }
 
   return infer_flag;
@@ -4771,7 +4768,7 @@ void GraphDataGenerator::AllocResource(
                   sizeof(int) * 4,
                   cudaMemcpyHostToDevice,
                   sample_stream_);
-  cudaStreamSynchronize(sample_stream_);
+  CUDA_CHECK(cudaStreamSynchronize(sample_stream_));
 
   debug_gpu_memory_info(conf_.gpuid, "AllocResource end");
 }
@@ -4964,7 +4961,7 @@ int GraphDataGenerator::dynamic_adjust_batch_num_for_sage() {
                   sizeof(int),
                   cudaMemcpyHostToDevice,
                   sample_stream_);
-  cudaStreamSynchronize(sample_stream_);
+  CUDA_CHECK(cudaStreamSynchronize(sample_stream_));
   auto comm =
       platform::NCCLCommContext::Instance().Get(0, place_.GetDeviceId());
   PADDLE_ENFORCE_GPU_SUCCESS(platform::dynload::ncclAllReduce(&send_buff_ptr[0],
@@ -4980,7 +4977,7 @@ int GraphDataGenerator::dynamic_adjust_batch_num_for_sage() {
                   sizeof(int),
                   cudaMemcpyDeviceToHost,
                   sample_stream_);
-  cudaStreamSynchronize(sample_stream_);
+  CUDA_CHECK(cudaStreamSynchronize(sample_stream_));
 
   int new_batch_size =
       (total_row_[0] + thread_max_batch_num - 1) / thread_max_batch_num;
