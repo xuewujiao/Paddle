@@ -158,7 +158,7 @@ class GpuPsGraphTable
                                                                             bool cpu_query_switch,
                                                                             bool compress,
                                                                             bool weighted);  
-  NeighborSampleResult graph_neighbor_sample_v2_one_table(int gpu_id,
+  void graph_neighbor_sample_v2_one_table(int gpu_id,
                                                           int idx,
                                                           uint64_t *key,
                                                           int sample_size,
@@ -167,8 +167,9 @@ class GpuPsGraphTable
                                                           bool cpu_query_switch,
                                                           bool compress,
                                                           bool weighted,
-														                              cudaStream_t calc_stream,
-														                              cudaStream_t mem_stream);
+														  NeighborSampleResult&  result,
+														  cudaStream_t calc_stream,
+														  cudaStream_t mem_stream);
 
   void sample_v2_on_cpu(int gpu_id,
                         int idx,

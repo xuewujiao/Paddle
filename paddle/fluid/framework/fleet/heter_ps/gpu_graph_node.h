@@ -188,6 +188,7 @@ struct NeighborSampleResult {
   uint64_t *actual_val;
   int *actual_sample_size, sample_size, key_size;
   int total_sample_size = 0;
+  bool alloc_ed = false;
   cudaStream_t stream = 0;
   std::shared_ptr<memory::Allocation> val_mem, actual_sample_size_mem;
   std::shared_ptr<memory::Allocation> actual_val_mem;
@@ -200,29 +201,32 @@ struct NeighborSampleResult {
   void set_total_sample_size(int s) { total_sample_size = s; }
   int get_len() { return total_sample_size; }
   void set_stream(cudaStream_t stream_t) { stream = stream_t; }
+  void set_alloc_ed(bool alloc) {alloc_ed = alloc;}
   void initialize(int _sample_size, int _key_size, int dev_id) {
     sample_size = _sample_size;
     key_size = _key_size;
-    platform::CUDADeviceGuard guard(dev_id);
-    platform::CUDAPlace place = platform::CUDAPlace(dev_id);
-    if (stream != 0) {
-      val_mem = memory::AllocShared(
+    if (!alloc_ed) {
+      platform::CUDADeviceGuard guard(dev_id);
+      platform::CUDAPlace place = platform::CUDAPlace(dev_id);
+      if (stream != 0) {
+        val_mem = memory::AllocShared(
           place,
           _sample_size * _key_size * sizeof(uint64_t),
           phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
-      actual_sample_size_mem = memory::AllocShared(
+        actual_sample_size_mem = memory::AllocShared(
           place,
           _key_size * sizeof(int),
           phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
-      cudaStreamSynchronize(stream);
-    } else {
-      val_mem = memory::AllocShared(
+        cudaStreamSynchronize(stream);
+      } else {
+        val_mem = memory::AllocShared(
           place, _sample_size * _key_size * sizeof(uint64_t));
-      actual_sample_size_mem =
+        actual_sample_size_mem =
           memory::AllocShared(place, _key_size * sizeof(int));
+      }
+      val = reinterpret_cast<uint64_t *>(val_mem->ptr());
+      actual_sample_size = reinterpret_cast<int *>(actual_sample_size_mem->ptr());
     }
-    val = reinterpret_cast<uint64_t *>(val_mem->ptr());
-    actual_sample_size = reinterpret_cast<int *>(actual_sample_size_mem->ptr());
   }
 
   void display() {

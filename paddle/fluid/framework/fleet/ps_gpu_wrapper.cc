@@ -1965,6 +1965,7 @@ void PSGPUWrapper::LoadIntoMemory(bool is_shuffle) {
 
 void PSGPUWrapper::init_heter_ps(size_t size) {
    if (HeterPs_ == NULL) {
+	    resource_->set_multi_mf(1, max_mf_dim_);
 	    HeterPs_ = HeterPsBase::get_instance(
 	      size, resource_, fleet_config_, accessor_class_, optimizer_type_);
 	#ifdef PADDLE_WITH_CUDA
