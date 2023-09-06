@@ -178,6 +178,13 @@ class HeterComm {
                         size_t len,
                         Sgd& sgd,
 						cudaStream_t stream = 0);  // NOLINT
+  template <typename Sgd>
+  void update_one_table(int num,
+                         KeyType* d_keys,
+                         float* d_grads,
+                         size_t len,
+                         Sgd& sgd,
+                         cudaStream_t stream = 0);  // NOLINT
 
   void set_nccl_comm_and_size(const std::vector<ncclComm_t>& inner_comms,
                               const std::vector<ncclComm_t>& inter_comms,

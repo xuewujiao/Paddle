@@ -2090,7 +2090,6 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all_async(
 	size_t *h_local_part_sizes = res.h_local_part_sizes.data();
 	size_t *h_local_part_offsets = res.h_local_part_offsets.data();
 	// partition keys
-	VLOG(0) << "start partition";
 	partition_shard_keys(gpu_id,
 			             len,
 						 d_keys,
@@ -2106,7 +2105,6 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all_async(
 	      h_local_part_offsets[i] + h_local_part_sizes[i];
 	}
 	CHECK_EQ(len, h_local_part_offsets[shard_num]);
-  VLOG(0) << "check end";
   
   auto res_val = memory::Alloc(place,
                                len * sample_size * sizeof(uint64_t),
@@ -2182,7 +2180,6 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all_async(
     compress_sample(gpu_id, final, len, sample_size,  stream, stream);
   }
   CUDA_CHECK(cudaStreamSynchronize(stream));
-  VLOG(0) << "async sample end";
   return final;
 }
 
