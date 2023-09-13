@@ -55,6 +55,7 @@ PsRunner<GPUAccessor, GPUOptimizer> :: PsRunner(Partitioner *partitioner, Memory
         cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking);
         comm_ = comm;
         opt_ = GPUOptimizer<GPUAccessor>(gpu_accessor);
+        pull_push_keys.resize(partitioner->GetGlobalSize());
 };
 
 template <typename GPUAccessor, template <typename T> class GPUOptimizer>
@@ -66,7 +67,8 @@ void PsRunner<GPUAccessor, GPUOptimizer>::PullSparse(struct AsyncReqRes *request
 	  size_t elt_count = request->meta.data_sizes[0] / GetElementSize(input_dt);
 	  float *d_vals = static_cast<float*> (allocator_->AllocateOrUseExistContextPointer(response, 0, ML_DEVICE, DT_INT8, elt_count * data_size));
 	  FeatureKey* input_idx_ptr = static_cast<FeatureKey*> (request->memory_contexts[0]->GetPointer());
-
+	  auto requset_global_id = partitioner_->MakeGlobalRank(request->meta.requester_node_id, request->meta.requester_lane_id);
+	  pull_push_keys[requset_global_id] = *(static_cast<AsyncComMemContext*> (request->memory_contexts[0]));
       // 显存可能不安全（已改过一遍）  以及使用的stream和部分训练冲突
 	  comm_->pull_normal_sparse(
 			  gpu_id, input_idx_ptr, d_vals, elt_count);
@@ -78,15 +80,16 @@ template <typename GPUAccessor, template <typename T> class GPUOptimizer>
 void PsRunner<GPUAccessor, GPUOptimizer>::PushSparse(struct AsyncReqRes *request, struct AsyncReqRes *response) {
 	int gpu_id = partitioner_->GetLocalRank();
 	platform::CUDADeviceGuard guard(gpu_id);
-	auto input_dt = static_cast<::DataType>(request->meta.data_types[0]);
-	size_t elt_count = request->meta.data_sizes[0] / GetElementSize(input_dt);
-	FeatureKey* d_keys = static_cast<FeatureKey*> (request->memory_contexts[0]->GetPointer());
-	float* d_grads = static_cast<float*> (request->memory_contexts[1]->GetPointer());
+	size_t elt_count = request->meta.data_sizes[0] / comm_->get_grad_type_size();
+	auto requset_global_id = partitioner_->MakeGlobalRank(request->meta.requester_node_id, request->meta.requester_lane_id);
+	FeatureKey* d_keys = static_cast<FeatureKey*> (pull_push_keys[requset_global_id].GetPointer());
+	float* d_grads = static_cast<float*> (request->memory_contexts[0]->GetPointer());
 	// 显存可能不安全（已改过一遍） 以及与训练共用计算stream 影响速度
 	comm_->push_normal_sparse(gpu_id, d_keys, d_grads, elt_count, opt_);
 	allocator_->AllocateOrUseExistContextPointer(response, 0, ML_HOST, DT_INT8, 1);//不需设置返回结果 只需确认执行完毕
 	response->meta.valid_data_count = 1;
 	response->FillMetaByMemoryContext();
+	pull_push_keys[requset_global_id].clear();
 }
 
 template <typename GPUAccessor, template <typename T> class GPUOptimizer>
@@ -99,6 +102,8 @@ void PsRunner<GPUAccessor, GPUOptimizer>::PullOneSparse(struct AsyncReqRes *requ
 	  size_t elt_count = request->meta.data_sizes[0] / GetElementSize(input_dt);
 	  float *d_vals = static_cast<float*> (allocator_->AllocateOrUseExistContextPointer(response, 0, ML_DEVICE, DT_INT8, elt_count * data_size));
 	  FeatureKey * input_idx_ptr = static_cast<FeatureKey*> (request->memory_contexts[0]->GetPointer());
+	  auto requset_global_id = partitioner_->MakeGlobalRank(request->meta.requester_node_id, request->meta.requester_lane_id);
+	  pull_push_keys[requset_global_id] = *(static_cast<AsyncComMemContext*> (request->memory_contexts[0]));
 	  comm_->pull_one_table(gpu_id, input_idx_ptr, d_vals, elt_count, stream_);
 	  CUDA_CHECK(cudaStreamSynchronize(stream_));
 	  response->meta.valid_data_count = 1;
@@ -129,7 +134,7 @@ void PsRunner<GPUAccessor, GPUOptimizer>::RegisterFunctions() {
 
 	  function_info.function_id = function_info_table_.size();
 	  //需确认填1 还是2 demo中 input_data_count 未被使用
-	  function_info.input_data_count = 2;
+	  function_info.input_data_count = 1;
 	  function_info.output_data_count = 1;
 	  function_info.need_response = true;
 	  if (FLAGS_enable_split_task_to_card) {
@@ -143,7 +148,6 @@ void PsRunner<GPUAccessor, GPUOptimizer>::RegisterFunctions() {
 		  };
 	  }
 	  function_info.input_locations[0] = ML_DEVICE;
-	  function_info.input_locations[1] = ML_DEVICE;
 	  function_info.output_locations[0] = ML_HOST;
 	  function_info_table_.push_back(function_info);
 }
@@ -155,10 +159,10 @@ void PsRunner<GPUAccessor, GPUOptimizer>::PushOneSparse(struct AsyncReqRes *requ
 	comm_->storage_[gpu_id].push_.Resume();
 	comm_->storage_[gpu_id].remote_keys_++;
 	platform::CUDADeviceGuard guard(gpu_id);
-	auto input_dt = static_cast<::DataType>(request->meta.data_types[0]);
-	size_t elt_count = request->meta.data_sizes[0] / GetElementSize(input_dt);
-	FeatureKey* d_keys = static_cast<FeatureKey*> (request->memory_contexts[0]->GetPointer());
-	float* d_grads = static_cast<float*> (request->memory_contexts[1]->GetPointer());
+	size_t elt_count = request->meta.data_sizes[0] / comm_->get_grad_type_size();
+	auto requset_global_id = partitioner_->MakeGlobalRank(request->meta.requester_node_id, request->meta.requester_lane_id);
+	FeatureKey* d_keys = static_cast<FeatureKey*> (pull_push_keys[requset_global_id].GetPointer());
+	float* d_grads = static_cast<float*> (request->memory_contexts[0]->GetPointer());
 
     comm_->update_one_table(gpu_id,
 			                d_keys,
@@ -171,6 +175,7 @@ void PsRunner<GPUAccessor, GPUOptimizer>::PushOneSparse(struct AsyncReqRes *requ
 	response->meta.valid_data_count = 1;
     response->FillMetaByMemoryContext();
     comm_->storage_[gpu_id].push_.Pause();
+    pull_push_keys[requset_global_id].clear();
 }
 
 template <typename KeyType,
@@ -2285,11 +2290,9 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_async(
     auto* allocator = dynamic_cast<AsyncComAllocator*>(_async_request[gpu_id]->get_allocator());
 
 	for (int i = 0; i < node_size_; ++i) {
-	  auto* mem_key_context = allocator->ToMemoryContext(cache.d_merged_push_keys + h_local_part_offsets[i], h_local_part_sizes[i],
-				   DT_UINT64);
 	  auto* mem_value_context = allocator->ToMemoryContext(cache.d_merged_vals + h_local_part_offsets[i] * grad_type_size_, h_local_part_sizes[i] * grad_type_size_,
 					   DT_UINT8);
-	  auto* request = _async_request[gpu_id]->MakePushRequest(mem_key_context, mem_value_context, i, gpu_id);
+	  auto* request = _async_request[gpu_id]->MakePushRequest(mem_value_context, i, gpu_id);
 	  auto* async_com = paddle::framework::AsyncContext::GetInstance()->get_async_com(gpu_id);
       request_handles[i].request_ = request;
       request_handles[i].response_ = CreateAsyncReqRes();
@@ -2360,11 +2363,9 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_async_one(
 	  if (h_local_part_sizes[request_node] == 0) {
 		  continue;
 	  }
-	  auto* mem_key_context = allocator->ToMemoryContext(cache.d_merged_push_keys + h_local_part_offsets[request_node], h_local_part_sizes[request_node],
-				   DT_UINT64);
 	  auto* mem_value_context = allocator->ToMemoryContext(cache.d_merged_vals + h_local_part_offsets[request_node] * grad_type_size_, h_local_part_sizes[request_node] * grad_type_size_,
 					   DT_UINT8);
-	  auto* request = _async_request[gpu_id]->MakePushRequest(mem_key_context, mem_value_context, request_node);
+	  auto* request = _async_request[gpu_id]->MakePushRequest(mem_value_context, request_node);
       request_handles[request_node].request_ = request;
       request_handles[request_node].response_ = CreateAsyncReqRes();
 	  async_com->PutRequestAsync(&request_handles[request_node]);

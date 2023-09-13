@@ -2016,6 +2016,8 @@ void PSGPUWrapper::build_pull_thread() {
     }
     // build cpu ps data process
     BuildPull(gpu_task);
+    // merge pull
+    MergePull(gpu_task);
     timer.Pause();
     VLOG(0) << "passid=" << gpu_task->pass_id_
             << ", thread BuildPull end, cost time: " << timer.ElapsedSec()
@@ -2036,8 +2038,6 @@ void PSGPUWrapper::build_task() {
   VLOG(1) << "passid=" << gpu_task->pass_id_ << ", PrepareGPUTask start.";
   platform::Timer timer;
   timer.Start();
-  // merge pull
-  MergePull(gpu_task);
   if (multi_mf_dim_) {
     divide_to_device(gpu_task);
   } else {

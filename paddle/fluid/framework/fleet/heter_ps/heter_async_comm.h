@@ -45,6 +45,12 @@ class  AsyncComMemContext : public MemoryContextBase {
   };
   ~ AsyncComMemContext()  override = default;
 
+  void clear() {
+	raw_point = nullptr;
+	poll_point = nullptr;
+	cpu_poll_point = nullptr;
+  }
+
   void* GetPointer() override {
       if (raw_point != nullptr) {
           return raw_point;
@@ -291,11 +297,9 @@ public:
 
   AsyncReqRes* MakePullRequest(MemoryContextBase* memory_context, int node_id, int gpu_id);
   AsyncReqRes* MakePullRequest(MemoryContextBase* memory_context, int target_global_rank);
-  AsyncReqRes* MakePushRequest(MemoryContextBase *indice_context,
-                                      MemoryContextBase *grad_context,
+  AsyncReqRes* MakePushRequest(MemoryContextBase *grad_context,
 									  int node_id, int gpu_id);
-  AsyncReqRes* MakePushRequest(MemoryContextBase *indice_context,
-                                      MemoryContextBase *grad_context,
+  AsyncReqRes* MakePushRequest(MemoryContextBase *grad_context,
 									  int target_global_rank);
 
   virtual AsyncReqRes* MakeDeepWalkRequest(MemoryContextBase *node_key_context,
