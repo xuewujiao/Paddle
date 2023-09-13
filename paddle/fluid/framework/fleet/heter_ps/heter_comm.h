@@ -882,6 +882,10 @@ public:
     int gpu_id = partitioner_->GetLocalRank();
     VLOG(0) << "~PsRunner is called for gpu " << gpu_id;
     platform::CUDADeviceGuard guard(gpu_id);
+    for (auto &keys_contest : pull_push_keys) {
+      keys_contest.clear();
+    }
+    pull_push_keys.clear();
     PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamDestroy(stream_));
   };
   virtual std::string get_runner_name() {return std::string("PsRunner");}
@@ -893,6 +897,7 @@ public:
 
 private:
  HeterComm<FeatureKey, float*, float*, GPUAccessor> * comm_;
+ std::vector<AsyncComMemContext> pull_push_keys;
  GPUOptimizer<GPUAccessor> opt_;
  cudaStream_t stream_;
 };

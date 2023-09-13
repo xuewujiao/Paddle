@@ -39,25 +39,22 @@ AsyncReqRes* RequestRunner::MakePullRequest(MemoryContextBase* memory_context, i
 	return MakePullRequest(memory_context, target_global_rank);
 }
 
-AsyncReqRes* RequestRunner::MakePushRequest(MemoryContextBase *indice_context,
-                                     MemoryContextBase *grad_context,
+AsyncReqRes* RequestRunner::MakePushRequest(MemoryContextBase *grad_context,
 									  int target_global_rank) {
 	  AsyncReqRes *request = CreateAsyncReqRes();
 	  InitMeta(&request->meta);
-	  request->meta.valid_data_count = 2;
-	  request->memory_contexts[0] = indice_context;
-	  request->memory_contexts[1] = grad_context;
+	  request->meta.valid_data_count = 1;
+	  request->memory_contexts[0] = grad_context;
 	  request->FillMetaByMemoryContext();
 	  static constexpr int kPsUpdateFuncId = 1;
 	  CreateRequestMeta(&request->meta, target_global_rank, kPsUpdateFuncId);
 	  return request;
 }
 
-AsyncReqRes* RequestRunner::MakePushRequest(MemoryContextBase *indice_context,
-                                     MemoryContextBase *grad_context,
+AsyncReqRes* RequestRunner::MakePushRequest(MemoryContextBase *grad_context,
 									  int node_id, int gpu_id) {
 	 int target_global_rank = partitioner_->MakeGlobalRank(node_id, gpu_id);
-	 return MakePushRequest(indice_context, grad_context, target_global_rank);
+	 return MakePushRequest(grad_context, target_global_rank);
 }
 
 }  // end namespace framework
