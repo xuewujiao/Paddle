@@ -12,6 +12,7 @@
 #include "message_queue.h"
 #include "meta.h"
 #include "partitioner.h"
+#include "glog/logging.h"
 
 class AsyncReqRes;
 class AsyncCommunicator;
@@ -33,13 +34,14 @@ class RunnerBase {
   RunnerBase() = delete;
   explicit RunnerBase(Partitioner* partitioner, MemoryAllocatorBase* allocator)
       : partitioner_(partitioner), allocator_(allocator) {}
-  virtual ~RunnerBase() = default;
+  virtual ~RunnerBase() {};
   void Register(int runner_id);
   int RunnerId() const {
     return runner_id_;
   }
   // Normally GetProcessFunctionCount and GetProcessFunctionInfoTable don't need to be overwritten.
   virtual int GetProcessFunctionCount() const;
+  virtual std::string get_runner_name() {return std::string("RunnerBase");}
   virtual const FunctionInfo* GetProcessFunctionInfoTable() const;
   bool FuncNeedResponse(Meta* meta) const;
   // [INTERFACE]
@@ -69,10 +71,11 @@ class QueuedRunner : public RunnerBase {
   QueuedRunner() = delete;
   explicit QueuedRunner(Partitioner* partitioner, MemoryAllocatorBase* allocator)
       : RunnerBase(partitioner, allocator) {}
-  ~QueuedRunner() override = default;
+  ~QueuedRunner() {};
   virtual void StartProcessLoop();
   void WaitStopped() override;
   void Process(AsyncReqRes* request, ProcessCallBackFuncType process_call_back_func) override;
+  virtual std::string get_runner_name() {return std::string("QueuedRunner");}
  protected:
   bool MarkFinishedRank(int node_id, int local_rank);
   // [INTERFACE] maybe set up cudaStream and set device.

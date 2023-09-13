@@ -16,6 +16,8 @@
 #include <thrust/reduce.h>
 #include <thrust/scan.h>
 #include <functional>
+#include <random>
+#include <ctime>
 #include "cub/cub.cuh"
 #include "math.h"
 #pragma once
@@ -260,6 +262,40 @@ __global__ void neighbor_sample_kernel_walking(GpuPsCommGraph graph,
     i += BLOCK_WARPS;
   }
 }
+
+__global__ void neighbor_sample_kernel_one_walking(GpuPsCommGraph graph,
+                                               GpuPsNodeInfo* node_info_list,
+                                               int* actual_size,
+                                               uint64_t* res,
+                                               int n,
+                                               int neighbor_size_limit,
+                                               int default_value,
+                                               uint64_t seed) {
+  // graph: The corresponding edge table.
+  // node_info_list: The input node query, duplicate nodes allowed.
+  // actual_size: The actual sample size of the input nodes.
+  // res: The output sample neighbors of the input nodes.
+  // sample_len: The fix sample size.
+  int i = blockIdx.x * blockDim.y + threadIdx.y;
+  if (i < n) {
+     if (node_info_list[i].neighbor_size == 0) {
+          actual_size[i] = default_value; 
+          res[i] = 0;
+          return; 
+     }
+     int neighbor_len = node_info_list[i].neighbor_size;
+     uint32_t data_offset = node_info_list[i].neighbor_offset;
+     if (neighbor_len > neighbor_size_limit) {
+         neighbor_len = neighbor_size_limit;
+     } 
+     uint64_t* data = graph.neighbor_list;   
+     uint64_t new_seed = seed + 33 * uint64_t(i + data_offset) + n + neighbor_size_limit;
+     int num = new_seed % neighbor_len;
+     res[i] = data[data_offset + num];
+     actual_size[i] = 1;
+  }
+}
+
 
 /*__global__ void neighbor_sample_kernel_all_edge_type(
     GpuPsCommGraph* graphs,
@@ -1983,11 +2019,17 @@ void GpuPsGraphTable::build_graph_from_cpu(
 NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v3(
     NeighborSampleQuery q, bool cpu_switch, bool compress, bool weighted) {
   if (multi_node_ && FLAGS_enable_graph_multi_node_sampling) {
+    auto gpu_id = global_device_map[q.gpu_id];
+    auto &cache = storage_[gpu_id];
+	cache.all_sample_time_.Resume();
+    
     // multi node mode
     if (q.sample_step == 1) {
       auto gpu_id = global_device_map[q.gpu_id];
 	  auto stream = resource_->local_stream(gpu_id, 0);
 	  NeighborSampleResult result;
+	  cache.local_sameple_.Resume();
+	  cache.local_keys_++;
       graph_neighbor_sample_v2_one_table(gpu_id,
                                              q.table_idx,
                                              q.src_nodes,
@@ -2000,9 +2042,13 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v3(
                                              result,
                                              stream,
                                              stream);
+      cache.local_sameple_.Pause();
+      cache.all_sample_time_.Pause();
       return result;
     } else {
       if (FLAGS_enable_async_comm) {
+        cache.total_async_sameple_.Resume();
+        cache.total_keys_ += q.len;
         auto result = graph_neighbor_sample_all2all_async(global_device_map[q.gpu_id],
                                                           q.sample_step,
                                                           q.table_idx,
@@ -2013,6 +2059,9 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v3(
                                                           cpu_switch,
                                                           compress,
                                                           weighted);
+       cache.total_async_sameple_.Pause();
+       cache.all_sample_time_.Pause();
+       print_debug_time(global_device_map[q.gpu_id]);
        return result;
       }else{
         auto result = graph_neighbor_sample_all2all(global_device_map[q.gpu_id],
@@ -2025,6 +2074,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v3(
                                                     cpu_switch,
                                                     compress,
                                                     weighted);
+       cache.all_sample_time_.Pause();
        return result;
       }
       
@@ -2078,6 +2128,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all_async(
 	auto stream = resource_->local_stream(gpu_id, 0);
     
 	auto &loc = storage_[gpu_id];
+	loc.partition_.Resume();
 	auto &res = loc.shard_res;
 	int shard_num = node_size_ * device_num_;  
 	loc.init_shard(len, shard_num);
@@ -2105,6 +2156,8 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all_async(
 	      h_local_part_offsets[i] + h_local_part_sizes[i];
 	}
 	CHECK_EQ(len, h_local_part_offsets[shard_num]);
+	loc.partition_.Pause();
+  loc.set_async_.Resume();
   
   auto res_val = memory::Alloc(place,
                                len * sample_size * sizeof(uint64_t),
@@ -2118,21 +2171,28 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all_async(
   
   std::vector<RequestHandle> request_handles(shard_num);
   auto* allocator = dynamic_cast<AsyncComAllocator*>(_async_request[gpu_id]->get_allocator());
+  int start_pos = rank_id_ * device_num_ + gpu_id;
+  std::vector<int> request_order(shard_num);
   for (int i = 0; i < shard_num; ++i) {
-    if (h_local_part_sizes[i] == 0) {
+    request_order[i] = i;
+  }
+  std::random_shuffle(request_order.begin(), request_order.end());
+  for (auto request_node : request_order) {
+    if (h_local_part_sizes[request_node] == 0) {
       continue;
     }
     auto* val_context = allocator->ToMemoryContext(
-      res_val_ptr + h_local_part_offsets[i] * sample_size, h_local_part_sizes[i] * sample_size, DT_UINT64);
+      res_val_ptr + h_local_part_offsets[request_node] * sample_size, h_local_part_sizes[request_node] * sample_size, DT_UINT64);
     auto* actual_sample_size_context = allocator->ToMemoryContext(
-      res_actual_sample_size_ptr + h_local_part_offsets[i] * sizeof(int), h_local_part_sizes[i] * sizeof(int), DT_UINT8);
-    request_handles[i].response_ = CreateAsyncReqRes();
-    request_handles[i].response_->memory_contexts[0] = val_context;
-    request_handles[i].response_->memory_contexts[1] = actual_sample_size_context;
+      res_actual_sample_size_ptr + h_local_part_offsets[request_node] * sizeof(int), h_local_part_sizes[request_node] * sizeof(int), DT_UINT8);
+    request_handles[request_node].response_ = CreateAsyncReqRes();
+    request_handles[request_node].response_->memory_contexts[0] = val_context;
+    request_handles[request_node].response_->memory_contexts[1] = actual_sample_size_context;
   }
 
   int64_t packed = (cpu_query_switch << 2) | (0 << 1) | weighted;
   int64_t int_para[4] = {table_idx, sample_size, neighbor_size_limit, packed}; 
+  
    
   for (int i = 0; i < shard_num; ++i) {
     if (h_local_part_sizes[i] == 0) {
@@ -2147,7 +2207,8 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all_async(
     auto* async_com = paddle::framework::AsyncContext::GetInstance()->get_async_com(gpu_id);
     async_com->PutRequestAsync(&request_handles[i]);
   }
-  
+  loc.set_async_.Pause();
+  loc.wait_async_sample_.Resume();
 	//等待异步执行结束
   for(int i = 0; i < shard_num; ++i) {
     if (h_local_part_sizes[i] == 0) {
@@ -2155,7 +2216,8 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all_async(
     }
     request_handles[i].Wait();
   }
-		
+  loc.wait_async_sample_.Pause();	
+  loc.scatter_and_compress_.Resume();
   NeighborSampleResult final;
   final.set_stream(stream);
   final.initialize(sample_size, len, gpu_id);
@@ -2180,6 +2242,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all_async(
     compress_sample(gpu_id, final, len, sample_size,  stream, stream);
   }
   CUDA_CHECK(cudaStreamSynchronize(stream));
+  loc.scatter_and_compress_.Pause();
   return final;
 }
 
@@ -2549,20 +2612,37 @@ void GpuPsGraphTable::graph_neighbor_sample_v2_one_table(
   auto graph = gpu_graph_list_[offset];
   // todo weighted_sample add stream, and the lower can be in a funtion
     if (!weighted) {
-      constexpr int WARP_SIZE = 32;
-      constexpr int BLOCK_WARPS = 128 / WARP_SIZE;
-      constexpr int TILE_SIZE = BLOCK_WARPS * 16;
-      const dim3 block(WARP_SIZE, BLOCK_WARPS);
-      const dim3 grid((len + TILE_SIZE - 1) / TILE_SIZE);
-      neighbor_sample_kernel_walking<WARP_SIZE, BLOCK_WARPS, TILE_SIZE>
-          <<<grid, block, 0, calc_stream>>>(graph,
-                                           node_info_list,
-                                           actual_size_array,
-                                           val,
-                                           sample_size,
-                                           len,
-                                           neighbor_size_limit,
-                                           default_value);
+      if (sample_size > 1) {
+        constexpr int WARP_SIZE = 32;
+        constexpr int BLOCK_WARPS = 128 / WARP_SIZE;
+        constexpr int TILE_SIZE = BLOCK_WARPS * 16;  
+        const dim3 block(WARP_SIZE, BLOCK_WARPS);
+        const dim3 grid((len + TILE_SIZE - 1) / TILE_SIZE);
+        neighbor_sample_kernel_walking<WARP_SIZE, BLOCK_WARPS, TILE_SIZE>
+            <<<grid, block, 0, calc_stream>>>(graph,
+                                             node_info_list,
+                                             actual_size_array,
+                                             val,
+                                             sample_size,
+                                             len,
+                                             neighbor_size_limit,
+                                             default_value);
+      }
+      else{
+         thread_local std::mt19937 gen(time(0) + (uint64_t)gpu_id *39751 + 25962 * (uint64_t)rank_id_) ;
+         uint64_t seed = gen();
+         dim3 grid((len - 1) / dim_y + 1);
+         dim3 block(1, dim_y); 
+         neighbor_sample_kernel_one_walking<<<grid, block, 0, calc_stream>>>(
+            graph,
+            node_info_list,
+            actual_size_array,
+            val,
+            len,
+            neighbor_size_limit,
+            default_value,
+            seed);
+      }
     } else {
       // Weighted sample.
       thread_local std::random_device rd;
@@ -2604,6 +2684,7 @@ void GpuPsGraphTable::graph_neighbor_sample_v2_one_table(
   CUDA_CHECK(cudaStreamSynchronize(calc_stream));
   if (cpu_query_switch) {
     // Get cpu keys and corresponding position.
+     VLOG(0) << "cpu query_switch";
      sample_v2_on_cpu(gpu_id, idx, key, len, sample_size, result, calc_stream);
   }
   
@@ -4554,8 +4635,11 @@ AsyncReqRes* DeepWalkSampleRunner::MakeDeepWalkRequest(MemoryContextBase *node_k
 }
 
 void DeepWalkSampleRunner::NeighborSample(struct AsyncReqRes *request, struct AsyncReqRes *response) {
+       
       int gpu_id = partitioner_->GetLocalRank();
       platform::CUDADeviceGuard guard(gpu_id);
+      graph_table_->storage_[gpu_id].remote_keys_++;
+      graph_table_->storage_[gpu_id].async_sample_.Resume();
       auto allocator = dynamic_cast<AsyncComAllocator*> (allocator_);
       auto mem_stream = allocator->GetCudaMemoryStream();
     auto calc_stream = stream_;
@@ -4565,6 +4649,7 @@ void DeepWalkSampleRunner::NeighborSample(struct AsyncReqRes *request, struct As
       size_t len = request->meta.data_sizes[0] / GetElementSize(input_dt);
 
     int64_t * int_para = static_cast<int64_t*> (request->memory_contexts[1]->GetPointer());
+    
     int64_t table_idx = int_para[0];
     int64_t sample_size = int_para[1];
     int64_t neighbor_size_limit = int_para[2];
@@ -4583,6 +4668,7 @@ void DeepWalkSampleRunner::NeighborSample(struct AsyncReqRes *request, struct As
     gpu_id, table_idx, input_idx_ptr, sample_size, len, neighbor_size_limit, cpu_query_switch, compress, weighted, final, calc_stream, mem_stream); 
     response->meta.valid_data_count = 2;  
     response->FillMetaByMemoryContext();
+    graph_table_->storage_[gpu_id].async_sample_.Pause();
 }
 
 };  // namespace framework

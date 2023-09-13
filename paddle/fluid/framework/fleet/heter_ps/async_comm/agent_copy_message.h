@@ -20,7 +20,7 @@ struct Header {
   Meta meta;
 };
 
-constexpr size_t kRegBufferSize = 1 << 20;
+constexpr size_t kRegBufferSize = 1 << 22;
 constexpr int kRegBufferCount = 4;
 constexpr size_t kDataSizePerBuffer = kRegBufferSize - sizeof(Header);
 

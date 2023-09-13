@@ -153,19 +153,33 @@ public:
 	    }
 	    return s_instance_;
 	 }
+	 static void Destroy() {
+	   if (s_instance_ != NULL) {
+		   s_instance_ = NULL;
+	   }
+	 }
+
 	 ~AsyncContext() {
+	   VLOG(0) << " call ~AsyncContext ";
+	   if (_start) {
+	    std::vector<std::unique_ptr<std::thread>> init_threads(_card_num);
+	    for (int i = 0; i < _card_num; i++) {
+	         init_threads[i] = std::make_unique<std::thread>([this,i]() {
+	           platform::CUDADeviceGuard guard(i);
+	           async_coms[i]->SendStopSignal();
+	           async_coms[i]->WaitStopped();
+	           async_coms[i]->DestroyResources();
+	       });
+	    }
+	    for (int i = 0; i < _card_num; i++) {
+	       init_threads[i]->join();
+	    }
+	   }
+	   VLOG(0) << " call IbDeInit ";
 	   if (_is_init) {
 	     IbDeInit();
 	   }
-	   if (_start) {
-		 for (int i = 0; i < _card_num; i++){
-		   async_coms[i]->SendStopSignal();
-		 }
-		 for (int i = 0; i < _card_num; i++) {
-		   async_coms[i]->WaitStopped();
-		   async_coms[i]->DestroyResources();
-		 }
-	   }
+	   VLOG(0) << " call IbDeInit end";
 	 }
 	 static Config config;
 	 std::vector<std::shared_ptr<RunnerRegistry>> registrys;
@@ -269,10 +283,11 @@ public:
 	RequestRunner(Partitioner *partitioner, MemoryAllocatorBase *allocator)
       : QueuedRunner(partitioner, allocator) {
 	}
-  virtual ~RequestRunner() = default;
+  virtual ~RequestRunner() {};
   MemoryAllocatorBase* get_allocator() {
      return allocator_;
   }
+  virtual std::string get_runner_name() {return std::string("RequestRunner");}
 
   AsyncReqRes* MakePullRequest(MemoryContextBase* memory_context, int node_id, int gpu_id);
   AsyncReqRes* MakePullRequest(MemoryContextBase* memory_context, int target_global_rank);

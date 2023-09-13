@@ -2069,6 +2069,10 @@ void PSGPUWrapper::BeginPass() {
   build_task();
   debug_gpu_memory_info("after build task");
   timer.Pause();
+  auto gloo = paddle::framework::GlooWrapper::GetInstance();
+  if (gloo->Size() > 1 && FLAGS_enable_async_comm) {
+      gloo->Barrier();
+  }
 
   if (current_task_ == nullptr) {
     PADDLE_THROW(platform::errors::Fatal(

@@ -409,9 +409,12 @@ public:
   };
   virtual ~DeepWalkSampleRunner() {
     int gpu_id = partitioner_->GetLocalRank();
+    VLOG(0) << "~DeepWalkSampleRunner is called for gpu " << gpu_id;
     platform::CUDADeviceGuard guard(gpu_id);
     PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamDestroy(stream_));
   };
+  virtual std::string get_runner_name() {return std::string("DeepWalkSampleRunner");}
+
 
   void RegisterFunctions() override;
   AsyncReqRes* MakeDeepWalkRequest(MemoryContextBase *node_key_context,
