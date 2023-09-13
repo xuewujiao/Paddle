@@ -15,6 +15,8 @@ limitations under the License. */
 #pragma once
 #include <memory>
 #include <vector>
+#include <random>
+#include <algorithm>
 #include "cub/cub.cuh"
 #include "cub/util_allocator.cuh"
 #if defined(PADDLE_WITH_CUDA)
@@ -455,6 +457,25 @@ class HeterComm {
     platform::Timer local_oper_;
     platform::Timer nvcomp_comp_;
     platform::Timer nvcomp_decomp_;
+    //async common
+    platform::Timer set_async_;
+    platform::Timer partition_;
+    //async train
+    platform::Timer train_time_;
+    platform::Timer push_scatter_;
+    platform::Timer wait_push_;
+    platform::Timer push_;
+    platform::Timer wait_pull_;
+    platform::Timer pull_scatter_;
+    platform::Timer pull_;
+    //async sample
+    platform::Timer all_sample_time_;
+    platform::Timer local_sameple_;
+    platform::Timer total_async_sameple_;
+    platform::Timer wait_async_sample_;
+    platform::Timer async_sample_;
+    platform::Timer scatter_and_compress_;
+
     size_t total_keys_ = 0;
     size_t local_keys_ = 0;
     size_t remote_keys_ = 0;
@@ -813,12 +834,12 @@ class HeterComm {
   float load_factor_{0.75};
   int block_size_{256};
   std::unique_ptr<HeterCommKernel> heter_comm_kernel_;
-
   GPUAccessor gpu_accessor_;
+public:
+  std::vector<LocalStorage> storage_;
 
  protected:
   int topo_aware_{0};
-  std::vector<LocalStorage> storage_;
   DynamicGradMerger merger_;
   int device_num_ = 8;
   int multi_node_{0};
@@ -859,10 +880,11 @@ public:
             HeterComm<FeatureKey, float*, float*, GPUAccessor> *comm, GPUAccessor& gpu_accessor);
   virtual ~PsRunner() {
     int gpu_id = partitioner_->GetLocalRank();
+    VLOG(0) << "~PsRunner is called for gpu " << gpu_id;
     platform::CUDADeviceGuard guard(gpu_id);
     PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamDestroy(stream_));
   };
-
+  virtual std::string get_runner_name() {return std::string("PsRunner");}
   void RegisterFunctions() override;
   void PullSparse(struct AsyncReqRes *request, struct AsyncReqRes *response);
   void PushSparse(struct AsyncReqRes *request, struct AsyncReqRes *response);

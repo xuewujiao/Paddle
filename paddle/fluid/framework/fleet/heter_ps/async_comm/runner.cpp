@@ -78,6 +78,7 @@ void QueuedRunner::ProcessLoop() {
   ProcessSetup();
   RunnerWorkItem runner_work_item;
   while (work_queue_.WaitAndPop(&runner_work_item)) {
+	//VLOG(0) << get_runner_name() << " queue size is " << work_queue_.Size();
     int func_id = runner_work_item.request->meta.function_id;
     BOOL_CHECK(func_id >= 0 && func_id < GetProcessFunctionCount());
     AsyncReqRes *response = nullptr;

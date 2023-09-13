@@ -92,6 +92,7 @@ void PsRunner<GPUAccessor, GPUOptimizer>::PushSparse(struct AsyncReqRes *request
 template <typename GPUAccessor, template <typename T> class GPUOptimizer>
 void PsRunner<GPUAccessor, GPUOptimizer>::PullOneSparse(struct AsyncReqRes *request, struct AsyncReqRes *response) {
 	  int gpu_id = partitioner_->GetLocalRank();
+	  comm_->storage_[gpu_id].pull_.Resume();
 	  platform::CUDADeviceGuard guard(gpu_id);
 	  size_t data_size =  comm_->get_pull_type_size();
 	  auto input_dt = static_cast<::DataType>(request->meta.data_types[0]);
@@ -102,6 +103,7 @@ void PsRunner<GPUAccessor, GPUOptimizer>::PullOneSparse(struct AsyncReqRes *requ
 	  CUDA_CHECK(cudaStreamSynchronize(stream_));
 	  response->meta.valid_data_count = 1;
 	  response->FillMetaByMemoryContext();
+	  comm_->storage_[gpu_id].pull_.Pause();
 }
 
 template <typename GPUAccessor, template <typename T> class GPUOptimizer>
@@ -150,6 +152,8 @@ void PsRunner<GPUAccessor, GPUOptimizer>::RegisterFunctions() {
 template <typename GPUAccessor, template <typename T> class GPUOptimizer>
 void PsRunner<GPUAccessor, GPUOptimizer>::PushOneSparse(struct AsyncReqRes *request, struct AsyncReqRes *response) {
 	int gpu_id = partitioner_->GetLocalRank();
+	comm_->storage_[gpu_id].push_.Resume();
+	comm_->storage_[gpu_id].remote_keys_++;
 	platform::CUDADeviceGuard guard(gpu_id);
 	auto input_dt = static_cast<::DataType>(request->meta.data_types[0]);
 	size_t elt_count = request->meta.data_sizes[0] / GetElementSize(input_dt);
@@ -166,6 +170,7 @@ void PsRunner<GPUAccessor, GPUOptimizer>::PushOneSparse(struct AsyncReqRes *requ
 	allocator_->AllocateOrUseExistContextPointer(response, 0, ML_HOST, DT_INT8, 1);//不需设置返回结果 只需确认执行完毕
 	response->meta.valid_data_count = 1;
     response->FillMetaByMemoryContext();
+    comm_->storage_[gpu_id].push_.Pause();
 }
 
 template <typename KeyType,
@@ -468,19 +473,23 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::print_debug_time(
   if (!multi_node_) {
     return;
   }
-  static int64_t count_ = 0;
-  if ((count_++ % 5000) != 0) {
+  thread_local static int64_t count_ = 0;
+  ++count_;
+  if ((count_ % 5000) != 0 && count_ !=1 && !force) {
     return;
   }
   auto &cc = storage_[gpu_id];
-  printf(
+  char buffer[600];
+  if(multi_mf_dim_ == 1) {
+  if (!FLAGS_enable_async_comm) {
+      sprintf(buffer,
       "gpu id=%d, count=%ld, "
       "keys: %lu %lu %lu, "
       "all2all: %lf, node span: %lf, wait: %lf trans:%lf p2p:%lf barrier: %lf, "
       "inner span: %lf, barrier: %lf, "
       "local op: %lf\n",
       gpu_id,
-      count_++,
+      count_,
       cc.total_keys_,
       cc.local_keys_,
       cc.remote_keys_,
@@ -493,6 +502,53 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::print_debug_time(
       cc.inner_span_.ElapsedSec(),
       cc.inner_barrier_.ElapsedSec(),
       cc.local_oper_.ElapsedSec());
+  } else {
+      sprintf(buffer,
+      "gpu id=%d, count=%ld, "
+      "keys: %lu %lu  remont_pull_times %lu, "
+      "train_time: %lf, push_scatter: %lf, set async: %lf, wait_push: %lf, push: %lf, partition:%lf wait_pull:%lf, pull:%lf, pull_scatter: %lf "
+      "\n",
+      gpu_id,
+      count_,
+      cc.total_keys_,
+      cc.local_keys_,
+      cc.remote_keys_,
+	  cc.train_time_.ElapsedSec(),
+      cc.push_scatter_.ElapsedSec(),
+      cc.set_async_.ElapsedSec(),
+      cc.wait_push_.ElapsedSec(),
+	  cc.push_.ElapsedSec(),
+      cc.partition_.ElapsedSec(),
+      cc.wait_pull_.ElapsedSec(),
+	  cc.pull_.ElapsedSec(),
+      cc.pull_scatter_.ElapsedSec());
+  }
+  }
+  else{
+      sprintf(buffer,
+      "gpu id=%d, v3_count=%ld, "
+      "total_async_sample_keys: %lu, local_sampe_times %lu, remote_sample_times  %lu, "
+      "sample_v3_time: %lf, local_sameple_time: %lf, total_async_sameple_time: %lf, partition_time: %lf, set_async_time: %lf, wait_async_sample_time:%lf async_sample_time:%lf, scatter_and_compress_time:%lf "
+      "\n",
+      gpu_id,
+      count_,
+      cc.total_keys_,
+	  cc.local_keys_,
+	  cc.remote_keys_,
+	  cc.all_sample_time_.ElapsedSec(),
+	  cc.local_sameple_.ElapsedSec(),
+	  cc.total_async_sameple_.ElapsedSec(),
+      cc.partition_.ElapsedSec(),
+      cc.set_async_.ElapsedSec(),
+      cc.wait_async_sample_.ElapsedSec(),
+	  cc.async_sample_.ElapsedSec(),
+      cc.scatter_and_compress_.ElapsedSec());
+  }
+  VLOG(0) << buffer;
+  printf(buffer);
+
+
+
 }
 
 template <typename KeyType,
@@ -838,6 +894,8 @@ template <typename KeyType,
           typename GradType,
           typename GPUAccessor>
 HeterComm<KeyType, ValType, GradType, GPUAccessor>::~HeterComm() {
+  VLOG(0) << " call ~HeterComm " << " multi_mf_dim_ is " << multi_mf_dim_;
+  paddle::framework::AsyncContext::Destroy();
   for (int i = 0; i < device_num_; ++i) {
     print_debug_time(i, true);
   }
@@ -857,7 +915,7 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::~HeterComm() {
     }
   }
   for (auto &request : _async_request) {
-	  delete request;
+	  //delete reinterpret_cast<RunnerBase *> (request);
 	  request = nullptr;
   }
 }
@@ -2260,6 +2318,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_async_one(
 	auto &cache = storage_[gpu_id];//使用pull申请的显存
 	auto stream = resource_->local_stream(gpu_id, 0);
 	  // scale grad
+	cache.push_scatter_.Resume();
 	if (multi_node_) {
 	  heter_comm_kernel_->scale_grad(len,
 	                                 reinterpret_cast<char *>(d_grads),
@@ -2283,30 +2342,44 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_async_one(
 	     value_bytes,
 	     stream);
 	sync_stream(stream);
+	cache.push_scatter_.Pause();
+
+	cache.set_async_.Resume();
 	std::vector<RequestHandle> request_handles(shard_num);
 	// fill shard vals
 	auto* allocator = dynamic_cast<AsyncComAllocator*>(_async_request[gpu_id]->get_allocator());
 	auto* async_com = paddle::framework::AsyncContext::GetInstance()->get_async_com(gpu_id);
+
+	std::vector<int> request_order(shard_num);
 	for (int i = 0; i < shard_num; ++i) {
-	  if (h_local_part_sizes[i] == 0) {
+	  request_order[i] = i;
+	}
+	std::random_shuffle(request_order.begin(), request_order.end());
+
+	for (auto request_node : request_order) {
+	  if (h_local_part_sizes[request_node] == 0) {
 		  continue;
 	  }
-	  auto* mem_key_context = allocator->ToMemoryContext(cache.d_merged_push_keys + h_local_part_offsets[i], h_local_part_sizes[i],
+	  auto* mem_key_context = allocator->ToMemoryContext(cache.d_merged_push_keys + h_local_part_offsets[request_node], h_local_part_sizes[request_node],
 				   DT_UINT64);
-	  auto* mem_value_context = allocator->ToMemoryContext(cache.d_merged_vals + h_local_part_offsets[i] * grad_type_size_, h_local_part_sizes[i] * grad_type_size_,
+	  auto* mem_value_context = allocator->ToMemoryContext(cache.d_merged_vals + h_local_part_offsets[request_node] * grad_type_size_, h_local_part_sizes[request_node] * grad_type_size_,
 					   DT_UINT8);
-	  auto* request = _async_request[gpu_id]->MakePushRequest(mem_key_context, mem_value_context, i);
-      request_handles[i].request_ = request;
-      request_handles[i].response_ = CreateAsyncReqRes();
-	  async_com->PutRequestAsync(&request_handles[i]);
+	  auto* request = _async_request[gpu_id]->MakePushRequest(mem_key_context, mem_value_context, request_node);
+      request_handles[request_node].request_ = request;
+      request_handles[request_node].response_ = CreateAsyncReqRes();
+	  async_com->PutRequestAsync(&request_handles[request_node]);
     }
+	cache.set_async_.Pause();
 	//等待异步执行结束
+	cache.wait_push_.Resume();
     for (int i = 0; i < shard_num; ++i) {
   	  if (h_local_part_sizes[i] == 0) {
   		  continue;
   	  }
 	  request_handles[i].Wait();
 	}
+    cache.wait_push_.Pause();
+    cache.train_time_.Pause();
 }
 
 #elif defined(PADDLE_WITH_XPU_KP)
@@ -2772,6 +2845,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_async_one(
 
 	AnyDeviceGuard guard(gpu_id);
 	auto &cache = storage_[gpu_id];
+	cache.train_time_.Resume();;
 	// get from local table
     auto stream = resource_->local_stream(gpu_id, 0);
 	cache.alloc(fea_num, max_type_size_);
@@ -2783,6 +2857,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_async_one(
 	size_t *h_local_part_sizes = res.h_local_part_sizes.data();
 	size_t *h_local_part_offsets = res.h_local_part_offsets.data();
 	// partition keys
+	cache.partition_.Resume();
 	partition_shard_keys(gpu_id,
 			             fea_num,
 						 d_keys,
@@ -2797,9 +2872,11 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_async_one(
 	  h_local_part_offsets[i + 1] =
 	      h_local_part_offsets[i] + h_local_part_sizes[i];
 	}
+	cache.partition_.Pause();
 	CHECK_EQ(fea_num, h_local_part_offsets[shard_num]);
 	std::vector<RequestHandle> request_handles(shard_num);
 	//指定返回结果的显存位置  具体实现可能会调整
+	cache.set_async_.Resume();
     auto* allocator = dynamic_cast<AsyncComAllocator*>(_async_request[gpu_id]->get_allocator());     
 	for (int i = 0; i < shard_num; ++i) {
 	  if (h_local_part_sizes[i] == 0) {
@@ -2812,24 +2889,35 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_async_one(
 	  request_handles[i].response_->memory_contexts[0] = mem_context;
 	}
 	auto* async_com = paddle::framework::AsyncContext::GetInstance()->get_async_com(gpu_id);
-	for (int i = 0; i < shard_num; ++i) {
-	   if (h_local_part_sizes[i] == 0) {
+	int start_pos = rank_id_ * device_num_ + gpu_id;
+	std::vector<int> request_order(shard_num);
+	for (int i = 0; i < shard_num; ++i){
+	  request_order[i] = i;
+	}
+	std::random_shuffle(request_order.begin(), request_order.end());
+
+	for (auto request_node : request_order) {
+	   if (h_local_part_sizes[request_node] == 0) {
 		  continue;
 	   }
-	   auto* mem_context = allocator->ToMemoryContext(cache.d_merged_push_keys + h_local_part_offsets[i], h_local_part_sizes[i],
+	   auto* mem_context = allocator->ToMemoryContext(cache.d_merged_push_keys + h_local_part_offsets[request_node], h_local_part_sizes[request_node],
 			   DT_UINT64);
-	   auto* request = _async_request[gpu_id]->MakePullRequest(mem_context, i); 
-       request_handles[i].request_ = request;
-	   async_com->PutRequestAsync(&request_handles[i]);
+	   auto* request = _async_request[gpu_id]->MakePullRequest(mem_context, request_node);
+       request_handles[request_node].request_ = request;
+	   async_com->PutRequestAsync(&request_handles[request_node]);
 	}
+	cache.set_async_.Pause();
 	//等待异步执行结束
+	cache.wait_pull_.Resume();
 	for(int i = 0; i < shard_num; ++i) {
 		if (h_local_part_sizes[i] == 0) {
 		  continue;
 		}
 		request_handles[i].Wait();
 	}
+	cache.wait_pull_.Pause();
 	  // fill vals
+	cache.pull_scatter_.Resume();
 	heter_comm_kernel_->scatter_vals(
 	      reinterpret_cast<const float *>(cache.local_grads),  // in
 	      reinterpret_cast<float *>(d_vals),        // out
@@ -2838,6 +2926,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_async_one(
 		  pull_type_size_,
 	      stream);
 	CUDA_CHECK(cudaStreamSynchronize(stream));
+	cache.pull_scatter_.Pause();
 }
 
 template <typename KeyType,
