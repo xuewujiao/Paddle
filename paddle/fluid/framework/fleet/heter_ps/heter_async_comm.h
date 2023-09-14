@@ -304,8 +304,48 @@ public:
 
   virtual AsyncReqRes* MakeDeepWalkRequest(MemoryContextBase *node_key_context,
                                            MemoryContextBase *para_int_context,
-                                           int target_global_rank){ return nullptr; }
+                                           int target_global_rank){ 
+  PADDLE_ENFORCE_NE(-1,
+                    -1,
+                    platform::errors::InvalidArgument(
+                      "enter base virtual function."));
+  return nullptr; 
+}
+  virtual AsyncReqRes* MakeFloatFeaturePullRequest(MemoryContextBase *node_key_context,
+                                              int target_global_rank){ 
+  PADDLE_ENFORCE_NE(-1,
+                    -1,
+                    platform::errors::InvalidArgument(
+                      "enter base virtual function."));
+  return nullptr; 
+}
+  virtual AsyncReqRes* MakeUintFeaturePullRequest(MemoryContextBase *node_key_context,
+                                              int target_global_rank){ 
+  PADDLE_ENFORCE_NE(-1,
+                    -1,
+                    platform::errors::InvalidArgument(
+                      "enter base virtual function."));
+  return nullptr; 
+}
+  virtual AsyncReqRes* MakeSageSampleRequest(MemoryContextBase *node_key_context,
+                                             MemoryContextBase *para_int_context,
+                                             int target_global_rank) { 
+  PADDLE_ENFORCE_NE(-1,
+                    -1,
+                    platform::errors::InvalidArgument(
+                      "enter base virtual function."));
+  return nullptr; 
+}
   
+  virtual AsyncReqRes* MakeDegreeGetRequest(MemoryContextBase *node_key_context,
+                                            MemoryContextBase *para_int_context,
+                                            int target_global_rank){ 
+  PADDLE_ENFORCE_NE(-1,
+                    -1,
+                    platform::errors::InvalidArgument(
+                      "enter base virtual function."));
+  return nullptr; 
+}
 };
 
 }  // end namespace framework

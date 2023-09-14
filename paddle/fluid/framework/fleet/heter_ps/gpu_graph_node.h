@@ -343,6 +343,7 @@ struct NeighborSampleResultV2 {
   uint64_t *val;
   int *actual_sample_size;
   float *weight;
+  bool alloc_ed = false;
   int sample_size, key_size, edge_to_id_len;
   std::shared_ptr<memory::Allocation> val_mem, actual_sample_size_mem, weight_mem;
   cudaStream_t stream = 0;
@@ -358,38 +359,40 @@ struct NeighborSampleResultV2 {
     edge_to_id_len = _edge_to_id_len;
     platform::CUDADeviceGuard guard(dev_id);
     platform::CUDAPlace place = platform::CUDAPlace(dev_id);
-    if (stream != 0) {
-      val_mem = memory::AllocShared(
-          place,
-          _sample_size * _key_size * _edge_to_id_len * sizeof(uint64_t),
-          phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
-      actual_sample_size_mem = memory::AllocShared(
-          place,
-          _key_size * _edge_to_id_len * sizeof(int),
-          phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
-      if (_return_weight) {
-        weight_mem = memory::AllocShared(
+    if (!alloc_ed) {
+      if (stream != 0) {
+        val_mem = memory::AllocShared(
             place,
-            _sample_size * _key_size * _edge_to_id_len * sizeof(float),
+            _sample_size * _key_size * _edge_to_id_len * sizeof(uint64_t),
             phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
-      }
-    } else {
-      val_mem = memory::AllocShared(
-          place, _sample_size * _key_size * _edge_to_id_len * sizeof(uint64_t));
-      actual_sample_size_mem =
-          memory::AllocShared(place, _key_size * _edge_to_id_len * sizeof(int));
-      if (_return_weight) {
-        weight_mem = memory::AllocShared(
+        actual_sample_size_mem = memory::AllocShared(
             place,
-            _sample_size * _key_size * _edge_to_id_len * sizeof(float));
+            _key_size * _edge_to_id_len * sizeof(int),
+            phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+        if (_return_weight) {
+          weight_mem = memory::AllocShared(
+              place,
+              _sample_size * _key_size * _edge_to_id_len * sizeof(float),
+              phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+        }
+      } else {
+        val_mem = memory::AllocShared(
+            place, _sample_size * _key_size * _edge_to_id_len * sizeof(uint64_t));
+        actual_sample_size_mem =
+            memory::AllocShared(place, _key_size * _edge_to_id_len * sizeof(int));
+        if (_return_weight) {
+          weight_mem = memory::AllocShared(
+              place,
+              _sample_size * _key_size * _edge_to_id_len * sizeof(float));
+        }
       }
-    }
-    val = reinterpret_cast<uint64_t *>(val_mem->ptr());
-    actual_sample_size = reinterpret_cast<int *>(actual_sample_size_mem->ptr());
-    if (_return_weight) {
-      weight = reinterpret_cast<float *>(weight_mem->ptr());
-    } else {
-      weight = nullptr;
+      val = reinterpret_cast<uint64_t *>(val_mem->ptr());
+      actual_sample_size = reinterpret_cast<int *>(actual_sample_size_mem->ptr());
+      if (_return_weight) {
+        weight = reinterpret_cast<float *>(weight_mem->ptr());
+      } else {
+        weight = nullptr;
+      }
     }
   }
   void display() {
@@ -406,6 +409,7 @@ struct NeighborSampleResultV2 {
     VLOG(0) << "actual_sample_size for all keys are: " << print_ac;
     delete[] ac_size;
   }
+  void set_alloc_ed(bool alloc) {alloc_ed = alloc;}
   NeighborSampleResultV2() {}
   ~NeighborSampleResultV2() {}
 };

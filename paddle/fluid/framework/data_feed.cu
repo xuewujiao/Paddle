@@ -1225,7 +1225,7 @@ int GraphDataGenerator::GenerateBatch() {
       total_instance = min_ins_buf_pair_len < conf_.batch_size
                            ? min_ins_buf_pair_len
                            : conf_.batch_size;
-      if (conf_.is_multi_node && total_row_[0] == 0) {
+      if (conf_.is_multi_node && total_row_[0] == 0 && !FLAGS_enable_async_comm) {
         total_instance = fill_zero_num;
         ins_buf_pair_len_[0] = fill_zero_num;
         VLOG(1) << "gpu id: " << conf_.gpuid
@@ -3816,15 +3816,19 @@ void GraphDataGenerator::DoWalkandSage() {
         DoSageForTrain();
       }
     } else {
-      if (conf_.sage_mode && !FLAGS_enable_async_comm) {
-        global_train_flag_ = get_multi_node_global_flag(
-            local_train_flag, ncclProd, place_, sample_stream_);
-        VLOG(1) << "gpu_id: " << conf_.gpuid
-                << ", local_train_flag: " << local_train_flag
-                << ", global_train_flag: " << global_train_flag_;
-        if (global_train_flag_) {
-          // When global_train_flag is true, we need to go ahead in multi-node
-          // scenario.
+      if (conf_.sage_mode) {
+        if(!FLAGS_enable_async_comm){
+          global_train_flag_ = get_multi_node_global_flag(
+              local_train_flag, ncclProd, place_, sample_stream_);
+          VLOG(1) << "gpu_id: " << conf_.gpuid
+                  << ", local_train_flag: " << local_train_flag
+                  << ", global_train_flag: " << global_train_flag_;
+          if (global_train_flag_) {
+            // When global_train_flag is true, we need to go ahead in multi-node
+            // scenario.
+            DoSageForTrain();
+          }  
+        }else{
           DoSageForTrain();
         }
       }
@@ -3949,7 +3953,7 @@ void GraphDataGenerator::DoSageForTrain() {
 
         if (res == -1) {
           if (ins_buf_pair_len_[tensor_pair_idx] == 0) {
-            if (conf_.is_multi_node) {
+            if (conf_.is_multi_node && !FLAGS_enable_async_comm) {
               sage_pass_end = 1;
               if (total_row_[tensor_pair_idx] != 0) {
                 buf_state_[tensor_pair_idx].Reset(total_row_[tensor_pair_idx]);
@@ -3978,7 +3982,7 @@ void GraphDataGenerator::DoSageForTrain() {
       }  // end while (ins_buf_pair_len_[tensor_pair_idx] < conf_.batch_size)
 
       // check whether reach sage pass end
-      if (conf_.is_multi_node) {
+      if (conf_.is_multi_node && !FLAGS_enable_async_comm) {
         int res = multi_node_sync_sample(
             sage_pass_end, ncclProd, place_, &multi_node_sync_stat_);
         VLOG(1) << conf_.gpuid << " get global sage_pass_end: " << res;
@@ -3992,7 +3996,7 @@ void GraphDataGenerator::DoSageForTrain() {
       total_instance = ins_buf_pair_len_[tensor_pair_idx] < conf_.batch_size
                            ? ins_buf_pair_len_[tensor_pair_idx]
                            : conf_.batch_size;
-      if (conf_.is_multi_node && total_row_[0] == 0) {
+      if (conf_.is_multi_node && total_row_[0] == 0 && !FLAGS_enable_async_comm) {
         total_instance = fill_zero_num;
         ins_buf_pair_len_[0] = fill_zero_num;
         VLOG(1) << "gpu id: " << conf_.gpuid
@@ -4112,7 +4116,7 @@ void GraphDataGenerator::DoSageForTrain() {
 
 void GraphDataGenerator::DoSageForInfer() {
   // Set new batch size for multi_node
-  if (conf_.is_multi_node) {
+  if (conf_.is_multi_node && !FLAGS_enable_async_comm) {
     int new_batch_size = dynamic_adjust_batch_num_for_sage();
     conf_.batch_size = new_batch_size;
   }
@@ -4129,7 +4133,7 @@ void GraphDataGenerator::DoSageForInfer() {
     total_instance *= 2;
     while (!global_pass_end) {
       int local_pass_end = total_instance == 0;
-      if (conf_.is_multi_node) {
+      if (conf_.is_multi_node && !FLAGS_enable_async_comm) {
         global_pass_end = get_multi_node_global_flag(
             local_pass_end, ncclProd, place_, sample_stream_);
       } else {
@@ -4316,7 +4320,7 @@ bool FillInferBuf(
     }
 
     size_t device_key_size = h_device_keys_len[infer_cursor];
-    if (conf.is_multi_node || conf.is_thread_sharding) {
+    if ((conf.is_multi_node || conf.is_thread_sharding) && !FLAGS_enable_async_comm) {
       int local_reach_end =
           global_infer_node_type_start[infer_cursor] + conf.buf_size >=
           device_key_size;
