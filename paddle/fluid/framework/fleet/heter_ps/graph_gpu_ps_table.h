@@ -148,7 +148,7 @@ class GpuPsGraphTable
                                                 bool cpu_query_switch,
                                                 bool compress,
                                                 bool weighted);
-  NeighborSampleResult graph_neighbor_sample_all2all_async(int gpu_id,
+  NeighborSampleResult graph_neighbor_sample_async(int gpu_id,
                                                                             int sample_step,
                                                                             int table_idx,
                                                                             uint64_t* d_keys,
@@ -205,6 +205,17 @@ class GpuPsGraphTable
       std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,
       bool weighted,
       bool return_weight);
+  void graph_neighbor_sample_all_edge_type_one_table(
+      int gpu_id,
+      int edge_type_len,
+      uint64_t* d_keys,
+      int sample_size,
+      int len,
+      bool weighted,
+      bool return_weight,
+      NeighborSampleResultV2 &result,
+      cudaStream_t calc_stream,
+      cudaStream_t mem_stream);
   NeighborSampleResultV2 graph_neighbor_sample_all_edge_type(
       int gpu_id,
       int edge_type_len,
@@ -215,6 +226,15 @@ class GpuPsGraphTable
       bool weighted,
       bool return_weight,
       bool for_all2all = false);
+
+  NeighborSampleResultV2 graph_neighbor_sample_sage_async(
+      int gpu_id,
+      int edge_type_len,
+      const uint64_t* d_keys,
+      int sample_size,
+      int len,
+      bool weighted,
+      bool return_weight);
   NeighborSampleResultV2 graph_neighbor_sample_sage_all2all(
       int gpu_id,
       int edge_type_len,
@@ -247,17 +267,30 @@ class GpuPsGraphTable
                          int shard_len,
                          unsigned long long random_seed,
                          float *weight_array,
-                         bool return_weight);
+                         bool return_weight,
+                         cudaStream_t calc_stream = nullptr);
+
   std::vector<std::shared_ptr<phi::Allocation>> get_edge_type_graph(
       int gpu_id, int edge_type_len);
   std::shared_ptr<phi::Allocation> get_node_degree(int gpu_id,
                                                    int edge_idx,
                                                    uint64_t *key,
                                                    int len);
+  std::shared_ptr<phi::Allocation> get_node_degree_async(int gpu_id, 
+                                                         int edge_idx, 
+                                                         uint64_t* d_keys, 
+                                                         int len);
   std::shared_ptr<phi::Allocation> get_node_degree_all2all(int gpu_id,
                                                            int edge_idx,
                                                            uint64_t *key,
                                                            int len);
+  std::shared_ptr<phi::Allocation> get_node_degree_signle_one_table(
+      int gpu_id, 
+      int edge_idx, 
+      uint64_t* key, 
+      int len, 
+      cudaStream_t calc_stream,
+      cudaStream_t mem_stream);
   std::shared_ptr<phi::Allocation> get_node_degree_single(int gpu_id,
                                                           int edge_idx,
                                                           uint64_t *key,
@@ -270,6 +303,17 @@ class GpuPsGraphTable
                            int *d_slot_feature_num_map,
                            int fea_num_per_node);
 
+  template <typename FeatureType>
+  int get_feature_info_of_nodes_normal_one_table(
+      int gpu_id,
+      uint64_t* d_nodes,
+      int node_num,
+      uint32_t* d_feature_size_ptr,
+      uint32_t* d_feature_size_prefix_sum_ptr,
+      std::shared_ptr<phi::Allocation>& d_feature_list,
+      std::shared_ptr<phi::Allocation>& d_slot_list,
+      cudaStream_t calc_stream,
+      cudaStream_t mem_stream);
   // template <typename FeatureType>
   int get_feature_info_of_nodes(
       int gpu_id,
@@ -310,6 +354,16 @@ class GpuPsGraphTable
       std::shared_ptr<phi::Allocation> &feature_list,
       std::shared_ptr<phi::Allocation> &slot_list,
       bool sage_mode = false);
+  template <typename FeatureType>
+  int GpuPsGraphTable::get_feature_info_of_nodes_async(
+      int gpu_id,
+      uint64_t* d_nodes,
+      int node_num,
+      std::shared_ptr<phi::Allocation>& d_feature_size_list,
+      std::shared_ptr<phi::Allocation>& d_feature_size_prefix_sum,
+      std::shared_ptr<phi::Allocation>& d_feature_list,
+      std::shared_ptr<phi::Allocation>& d_slot_list,
+      bool sage_mode);
   int get_rank_info_of_nodes(int gpu_id,
                              const uint64_t *d_nodes,
                              uint32_t *d_ranks,
@@ -396,16 +450,21 @@ class GpuPsGraphTable
   bool infer_mode_ = false;
   using RankTable = HashTable<uint64_t, uint32_t>;
   std::vector<RankTable *> rank_tables_;
+
+  int deepwalk_runner_index_ = 0;
+  int sage_runner_index_ = 1;
+  int degree_runner_index_ = 2;
+  int feature_pull_runner_index_ = 3; 
 };
 
 class DeepWalkSampleRunner : public RequestRunner {
 public:
   DeepWalkSampleRunner(Partitioner *partitioner, MemoryAllocatorBase *allocator, GpuPsGraphTable *graph_table)
       : RequestRunner(partitioner, allocator) {
-        int gpu_id = partitioner->GetLocalRank();
-      platform::CUDADeviceGuard guard(gpu_id);
-        cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking);
-        graph_table_ = graph_table;
+		int gpu_id = partitioner->GetLocalRank();
+	  platform::CUDADeviceGuard guard(gpu_id);
+		cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking);
+		graph_table_ = graph_table;
   };
   virtual ~DeepWalkSampleRunner() {
     int gpu_id = partitioner_->GetLocalRank();
@@ -415,12 +474,90 @@ public:
   };
   virtual std::string get_runner_name() {return std::string("DeepWalkSampleRunner");}
 
-
   void RegisterFunctions() override;
   AsyncReqRes* MakeDeepWalkRequest(MemoryContextBase *node_key_context,
                                                       MemoryContextBase *para_int_context,
                                                       int target_global_rank) override;
-  void NeighborSample(struct AsyncReqRes *request, struct AsyncReqRes *response);
+  void DeepWalkNeighborSample(struct AsyncReqRes *request, struct AsyncReqRes *response);
+
+private:
+ GpuPsGraphTable *graph_table_;
+ cudaStream_t stream_;
+};
+
+class SageSampleRunner : public RequestRunner {
+public:
+  SageSampleRunner(Partitioner *partitioner, MemoryAllocatorBase *allocator, GpuPsGraphTable *graph_table)
+      : RequestRunner(partitioner, allocator) {
+		int gpu_id = partitioner->GetLocalRank();
+	  platform::CUDADeviceGuard guard(gpu_id);
+		cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking);
+		graph_table_ = graph_table;
+  };
+  virtual ~SageSampleRunner() {
+    int gpu_id = partitioner_->GetLocalRank();
+    platform::CUDADeviceGuard guard(gpu_id);
+    PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamDestroy(stream_));
+  };
+
+  void RegisterFunctions() override;
+  AsyncReqRes* MakeSageSampleRequest(MemoryContextBase *node_key_context,
+                                     MemoryContextBase *para_int_context,
+                                     int target_global_rank) override;
+  void SageNeighborSample(struct AsyncReqRes *request, struct AsyncReqRes *response);
+
+private:
+ GpuPsGraphTable *graph_table_;
+ cudaStream_t stream_;
+};
+
+class DegreeGetRunner : public RequestRunner {
+public:
+  DegreeGetRunner(Partitioner *partitioner, MemoryAllocatorBase *allocator, GpuPsGraphTable *graph_table)
+      : RequestRunner(partitioner, allocator) {
+		int gpu_id = partitioner->GetLocalRank();
+	  platform::CUDADeviceGuard guard(gpu_id);
+		cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking);
+		graph_table_ = graph_table;
+  };
+  virtual ~DegreeGetRunner() {
+    int gpu_id = partitioner_->GetLocalRank();
+    platform::CUDADeviceGuard guard(gpu_id);
+    PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamDestroy(stream_));
+  };
+  void RegisterFunctions() override;
+  AsyncReqRes* MakeDegreeGetRequest(MemoryContextBase *node_key_context,
+                                     MemoryContextBase *para_int_context,
+                                     int target_global_rank) override;
+  void NodeDegreeGet(struct AsyncReqRes *request, struct AsyncReqRes *response);
+
+private:
+ GpuPsGraphTable *graph_table_;
+ cudaStream_t stream_;
+};
+
+class FeaturePullRunner : public RequestRunner {
+public:
+  FeaturePullRunner(Partitioner *partitioner, MemoryAllocatorBase *allocator, GpuPsGraphTable *graph_table)
+      : RequestRunner(partitioner, allocator) {
+		int gpu_id = partitioner->GetLocalRank();
+	  platform::CUDADeviceGuard guard(gpu_id);
+		cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking);
+		graph_table_ = graph_table;
+  };
+  virtual ~FeaturePullRunner() {
+    int gpu_id = partitioner_->GetLocalRank();
+    platform::CUDADeviceGuard guard(gpu_id);
+    PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamDestroy(stream_));
+  };
+
+  void RegisterFunctions() override;
+  AsyncReqRes* MakeUintFeaturePullRequest(MemoryContextBase *node_key_context,
+                                                       int target_global_rank) override;
+  AsyncReqRes* MakeFloatFeaturePullRequest(MemoryContextBase *node_key_context,
+                                                       int target_global_rank) override;
+  template <typename FeatureType>
+  void FeaturePull(struct AsyncReqRes *request, struct AsyncReqRes *response);
 
 private:
  GpuPsGraphTable *graph_table_;

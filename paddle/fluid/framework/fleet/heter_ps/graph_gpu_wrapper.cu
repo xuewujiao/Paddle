@@ -878,16 +878,51 @@ void GraphGpuWrapper::init_service() {
     VLOG(0) << " sample runner init ";
 	  //runner register and start
     std::vector<RequestRunner *> request_runners;
+    int runner_index = 0;
+    g->deepwalk_runner_index_ = runner_index++;
     for (int i = 0; i < gpu_num; i++) {
       auto registry = async_com->get_registry(i);
       auto partitioner = async_com->get_partitioner(i);
       auto memory_allocator = async_com->get_alloctor(i);
 
       auto deep_walk_sample_runer = new DeepWalkSampleRunner(partitioner, memory_allocator, g);
-      registry->Register(0, deep_walk_sample_runer);
+      registry->Register(RID_DEEPWALK, deep_walk_sample_runer);
       deep_walk_sample_runer->StartProcessLoop();
       request_runners.push_back((RequestRunner *)deep_walk_sample_runer);
     }
+    g->sage_runner_index_ = runner_index++;
+    for (int i = 0; i < gpu_num; i++) {
+      auto registry = async_com->get_registry(i);
+      auto partitioner = async_com->get_partitioner(i);
+      auto memory_allocator = async_com->get_alloctor(i);
+
+      auto sage_sample_runer = new SageSampleRunner(partitioner, memory_allocator, g);
+      registry->Register(RID_SAGE, sage_sample_runer);
+      sage_sample_runer->StartProcessLoop();
+      request_runners.push_back((RequestRunner *)sage_sample_runer);
+    }
+    g->degree_runner_index_ = runner_index++;
+    for (int i = 0; i < gpu_num; i++) {
+      auto registry = async_com->get_registry(i);
+      auto partitioner = async_com->get_partitioner(i);
+      auto memory_allocator = async_com->get_alloctor(i);
+
+      auto degree_get_runer = new DegreeGetRunner(partitioner, memory_allocator, g);
+      registry->Register(RID_DEGREE, degree_get_runer);
+      degree_get_runer->StartProcessLoop();
+      request_runners.push_back((RequestRunner *)degree_get_runer);
+    }
+    g->feature_pull_runner_index_ = runner_index++; 
+    for (int i = 0; i < gpu_num; i++) {
+      auto registry = async_com->get_registry(i);
+      auto partitioner = async_com->get_partitioner(i);
+      auto memory_allocator = async_com->get_alloctor(i);
+
+      auto feature_pull_runer = new FeaturePullRunner(partitioner, memory_allocator, g);
+      registry->Register(RID_FEATUREPULL, feature_pull_runer);
+      feature_pull_runer->StartProcessLoop();
+      request_runners.push_back((RequestRunner *)feature_pull_runer);
+    } 
     g->set_runner(request_runners);
     VLOG(0) << " sample runner init  end";
     async_com->start();

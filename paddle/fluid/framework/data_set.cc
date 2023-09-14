@@ -41,6 +41,7 @@ DECLARE_bool(graph_get_neighbor_id);
 DECLARE_int32(gpugraph_storage_mode);
 DECLARE_string(graph_edges_split_mode);
 DECLARE_bool(query_dest_rank_by_multi_node);
+DECLARE_bool(enable_async_comm);
 
 namespace paddle {
 namespace framework {
@@ -1198,7 +1199,7 @@ int64_t DatasetImpl<T>::GetMemoryDataSize() {
       is_multi_node = readers_[i]->GetMultiNodeMode();
       sage_mode = readers_[i]->GetSageMode();
       gpu_graph_training = readers_[i]->GetTrainState();
-      if (is_multi_node && sage_mode && gpu_graph_training) {
+      if ((is_multi_node && !FLAGS_enable_async_comm) && sage_mode && gpu_graph_training) {
         total_path_num += readers_[i]->GetTrainMemoryDataSize();
       } else {
         total_path_num += readers_[i]->GetGraphPathNum();

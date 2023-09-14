@@ -930,10 +930,14 @@ void GpuPsGraphTable::unweighted_sample(GpuPsCommGraph& graph,
                                         int shard_len,
                                         unsigned long long random_seed,
                                         float* weight_array,
-                                        bool return_weight) {
+                                        bool return_weight,
+                                        cudaStream_t calc_stream) {
   platform::CUDAPlace place =
       platform::CUDAPlace(resource_->dev_id(cur_gpu_id));
-  auto cur_stream = resource_->remote_stream(remote_gpu_id, cur_gpu_id);
+  auto cur_stream = calc_stream;
+  if (cur_stream == nullptr){
+    cur_stream = resource_->remote_stream(remote_gpu_id, cur_gpu_id);
+  }
 
   if (sample_size > SAMPLE_SIZE_THRESHOLD) {
     unweighted_sample_large_kernel<<<shard_len, 32, 0, cur_stream>>>(
@@ -2049,7 +2053,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v3(
       if (FLAGS_enable_async_comm) {
         cache.total_async_sameple_.Resume();
         cache.total_keys_ += q.len;
-        auto result = graph_neighbor_sample_all2all_async(global_device_map[q.gpu_id],
+        auto result = graph_neighbor_sample_async(global_device_map[q.gpu_id],
                                                           q.sample_step,
                                                           q.table_idx,
                                                           q.src_nodes,
@@ -2111,7 +2115,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample(
                                   false);
 }
 
-NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all_async(
+NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_async(
     int gpu_id,
     int sample_step,
     int table_idx,
@@ -2123,8 +2127,8 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all_async(
     bool compress,
     bool weighted) {
     
-    platform::CUDADeviceGuard guard(gpu_id);
-    platform::CUDAPlace place = platform::CUDAPlace(gpu_id);
+  platform::CUDADeviceGuard guard(gpu_id);
+  platform::CUDAPlace place = platform::CUDAPlace(gpu_id);
 	auto stream = resource_->local_stream(gpu_id, 0);
     
 	auto &loc = storage_[gpu_id];
@@ -2158,7 +2162,6 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all_async(
 	CHECK_EQ(len, h_local_part_offsets[shard_num]);
 	loc.partition_.Pause();
   loc.set_async_.Resume();
-  
   auto res_val = memory::Alloc(place,
                                len * sample_size * sizeof(uint64_t),
                                phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
@@ -2168,9 +2171,8 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all_async(
                                               len * sizeof(int),
                                               phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   char* res_actual_sample_size_ptr = reinterpret_cast<char *>(res_actual_sample_size->ptr());
-  
   std::vector<RequestHandle> request_handles(shard_num);
-  auto* allocator = dynamic_cast<AsyncComAllocator*>(_async_request[gpu_id]->get_allocator());
+  auto* allocator = dynamic_cast<AsyncComAllocator*>(_async_request[deepwalk_runner_index_*gpu_num + gpu_id]->get_allocator());
   int start_pos = rank_id_ * device_num_ + gpu_id;
   std::vector<int> request_order(shard_num);
   for (int i = 0; i < shard_num; ++i) {
@@ -2192,8 +2194,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all_async(
 
   int64_t packed = (cpu_query_switch << 2) | (0 << 1) | weighted;
   int64_t int_para[4] = {table_idx, sample_size, neighbor_size_limit, packed}; 
-  
-   
+  auto* async_com = paddle::framework::AsyncContext::GetInstance()->get_async_com(gpu_id);
   for (int i = 0; i < shard_num; ++i) {
     if (h_local_part_sizes[i] == 0) {
       continue;
@@ -2202,9 +2203,8 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_all2all_async(
       d_merged_push_keys_ptr + h_local_part_offsets[i], h_local_part_sizes[i], DT_UINT64);
     auto* para_int_context = allocator->ToMemoryContext(int_para, 4, DT_INT64, ML_HOST);
 
-    auto* request = _async_request[gpu_id]->MakeDeepWalkRequest(node_key_context, para_int_context, i);
+    auto* request = _async_request[deepwalk_runner_index_*gpu_num + gpu_id]->MakeDeepWalkRequest(node_key_context, para_int_context, i);
     request_handles[i].request_ = request;
-    auto* async_com = paddle::framework::AsyncContext::GetInstance()->get_async_com(gpu_id);
     async_com->PutRequestAsync(&request_handles[i]);
   }
   loc.set_async_.Pause();
@@ -2874,15 +2874,27 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_sage(
     bool return_weight) {
   if (multi_node_ && FLAGS_enable_graph_multi_node_sampling) {
     // multi node mode
-    auto result = graph_neighbor_sample_sage_all2all(gpu_id,
-                                                     edge_type_len,
-                                                     d_keys,
-                                                     sample_size,
-                                                     len,
-                                                     edge_type_graphs,
-                                                     weighted,
-                                                     return_weight);
-    return result;
+    if (FLAGS_enable_async_comm) {
+        auto result = graph_neighbor_sample_sage_async(gpu_id,
+                                                       edge_type_len,
+                                                       d_keys,
+                                                       sample_size,
+                                                       len,
+                                                       weighted,
+                                                       return_weight);
+                                                        
+        return result;
+      }else{
+        auto result = graph_neighbor_sample_sage_all2all(gpu_id,
+                                                         edge_type_len,
+                                                         d_keys,
+                                                         sample_size,
+                                                         len,
+                                                         edge_type_graphs,
+                                                         weighted,
+                                                         return_weight);
+        return result;
+      }
   } else {
     auto result = graph_neighbor_sample_all_edge_type(gpu_id,
                                                       edge_type_len,
@@ -2919,6 +2931,205 @@ __global__ void rearange_neighbor_result(uint64_t* val,
       }
     }
   }
+}
+
+__global__ void rearange_sage_sample_result(uint64_t* src_val,
+                                            uint64_t* res_val,
+                                            float* src_weight,
+                                            float* res_weight,
+                                            int* src_ac_size,
+                                            int* res_ac_size,
+                                            size_t* part_offset,
+                                            uint32_t* idx,
+                                            int sample_size,
+                                            int len,
+                                            int edge_type_len,
+                                            bool return_weight) {
+    const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (i < len) {
+        // 设备ID和在设备中的位置 todo 二分减少计算次数
+        int shard_id = 0;
+        while (i >= part_offset[shard_id + 1]) {
+            shard_id++;
+        }
+        // 如果shard_id不是0，我们需要从前一个设备的offset中减去以得到在当前设备上的位置
+        int in_shard_position = i - part_offset[shard_id];
+        // 计算该节点的起始位置
+        int start_position = part_offset[shard_id] * edge_type_len;
+
+        // 对于每种边类型，从src中取数据，并放到res中
+        for (int edge_type = 0; edge_type < edge_type_len; edge_type++) {
+            int src_base_position = start_position + in_shard_position  + edge_type * (part_offset[shard_id + 1] - part_offset[shard_id]);
+            int res_base_position = edge_type * len + idx[i] ;
+            res_ac_size[res_base_position] = src_ac_size[src_base_position];
+
+            int src_position = src_base_position * sample_size;
+            int res_position = res_base_position * sample_size ;
+
+            for (int s = 0; s < src_ac_size[src_base_position]; s++) {
+                res_val[res_position + s] = src_val[src_position + s];
+                if (return_weight) {
+                  res_weight[res_position + s] = src_weight[src_position + s];
+                }
+            }
+        }
+    }
+}
+NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_sage_async(
+    int gpu_id,
+    int edge_type_len,
+    const uint64_t* d_keys,
+    int sample_size,
+    int len,
+    bool weighted,
+    bool return_weight) {
+  
+  platform::CUDADeviceGuard guard(gpu_id);
+    platform::CUDAPlace place = platform::CUDAPlace(gpu_id);
+  auto stream = resource_->local_stream(gpu_id, 0);
+
+  auto &loc = storage_[gpu_id];
+  auto &res = loc.shard_res;
+  int shard_num = node_size_ * device_num_;  
+  loc.init_shard(len, shard_num);
+
+  auto d_merged_push_keys = memory::Alloc(place,
+                                          len * sizeof(uint64_t),
+                                          phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  uint64_t* d_merged_push_keys_ptr = reinterpret_cast<uint64_t*>(d_merged_push_keys->ptr());
+
+  size_t *h_local_part_sizes = res.h_local_part_sizes.data();
+  size_t *h_local_part_offsets = res.h_local_part_offsets.data();
+  // partition keys
+  partition_shard_keys(gpu_id,
+                        len,
+                        d_keys,
+                        res.d_local_idx_parted,
+                        d_merged_push_keys_ptr,
+                        h_local_part_sizes,
+                        shard_num,
+                        stream,
+                        true);
+  VLOG(2) << "partition_shard_keys finish, tatol node num = "<< len;
+  h_local_part_offsets[0] = 0;
+  for (int i = 0; i < shard_num; ++i) {
+    h_local_part_offsets[i + 1] =
+        h_local_part_offsets[i] + h_local_part_sizes[i];
+  }
+  CHECK_EQ(len, h_local_part_offsets[shard_num]);
+
+  VLOG(2) << "Apply for memory to receive data";
+  auto res_val = memory::Alloc(place,
+                               len * sample_size * edge_type_len * sizeof(uint64_t),
+                               phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  uint64_t* res_val_ptr = reinterpret_cast<uint64_t*>(res_val->ptr());
+
+  auto res_actual_sample_size = memory::Alloc(place,
+                                              len * edge_type_len * sizeof(int),
+                                              phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  char* res_actual_sample_size_ptr = reinterpret_cast<char *>(res_actual_sample_size->ptr());
+
+  CUDA_CHECK(cudaMemsetAsync(
+        res_actual_sample_size_ptr, 0, len * edge_type_len * sizeof(int), stream));
+  
+  size_t res_weight_len = 0;
+  if(return_weight){
+    res_weight_len = len;
+  }
+  auto res_weight= memory::Alloc(place,
+                                res_weight_len * edge_type_len * sample_size * sizeof(float),
+                                phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  float *res_weight_ptr = reinterpret_cast<float *>(res_weight->ptr());
+
+  auto* allocator = dynamic_cast<AsyncComAllocator*>(_async_request[sage_runner_index_*gpu_num + gpu_id]->get_allocator());
+	std::vector<RequestHandle> request_handles(shard_num);
+  for (int i = 0; i < shard_num; ++i) {
+    if (h_local_part_sizes[i] == 0) {
+      continue;
+    }
+    auto* val_context = allocator->ToMemoryContext(
+      res_val_ptr + h_local_part_offsets[i] * sample_size * edge_type_len, h_local_part_sizes[i] * sample_size * edge_type_len, DT_UINT64);
+
+    auto* actual_sample_size_context = allocator->ToMemoryContext(
+      res_actual_sample_size_ptr + h_local_part_offsets[i] * sizeof(int)* edge_type_len, h_local_part_sizes[i] * edge_type_len * sizeof(int), DT_UINT8);
+    
+    MemoryContextBase *res_weight_context = nullptr; 
+    if(return_weight){  
+      res_weight_context = allocator->ToMemoryContext(
+        res_weight_ptr + h_local_part_offsets[i] * edge_type_len, h_local_part_sizes[i] * edge_type_len * sample_size, DT_FLOAT);
+    }else{  
+      res_weight_context = allocator->ToMemoryContext(res_weight_ptr, res_weight_len, DT_FLOAT);
+    }
+
+    request_handles[i].response_ = CreateAsyncReqRes();
+    request_handles[i].response_->memory_contexts[0] = val_context;
+    request_handles[i].response_->memory_contexts[1] = actual_sample_size_context;
+    request_handles[i].response_->memory_contexts[2] = res_weight_context;
+  }
+
+  VLOG(2) << "Begin asynchronous sample request";
+  int64_t packed = (weighted << 1) | return_weight;
+  int64_t int_para[3] = {edge_type_len, sample_size, packed}; 
+  auto* async_com = paddle::framework::AsyncContext::GetInstance()->get_async_com(gpu_id);   
+  for (int i = 0; i < shard_num; ++i) {
+    if (h_local_part_sizes[i] == 0) {
+      continue;
+    }
+    auto* node_key_context = allocator->ToMemoryContext(
+      d_merged_push_keys_ptr + h_local_part_offsets[i], h_local_part_sizes[i], DT_UINT64);
+    auto* para_int_context = allocator->ToMemoryContext(int_para, 3, DT_INT64, ML_HOST);
+    auto* request = _async_request[sage_runner_index_*gpu_num + gpu_id]->MakeSageSampleRequest(node_key_context, para_int_context, i);
+    request_handles[i].request_ = request;
+    async_com->PutRequestAsync(&request_handles[i]);
+  }
+  //等待异步执行结束
+  for(int i = 0; i < shard_num; ++i) {
+    if (h_local_part_sizes[i] == 0) {
+      continue;
+    }
+    request_handles[i].Wait();
+  }
+  VLOG(2) << "all sample request finish"; 
+
+// init neighbor result
+  NeighborSampleResultV2 final;
+  final.set_stream(stream);
+  final.initialize(sample_size, len, edge_type_len, return_weight, gpu_id);
+
+  auto d_local_part_offset =
+      memory::Alloc(place,
+                    (shard_num + 1) * sizeof(size_t), 
+                    phi::Stream(reinterpret_cast<phi::StreamId>(stream)));  
+  size_t* d_local_part_offset_ptr =
+      reinterpret_cast<size_t*>(d_local_part_offset->ptr());
+      
+  CUDA_CHECK(cudaMemcpyAsync(d_local_part_offset_ptr,
+                             h_local_part_offsets,
+                             (shard_num + 1) * sizeof(size_t),
+                             cudaMemcpyHostToDevice,
+                             stream));
+
+  VLOG(2) << "begin rearange sage sample result";
+  int blockSize = block_size_;  
+  int numBlocks = (len + blockSize - 1) / blockSize;
+  rearange_sage_sample_result<<<numBlocks, blockSize, 0, stream>>>(
+    res_val_ptr, 
+    final.val, 
+    res_weight_ptr, 
+    final.weight, 
+    reinterpret_cast<int*>(res_actual_sample_size_ptr), 
+    final.actual_sample_size, 
+    d_local_part_offset_ptr, 
+    res.d_local_idx_parted, 
+    sample_size, 
+    len, 
+    edge_type_len, 
+    return_weight);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  VLOG(2) << "scatter_vals for val finish";
+
+  return final;
 }
 
 NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_sage_all2all(
@@ -3021,6 +3232,134 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_sage_all2all(
 
   return final2;
 }
+
+void GpuPsGraphTable::graph_neighbor_sample_all_edge_type_one_table(
+    int gpu_id,
+    int edge_type_len,
+    uint64_t* d_keys,
+    int sample_size,
+    int len,
+    bool weighted,
+    bool return_weight,
+    NeighborSampleResultV2 &result,
+    cudaStream_t calc_stream,
+    cudaStream_t mem_stream) {
+  // result.set_stream(mem_stream);
+  // result.initialize(sample_size, len, resource_->dev_id(gpu_id));
+  VLOG(2) << "start graph_neighbor_sample_all_edge_type_one_table(), len = " << len;
+  if (len == 0) {
+    return ;
+  }
+  result.set_stream(mem_stream);
+  result.initialize(sample_size,
+                    len,
+                    edge_type_len,
+                    return_weight,
+                    resource_->dev_id(gpu_id));
+
+  // if(gpu_id != 0){
+  //   LOG(0) << "sleep 100min ";
+  //   std::this_thread::sleep_for(std::chrono::minutes(100));
+  // }
+
+  platform::CUDAPlace place = platform::CUDAPlace(resource_->dev_id(gpu_id));
+  platform::CUDADeviceGuard guard(resource_->dev_id(gpu_id));
+
+  int* actual_sample_size = result.actual_sample_size;
+  uint64_t* val = result.val;
+  float* weight = result.weight;
+
+  auto node_info =
+      memory::Alloc(place,
+                    len * edge_type_len * sizeof(uint64_t), 
+                    phi::Stream(reinterpret_cast<phi::StreamId>(mem_stream)));  
+  GpuPsNodeInfo* node_info_ptr =
+      reinterpret_cast<GpuPsNodeInfo*>(node_info->ptr());
+  CUDA_CHECK(cudaMemsetAsync(
+        node_info_ptr, 0, len * edge_type_len * sizeof(uint64_t), calc_stream));
+
+  VLOG(2) << "start get info";
+  for (int idx = 0; idx < edge_type_len; idx++) {
+    int table_offset = get_table_offset(gpu_id, GraphTableType::EDGE_TABLE, idx);
+    int offset = get_graph_list_offset(gpu_id, idx);
+    if (tables_[table_offset] == NULL) {
+      continue;
+    }
+    tables_[table_offset]->get(
+        d_keys,
+        reinterpret_cast<uint64_t*>(node_info_ptr + idx * len),
+        static_cast<size_t>(len),
+        calc_stream);
+  }
+  VLOG(2) << "end get info";
+  
+  thread_local std::random_device rd;
+  thread_local std::mt19937 gen(rd());
+  thread_local std::uniform_int_distribution<unsigned long long> distrib;
+  unsigned long long random_seed = distrib(gen);
+  PADDLE_ENFORCE_GT(sample_size,
+                    0,
+                    platform::errors::InvalidArgument(
+                        "sample_size should be greater than 0."));
+
+  if (!weighted) {
+    for (int edge_idx = 0; edge_idx < edge_type_len; edge_idx++) {
+      GpuPsNodeInfo* node_info_list_ptr = node_info_ptr + edge_idx * len;
+
+      int offset = get_graph_list_offset(gpu_id, edge_idx);
+      auto graph = gpu_graph_list_[offset];
+      VLOG(2) << "start unweighted sample"; 
+      unweighted_sample(graph,
+                        node_info_list_ptr,
+                        actual_sample_size + edge_idx * len,
+                        val + edge_idx * len * sample_size,
+                        gpu_id,
+                        gpu_id,
+                        sample_size,
+                        len,
+                        random_seed,
+                        weight + edge_idx * len * sample_size,
+                        return_weight,
+                        calc_stream);
+                        
+    }
+  } else {
+    // Weighted sample.
+    const bool need_neighbor_count = sample_size > SAMPLE_SIZE_THRESHOLD;
+    int* neighbor_count_ptr = nullptr;
+    std::shared_ptr<phi::Allocation> neighbor_count;
+    if (need_neighbor_count) {
+      neighbor_count = memory::AllocShared(
+          place,
+          (len + 1) * sizeof(int),
+          phi::Stream(reinterpret_cast<phi::StreamId>(calc_stream)));
+      neighbor_count_ptr = reinterpret_cast<int*>(neighbor_count->ptr());
+    }
+    for (int edge_idx = 0; edge_idx < edge_type_len; edge_idx++) {
+      GpuPsNodeInfo* node_info_list_ptr = node_info_ptr + edge_idx * len;
+      int offset = get_graph_list_offset(gpu_id, edge_idx);
+      auto graph = gpu_graph_list_[offset];
+      VLOG(2) << "start weighted sample";
+
+      weighted_sample(graph,
+                      node_info_list_ptr,
+                      actual_sample_size,
+                      val,
+                      neighbor_count_ptr,
+                      gpu_id,
+                      gpu_id,
+                      sample_size,
+                      len,
+                      need_neighbor_count,
+                      random_seed,
+                      weight,
+                      return_weight);
+    }
+  }
+  CUDA_CHECK(cudaStreamSynchronize(calc_stream));
+  VLOG(2) << "end sage sample";
+}
+
 
 // only for graphsage
 NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
@@ -3375,12 +3714,117 @@ std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree(int gpu_id,
                                                                   int len) {
   if (multi_node_ && FLAGS_enable_graph_multi_node_sampling) {
     // multi node mode
-    auto node_degree = get_node_degree_all2all(gpu_id, edge_idx, key, len);
-    return node_degree;
+
+    if (FLAGS_enable_async_comm) {
+      auto node_degree = get_node_degree_async(gpu_id, edge_idx, key, len);
+      return node_degree;
+    }else{
+      auto node_degree = get_node_degree_all2all(gpu_id, edge_idx, key, len);
+      return node_degree;
+    }
   } else {
     auto node_degree = get_node_degree_single(gpu_id, edge_idx, key, len);
     return node_degree;
   }
+}
+
+std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree_async(
+    int gpu_id, 
+    int edge_idx, 
+    uint64_t* d_keys, 
+    int len) {
+  platform::CUDADeviceGuard guard(gpu_id);
+  platform::CUDAPlace place = platform::CUDAPlace(gpu_id);
+  auto stream = resource_->local_stream(gpu_id, 0);
+
+  auto &loc = storage_[gpu_id];
+  auto &res = loc.shard_res;
+  int shard_num = node_size_ * device_num_;  
+  loc.init_shard(len, shard_num);
+
+  auto d_merged_push_keys = memory::Alloc(place,
+                                          len * sizeof(uint64_t),
+                                          phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  uint64_t* d_merged_push_keys_ptr = reinterpret_cast<uint64_t*>(d_merged_push_keys->ptr());
+
+  size_t *h_local_part_sizes = res.h_local_part_sizes.data();
+  size_t *h_local_part_offsets = res.h_local_part_offsets.data();
+  // partition keys
+  partition_shard_keys(gpu_id,
+                        len,
+                        d_keys,
+                        res.d_local_idx_parted,
+                        d_merged_push_keys_ptr,
+                        h_local_part_sizes,
+                        shard_num,
+                        stream,
+                        true);
+  VLOG(2) << "partition_shard_keys finish, tatol node num = "<< len;  
+  h_local_part_offsets[0] = 0;
+  for (int i = 0; i < shard_num; ++i) {
+    h_local_part_offsets[i + 1] =
+        h_local_part_offsets[i] + h_local_part_sizes[i];
+  }
+  CHECK_EQ(len, h_local_part_offsets[shard_num]);
+
+  VLOG(2) << "Begin asynchronous degree get request";   
+  auto tmp_node_degree =
+      memory::AllocShared(place,
+                          len * sizeof(int),
+                          phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  int* tmp_node_degree_ptr = reinterpret_cast<int*>(tmp_node_degree->ptr());
+
+  auto* allocator = dynamic_cast<AsyncComAllocator*>(_async_request[degree_runner_index_*gpu_num + gpu_id]->get_allocator());
+	std::vector<RequestHandle> request_handles(shard_num);
+  for (int i = 0; i < shard_num; ++i) {
+    if (h_local_part_sizes[i] == 0) {
+      continue;
+    }
+    auto* val_context = allocator->ToMemoryContext(
+      tmp_node_degree_ptr + h_local_part_offsets[i], h_local_part_sizes[i] , DT_UINT64);
+    request_handles[i].response_ = CreateAsyncReqRes();
+    request_handles[i].response_->memory_contexts[0] = val_context;
+  }
+
+  int64_t int_para[2] = {edge_idx, len};
+  auto* async_com = paddle::framework::AsyncContext::GetInstance()->get_async_com(gpu_id); 
+  for (int i = 0; i < shard_num; ++i) {
+    if (h_local_part_sizes[i] == 0) {
+      continue;
+    }
+    auto* node_key_context = allocator->ToMemoryContext(
+      d_merged_push_keys_ptr + h_local_part_offsets[i], h_local_part_sizes[i], DT_UINT64);
+    auto* para_int_context = allocator->ToMemoryContext(int_para, 2, DT_INT64, ML_HOST);
+
+    auto* request = _async_request[degree_runner_index_*gpu_num + gpu_id]->MakeDegreeGetRequest(node_key_context, para_int_context, i);
+    request_handles[i].request_ = request;
+    
+    async_com->PutRequestAsync(&request_handles[i]);
+  }
+  //等待异步执行结束
+  for(int i = 0; i < shard_num; ++i) {
+    if (h_local_part_sizes[i] == 0) {
+      continue;
+    }
+    request_handles[i].Wait();
+  }
+  VLOG(2) << "all degree get request finish"; 
+
+  auto node_degree =
+      memory::AllocShared(place,
+                          len * sizeof(int),
+                          phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  int* node_degree_ptr = reinterpret_cast<int*>(d_merged_push_keys->ptr());
+
+	heter_comm_kernel_->scatter_vals(
+      reinterpret_cast<const int*>(tmp_node_degree_ptr),     // in
+      reinterpret_cast<int*>(node_degree_ptr),               // out
+      res.d_local_idx_parted,
+      len,
+      sizeof(int),
+      stream);
+
+  return node_degree;
 }
 
 std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree_all2all(
@@ -3416,6 +3860,47 @@ std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree_all2all(
       reinterpret_cast<int*>(node_degree->ptr()),   // out
       reinterpret_cast<int*>(loc.d_merged_vals),    // tmp hbm
       stream);
+  return node_degree;
+}
+
+std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree_signle_one_table(
+    int gpu_id, 
+    int edge_idx, 
+    uint64_t* key, 
+    int len, 
+    cudaStream_t calc_stream,
+    cudaStream_t mem_stream) {
+
+  platform::CUDAPlace place = platform::CUDAPlace(resource_->dev_id(gpu_id));
+  platform::CUDADeviceGuard guard(resource_->dev_id(gpu_id));
+
+  auto node_info =
+      memory::AllocShared(place,
+                          len * sizeof(uint64_t),
+                          phi::Stream(reinterpret_cast<phi::StreamId>(mem_stream)));
+  uint64_t* node_info_ptr = reinterpret_cast<uint64_t*>(node_info->ptr());
+  CUDA_CHECK(cudaMemsetAsync(
+        node_info_ptr, 0, len * sizeof(uint64_t), calc_stream));
+
+  int table_offset =
+      get_table_offset(gpu_id, GraphTableType::EDGE_TABLE, edge_idx);
+  tables_[table_offset]->get(reinterpret_cast<uint64_t*>(key),
+                             reinterpret_cast<uint64_t*>(node_info_ptr),
+                             static_cast<size_t>(len),
+                             calc_stream);
+  
+  GpuPsNodeInfo* node_info_list =
+      reinterpret_cast<GpuPsNodeInfo*>(node_info_ptr);
+  auto node_degree =
+      memory::AllocShared(place,
+                          len * sizeof(int),
+                          phi::Stream(reinterpret_cast<phi::StreamId>(mem_stream)));
+  int* node_degree_ptr = reinterpret_cast<int*>(node_degree->ptr());
+
+  int grid_size_ = (len - 1) / block_size_ + 1;
+  get_node_degree_kernel<<<grid_size_, block_size_, 0, calc_stream>>>(
+      node_info_list, node_degree_ptr, len);
+
   return node_degree;
 }
 
@@ -3596,7 +4081,7 @@ NodeQueryResult GpuPsGraphTable::query_node_list(int gpu_id,
   return result;
 }
 
-// 外面调用这个函数用模板需要在头文件实现
+// template <typename FeatureType>
 int GpuPsGraphTable::get_feature_info_of_nodes(
     int gpu_id,
     uint64_t* d_nodes,
@@ -3623,15 +4108,25 @@ int GpuPsGraphTable::get_feature_info_of_nodes(
                                                      slot_list);
     } else {
       if (FLAGS_enable_graph_multi_node_sampling) {
-        all_fea_num =
-            get_feature_info_of_nodes_all2all<uint64_t>(gpu_id,
-                                                        d_nodes,
-                                                        node_num,
-                                                        size_list,
-                                                        size_list_prefix_sum,
-                                                        feature_list,
-                                                        slot_list,
-                                                        sage_mode);
+        if (FLAGS_enable_async_comm) {
+          all_fea_num = get_feature_info_of_nodes_async<uint64_t>(gpu_id,
+                                                                    d_nodes,
+                                                                    node_num,
+                                                                    size_list,
+                                                                    size_list_prefix_sum,
+                                                                    feature_list,
+                                                                    slot_list,
+                                                                    sage_mode);
+        } else {
+          all_fea_num = get_feature_info_of_nodes_all2all<uint64_t>(gpu_id,
+                                                                          d_nodes,
+                                                                          node_num,
+                                                                          size_list,
+                                                                          size_list_prefix_sum,
+                                                                          feature_list,
+                                                                          slot_list,
+                                                                          sage_mode);
+        }
       }
     }
   } else {
@@ -3646,6 +4141,203 @@ int GpuPsGraphTable::get_feature_info_of_nodes(
   }
   VLOG(2) << "end get feature info of nodes, all_fea_num: " << all_fea_num;
   return all_fea_num;
+}
+
+template <typename FeatureType>
+int GpuPsGraphTable::get_feature_info_of_nodes_async(
+    int gpu_id,
+    uint64_t* d_nodes,
+    int node_num,
+    std::shared_ptr<phi::Allocation>& d_feature_size_list,
+    std::shared_ptr<phi::Allocation>& d_feature_size_prefix_sum,
+    std::shared_ptr<phi::Allocation>& d_feature_list,
+    std::shared_ptr<phi::Allocation>& d_slot_list,
+    bool sage_mode) {
+
+  if (node_num == 0) {
+    return 0;
+  }
+ 
+  platform::CUDADeviceGuard guard(gpu_id);
+  platform::CUDAPlace place = platform::CUDAPlace(gpu_id);
+  auto stream = resource_->local_stream(gpu_id, 0);
+
+  auto &loc = storage_[gpu_id];
+  auto &res = loc.shard_res;
+  int shard_num = node_size_ * device_num_;  
+  loc.init_shard(node_num, shard_num);
+
+  auto d_merged_push_keys = memory::Alloc(place,
+                                          node_num * sizeof(uint64_t),
+                                          phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  uint64_t* d_merged_push_keys_ptr = reinterpret_cast<uint64_t*>(d_merged_push_keys->ptr());
+
+  size_t *h_local_part_sizes = res.h_local_part_sizes.data();
+  size_t *h_local_part_offsets = res.h_local_part_offsets.data();
+  // partition keys
+  partition_shard_keys(gpu_id,
+                        node_num,
+                        d_nodes,
+                        res.d_local_idx_parted,
+                        d_merged_push_keys_ptr,
+                        h_local_part_sizes,
+                        shard_num,
+                        stream,
+                        true);
+  VLOG(2) << "partition_shard_keys finish, tatol node num = "<< node_num;
+  h_local_part_offsets[0] = 0;
+  for (int i = 0; i < shard_num; ++i) {
+    h_local_part_offsets[i + 1] =
+        h_local_part_offsets[i] + h_local_part_sizes[i];
+    // VLOG(0) << "h_local_part_offsets["<<i<<"] = "<< h_local_part_sizes[i];
+  }
+  CHECK_EQ(node_num, h_local_part_offsets[shard_num]);
+
+  VLOG(2) << "Begin asynchronous feature pull request";  
+  auto d_tmp_feature_size_list = memory::Alloc(place,
+                               node_num * sizeof(uint32_t),
+                               phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  uint32_t* d_tmp_feature_size_list_ptr = reinterpret_cast<uint32_t*>(d_tmp_feature_size_list->ptr());
+
+  auto d_tmp_feature_size_prefix_sum = memory::Alloc(place,
+                               (node_num + shard_num) * sizeof(uint32_t),
+                               phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  uint32_t* d_tmp_feature_size_prefix_sum_ptr = reinterpret_cast<uint32_t*>(d_tmp_feature_size_prefix_sum->ptr());
+  auto* allocator = dynamic_cast<AsyncComAllocator*>(_async_request[feature_pull_runner_index_*gpu_num + gpu_id]->get_allocator());
+
+	std::vector<RequestHandle> request_handles(shard_num);
+    
+  VLOG(2) << "set response write addr"; 
+	for (int i = 0; i < shard_num; ++i) {
+    if (h_local_part_sizes[i] == 0) {
+      continue;
+    }
+    auto* size_context = allocator->ToMemoryContext(
+      d_tmp_feature_size_list_ptr + h_local_part_offsets[i], h_local_part_sizes[i], DT_UINT32);
+    auto* prefix_sum_context = allocator->ToMemoryContext(
+      d_tmp_feature_size_prefix_sum_ptr + h_local_part_offsets[i] + i, h_local_part_sizes[i]+1, DT_UINT32);
+
+    request_handles[i].response_ = CreateAsyncReqRes();
+    request_handles[i].response_->memory_contexts[0] = size_context;
+    request_handles[i].response_->memory_contexts[1] = prefix_sum_context;
+	}
+
+  bool is_float_feature = false;
+  if (std::is_same<FeatureType, float>::value) {
+    is_float_feature = true;
+  }
+	for (int i = 0; i < shard_num; ++i) {
+    if (h_local_part_sizes[i] == 0) {
+      continue;
+    }
+    auto* node_key_context = allocator->ToMemoryContext(
+      d_merged_push_keys_ptr + h_local_part_offsets[i], h_local_part_sizes[i], DT_UINT64);
+    
+    auto* async_com = paddle::framework::AsyncContext::GetInstance()->get_async_com(gpu_id);
+    AsyncReqRes* request;
+    if(is_float_feature){ 
+      request = _async_request[feature_pull_runner_index_*gpu_num + gpu_id]->MakeFloatFeaturePullRequest(node_key_context, i);
+    } else {
+      request = _async_request[feature_pull_runner_index_*gpu_num + gpu_id]->MakeUintFeaturePullRequest(node_key_context, i);
+    }
+    request_handles[i].request_ = request;
+
+    async_com->PutRequestAsync(&request_handles[i]);
+
+	}
+	//等待异步执行结束
+	for(int i = 0; i < shard_num; ++i) {
+    if (h_local_part_sizes[i] == 0) {
+      continue;
+    }
+		request_handles[i].Wait();
+	}
+  VLOG(2) << "all feature pull request finish"; 
+  
+  d_feature_size_list = memory::Alloc(place,
+                                      node_num * sizeof(uint32_t),
+                                      phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  uint32_t* d_feature_size_list_ptr = reinterpret_cast<uint32_t*>(d_feature_size_list->ptr());
+
+	heter_comm_kernel_->scatter_vals(
+      reinterpret_cast<const uint32_t*>(d_tmp_feature_size_list_ptr),     // in
+      reinterpret_cast<uint32_t*>(d_feature_size_list_ptr),               // out
+      res.d_local_idx_parted,
+      node_num,
+      sizeof(uint32_t),
+      stream);
+  // CUDA_CHECK(cudaStreamSynchronize(stream));
+
+  VLOG(2) << "begin calc size list prefix sum";
+  d_feature_size_prefix_sum = memory::Alloc(place,
+                                            (node_num + 1) * sizeof(uint32_t),
+                                            phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  uint32_t* d_feature_size_prefix_sum_ptr = reinterpret_cast<uint32_t*>(d_feature_size_prefix_sum->ptr());
+
+  CUDA_CHECK(cudaMemsetAsync(d_feature_size_prefix_sum_ptr, 
+                             0,
+                             sizeof(uint32_t),
+                             stream));
+
+  size_t storage_bytes = 0;
+  CUDA_CHECK(cub::DeviceScan::InclusiveSum(NULL,
+                                           storage_bytes,
+                                           d_feature_size_list_ptr,
+                                           d_feature_size_prefix_sum_ptr + 1,
+                                           node_num,
+                                           stream));
+  // CUDA_CHECK(cudaStreamSynchronize(stream));
+  auto d_temp_storage_tmp = memory::Alloc(place,
+                                          storage_bytes,
+                                          phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  CUDA_CHECK(cub::DeviceScan::InclusiveSum(d_temp_storage_tmp->ptr(),
+                                           storage_bytes,
+                                           d_feature_size_list_ptr,
+                                           d_feature_size_prefix_sum_ptr + 1,
+                                           node_num,
+                                           stream));
+  VLOG(2) << "end calc size list prefix sum";
+
+  int fea_num = 0;
+  CUDA_CHECK(cudaMemcpyAsync(&fea_num,
+                             reinterpret_cast<uint32_t*>(d_feature_size_prefix_sum_ptr + node_num),
+                             sizeof(uint32_t),
+                             cudaMemcpyDeviceToHost,
+                             stream));
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+
+  d_feature_list = memory::Alloc(place,
+                                 fea_num * sizeof(FeatureType),
+                                 phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  FeatureType* d_feature_list_ptr = reinterpret_cast<FeatureType*>(d_feature_list->ptr());
+
+  d_slot_list = memory::Alloc(place,
+                              fea_num * sizeof(uint8_t),
+                              phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+  uint8_t* d_slot_list_ptr = reinterpret_cast<uint8_t*>(d_slot_list->ptr());
+
+  // to do 把不同块的地址 组成一个数组传入，做偏移
+  for(int i = 0; i < shard_num; ++i){
+    FeatureType* d_tmp_feature_list_ptr = reinterpret_cast<FeatureType *>(request_handles[i].response_->memory_contexts[2]->GetPointer());
+    uint8_t* d_tmp_slot_list_ptr = reinterpret_cast<uint8_t*>(request_handles[i].response_->memory_contexts[3]->GetPointer());
+
+    int grid_size = (h_local_part_sizes[i] - 1) / block_size_ + 1;
+    fill_vari_feature_and_slot<<<grid_size, block_size_, 0, stream>>>(
+        d_feature_list_ptr,
+        d_slot_list_ptr,
+        d_tmp_feature_list_ptr,
+        d_tmp_slot_list_ptr,
+        d_feature_size_prefix_sum_ptr,
+        d_tmp_feature_size_prefix_sum_ptr + h_local_part_offsets[i] + i,
+        d_tmp_feature_size_list_ptr + h_local_part_offsets[i],
+        res.d_local_idx_parted + h_local_part_offsets[i],
+        h_local_part_sizes[i]);
+  }
+
+  VLOG(2) << "end all2all get slot info, node_num: " << node_num
+          << ", fea num: " << fea_num;
+  CUDA_CHECK(cudaStreamSynchronize(stream));
+  return fea_num;
 }
 
 template <typename FeatureType>
@@ -3863,6 +4555,140 @@ int GpuPsGraphTable::get_feature_info_of_nodes_all2all(
           << ", pull size: " << pull_size << ", fea num: " << fea_num;
   CUDA_CHECK(cudaStreamSynchronize(stream));
 
+  return fea_num;
+}
+
+template <typename FeatureType>
+int GpuPsGraphTable::get_feature_info_of_nodes_normal_one_table(
+    int gpu_id,
+    uint64_t* d_nodes,
+    int node_num,
+    uint32_t * d_feature_size_ptr,
+    uint32_t * d_feature_size_prefix_sum_ptr,
+    std::shared_ptr<phi::Allocation>& d_feature_list,
+    std::shared_ptr<phi::Allocation>& d_slot_list,
+    cudaStream_t calc_stream,
+    cudaStream_t mem_stream) {
+
+    platform::CUDAPlace place = platform::CUDAPlace(resource_->dev_id(gpu_id));
+    platform::CUDADeviceGuard guard(resource_->dev_id(gpu_id));
+
+    if (node_num == 0) {
+      return 0;
+    }
+    bool is_float_feature = false;
+    if (std::is_same<FeatureType, float>::value) {
+      is_float_feature = true;
+    }
+    // VLOG(2) << "start get feature size";
+    auto d_feature_info =
+        memory::Alloc(place,
+                      node_num * sizeof(uint64_t),
+                      phi::Stream(reinterpret_cast<phi::StreamId>(mem_stream)));                   
+    GpuPsFeaInfo* d_feature_info_ptr =
+          reinterpret_cast<GpuPsFeaInfo*>(d_feature_info->ptr());
+    
+    CUDA_CHECK(cudaMemsetAsync(d_feature_info_ptr,
+                               0,
+                               node_num * sizeof(uint64_t),
+                               calc_stream));
+    int table_offset;
+    if (is_float_feature) {
+      table_offset = get_table_offset(gpu_id, GraphTableType::FEATURE_TABLE, 1);
+    } else {
+      table_offset = get_table_offset(gpu_id, GraphTableType::FEATURE_TABLE, 0);
+    }
+    tables_[table_offset]->get(d_nodes,
+                              reinterpret_cast<uint64_t*>(d_feature_info_ptr),
+                              static_cast<size_t>(node_num),
+                              calc_stream);
+
+    VLOG(2) << "start get feature size";
+    CUDA_CHECK(cudaMemsetAsync(d_feature_size_ptr,
+                               0,
+                               node_num * sizeof(uint32_t),
+                               calc_stream));
+
+    dim3 grid((node_num - 1) / dim_y + 1);
+    dim3 block(1, dim_y);
+    get_features_size<<<grid, block, 0, calc_stream>>>(
+        reinterpret_cast<GpuPsFeaInfo*>(d_feature_info_ptr),
+        reinterpret_cast<uint32_t*>(d_feature_size_ptr),
+        node_num);
+    
+    CUDA_CHECK(cudaMemsetAsync(d_feature_size_prefix_sum_ptr,
+                               0,
+                               sizeof(uint32_t),
+                               calc_stream));
+
+    VLOG(2) << "end get feature size";
+
+    VLOG(2) << "start calc prefix sum";
+    size_t temp_storage_bytes = 0;
+    CUDA_CHECK(cub::DeviceScan::InclusiveSum(
+        NULL,
+        temp_storage_bytes,
+        d_feature_size_ptr,
+        d_feature_size_prefix_sum_ptr + 1,
+        node_num,
+        calc_stream));
+
+    auto d_temp_storage = memory::Alloc(place, 
+                                        temp_storage_bytes, 
+                                        phi::Stream(reinterpret_cast<phi::StreamId>(mem_stream)));
+
+    uint32_t* d_temp_storage_ptr = reinterpret_cast<uint32_t*>(d_temp_storage->ptr()); 
+
+    CUDA_CHECK(cub::DeviceScan::InclusiveSum(
+        d_temp_storage_ptr,
+        temp_storage_bytes,
+        d_feature_size_ptr,
+        d_feature_size_prefix_sum_ptr + 1,
+        node_num,
+        calc_stream));
+    // CUDA_CHECK(cudaStreamSynchronize(calc_stream));
+
+    VLOG(2) << "end calc prefix sum";
+    uint32_t fea_num = 0;
+    CUDA_CHECK(cudaMemcpyAsync(
+        &fea_num,
+        reinterpret_cast<uint32_t*>(d_feature_size_prefix_sum_ptr + node_num),
+        sizeof(uint32_t),
+        cudaMemcpyDeviceToHost,
+        calc_stream));
+    CUDA_CHECK(cudaStreamSynchronize(calc_stream));
+
+    d_feature_list = memory::Alloc(place,
+                                 fea_num * sizeof(FeatureType),
+                                 phi::Stream(reinterpret_cast<phi::StreamId>(mem_stream))); 
+    FeatureType* d_feature_list_ptr = reinterpret_cast<FeatureType *>(d_feature_list->ptr());
+    d_slot_list = memory::Alloc(place,
+                              fea_num * sizeof(uint8_t),
+                              phi::Stream(reinterpret_cast<phi::StreamId>(mem_stream))); 
+    uint8_t* d_slot_list_ptr = reinterpret_cast<uint8_t *>(d_slot_list->ptr());
+
+    VLOG(2) << "start get feature"<< "fea num: "<< fea_num;
+    if (is_float_feature) {
+      int offset = get_graph_float_fea_list_offset(gpu_id);
+      auto& graph = gpu_graph_float_fea_list_[offset];
+      get_float_features_kernel<<<grid, block, 0, calc_stream>>>(graph,
+                                                            reinterpret_cast<GpuPsFeaInfo*>(d_feature_info_ptr),
+                                                            reinterpret_cast<uint32_t*>(d_feature_size_prefix_sum_ptr),
+                                                            reinterpret_cast<float*>(d_feature_list_ptr),
+                                                            reinterpret_cast<uint8_t *>(d_slot_list_ptr),
+                                                            node_num);
+    } else {
+      int offset = get_graph_fea_list_offset(gpu_id);
+      auto& graph = gpu_graph_fea_list_[offset];
+      get_features_kernel<<<grid, block, 0, calc_stream>>>(graph,
+                                                      reinterpret_cast<GpuPsFeaInfo *>(d_feature_info_ptr),
+                                                      reinterpret_cast<uint32_t *>(d_feature_size_prefix_sum_ptr),
+                                                      reinterpret_cast<uint64_t *>(d_feature_list_ptr),
+                                                      reinterpret_cast<uint8_t *>(d_slot_list_ptr),
+                                                      node_num);
+    }
+    CUDA_CHECK(cudaStreamSynchronize(calc_stream));
+    VLOG(2) << "end get feature";
   return fea_num;
 }
 
@@ -4408,15 +5234,25 @@ int GpuPsGraphTable::get_float_feature_info_of_nodes(
                                                   slot_list);
     } else {
       if (FLAGS_enable_graph_multi_node_sampling) {
-        all_fea_num =
-            get_feature_info_of_nodes_all2all<float>(gpu_id,
-                                                     d_nodes,
-                                                     node_num,
-                                                     size_list,
-                                                     size_list_prefix_sum,
-                                                     feature_list,
-                                                     slot_list,
-                                                     sage_mode);
+        if (FLAGS_enable_async_comm) {
+          all_fea_num = get_feature_info_of_nodes_async<float>(gpu_id,
+                                                                 d_nodes,
+                                                                 node_num,
+                                                                 size_list,
+                                                                 size_list_prefix_sum,
+                                                                 feature_list,
+                                                                 slot_list,
+                                                                 sage_mode);
+        } else {
+          all_fea_num = get_feature_info_of_nodes_all2all<float>(gpu_id,
+                                                                       d_nodes,
+                                                                       node_num,
+                                                                       size_list,
+                                                                       size_list_prefix_sum,
+                                                                       feature_list,
+                                                                       slot_list,
+                                                                       sage_mode);
+        }
       }
     }
   } else {
@@ -4443,7 +5279,7 @@ int GpuPsGraphTable::get_feature_of_nodes(int gpu_id,
   if (node_num == 0) {
     return -1;
   }
-
+  VLOG(2) << "start get_feature_of_nodes() ";
   platform::CUDAPlace place = platform::CUDAPlace(resource_->dev_id(gpu_id));
   platform::CUDADeviceGuard guard(resource_->dev_id(gpu_id));
   int total_gpu = resource_->total_device();
@@ -4601,7 +5437,6 @@ int GpuPsGraphTable::get_feature_of_nodes(int gpu_id,
   return 0;
 }
 
-
 void DeepWalkSampleRunner::RegisterFunctions() {
       FunctionInfo function_info;
       function_info.function_id = function_info_table_.size();
@@ -4610,7 +5445,7 @@ void DeepWalkSampleRunner::RegisterFunctions() {
       function_info.need_response = true;
 
     function_info.func_ = [this](struct AsyncReqRes* request, struct AsyncReqRes* response) {
-      NeighborSample(request, response);
+      DeepWalkNeighborSample(request, response);
     };
       
       function_info.input_locations[0] = ML_DEVICE;
@@ -4634,8 +5469,7 @@ AsyncReqRes* DeepWalkSampleRunner::MakeDeepWalkRequest(MemoryContextBase *node_k
       return request;
 }
 
-void DeepWalkSampleRunner::NeighborSample(struct AsyncReqRes *request, struct AsyncReqRes *response) {
-       
+void DeepWalkSampleRunner::DeepWalkNeighborSample(struct AsyncReqRes *request, struct AsyncReqRes *response) {
       int gpu_id = partitioner_->GetLocalRank();
       platform::CUDADeviceGuard guard(gpu_id);
       graph_table_->storage_[gpu_id].remote_keys_++;
@@ -4671,6 +5505,219 @@ void DeepWalkSampleRunner::NeighborSample(struct AsyncReqRes *request, struct As
     graph_table_->storage_[gpu_id].async_sample_.Pause();
 }
 
+void SageSampleRunner::RegisterFunctions() {
+  FunctionInfo function_info;
+  function_info.function_id = function_info_table_.size();
+  function_info.input_data_count = 2;
+  function_info.output_data_count = 3;
+  function_info.need_response = true;
+
+  function_info.func_ = [this](struct AsyncReqRes* request, struct AsyncReqRes* response) {
+    SageNeighborSample(request, response);
+  };
+
+  function_info.input_locations[0] = ML_DEVICE;
+  function_info.input_locations[1] = ML_HOST;
+  // function_info.input_locations[2] = ML_DEVICE;
+  function_info.output_locations[0] = ML_DEVICE;
+  function_info.output_locations[1] = ML_DEVICE;
+  function_info.output_locations[2] = ML_DEVICE;
+  function_info_table_.push_back(function_info);
+}
+
+AsyncReqRes* SageSampleRunner::MakeSageSampleRequest(MemoryContextBase *node_key_context,
+                                                       MemoryContextBase *para_int_context,
+                                                       int target_global_rank){             
+  AsyncReqRes *request = CreateAsyncReqRes();
+  InitMeta(&request->meta);
+  request->meta.valid_data_count = 2;
+  request->memory_contexts[0] = node_key_context;
+  request->memory_contexts[1] = para_int_context;
+  request->FillMetaByMemoryContext();
+  static constexpr int kSageSampleFuncId = 0;
+  CreateRequestMeta(&request->meta, target_global_rank, kSageSampleFuncId);
+  return request;
+}
+
+void SageSampleRunner::SageNeighborSample(struct AsyncReqRes *request, struct AsyncReqRes *response) {
+  int gpu_id = partitioner_->GetLocalRank();
+  platform::CUDADeviceGuard guard(gpu_id);
+  auto allocator = dynamic_cast<AsyncComAllocator*> (allocator_);
+  auto mem_stream = allocator->GetCudaMemoryStream();
+  auto calc_stream = stream_;
+
+  uint64_t* input_idx_ptr = static_cast<uint64_t*> (request->memory_contexts[0]->GetPointer());
+  auto input_dt = static_cast<::DataType>(request->meta.data_types[0]);
+  size_t len = request->meta.data_sizes[0] / GetElementSize(input_dt);
+
+  int64_t * int_para = static_cast<int64_t*> (request->memory_contexts[1]->GetPointer());
+  int64_t edge_type_len = int_para[0];
+  int64_t sample_size = int_para[1];
+
+  int64_t packed = int_para[2];
+  bool weighted = (packed >> 1) & 1;
+  bool return_weight = packed & 1;
+
+  NeighborSampleResultV2 final;
+  uint64_t *d_vals_ptr = static_cast<uint64_t*> (allocator_->AllocateOrUseExistContextPointer(response, 0, ML_DEVICE, DT_UINT64, len * sample_size * edge_type_len));  
+  int * actual_sample_size_ptr = static_cast<int*> (allocator_->AllocateOrUseExistContextPointer(response, 1, ML_DEVICE, DT_UINT8, len * edge_type_len * sizeof(int)));
+  
+  float * weight_ptr  = nullptr;
+  size_t weight_len = 0;
+  if(return_weight){
+    weight_len = len;
+  }
+  weight_ptr = static_cast<float*> (allocator_->AllocateOrUseExistContextPointer(response, 2, ML_DEVICE, DT_FLOAT, weight_len * sample_size * edge_type_len));
+
+  final.val = d_vals_ptr;
+  final.actual_sample_size = actual_sample_size_ptr;
+  final.weight = weight_ptr;
+  final.set_alloc_ed(true); 
+
+  CUDA_CHECK(cudaStreamSynchronize(calc_stream));
+  graph_table_->graph_neighbor_sample_all_edge_type_one_table(
+  gpu_id, edge_type_len, input_idx_ptr, sample_size, len, weighted, return_weight, final, calc_stream, mem_stream); 
+
+  response->meta.valid_data_count = 3;
+  response->FillMetaByMemoryContext();
+}
+
+void DegreeGetRunner::RegisterFunctions() {
+  FunctionInfo function_info;
+  function_info.function_id = function_info_table_.size();
+  function_info.input_data_count = 2;
+  function_info.output_data_count = 1;
+  function_info.need_response = true;
+
+  function_info.func_ = [this](struct AsyncReqRes* request, struct AsyncReqRes* response) {
+    NodeDegreeGet(request, response);
+  };
+
+  function_info.input_locations[0] = ML_DEVICE;
+  function_info.input_locations[1] = ML_HOST;
+  function_info.output_locations[0] = ML_DEVICE;
+  function_info_table_.push_back(function_info);
+}
+
+AsyncReqRes* DegreeGetRunner::MakeDegreeGetRequest(MemoryContextBase *node_key_context,
+                                                   MemoryContextBase *para_int_context,
+                                                   int target_global_rank){             
+  AsyncReqRes *request = CreateAsyncReqRes();
+  InitMeta(&request->meta);
+  request->meta.valid_data_count = 2;
+  request->memory_contexts[0] = node_key_context;
+  request->memory_contexts[1] = para_int_context;
+
+  request->FillMetaByMemoryContext();
+  static constexpr int kDegreeGetFuncId = 0;
+  CreateRequestMeta(&request->meta, target_global_rank, kDegreeGetFuncId);
+  return request;
+}
+
+void DegreeGetRunner::NodeDegreeGet(struct AsyncReqRes *request, struct AsyncReqRes *response) {
+  int gpu_id = partitioner_->GetLocalRank();
+  platform::CUDADeviceGuard guard(gpu_id);
+  auto allocator = dynamic_cast<AsyncComAllocator*> (allocator_);
+  auto mem_stream = allocator->GetCudaMemoryStream();
+  auto calc_stream = stream_;
+
+  uint64_t* input_idx_ptr = static_cast<uint64_t*> (request->memory_contexts[0]->GetPointer());
+  auto input_dt = static_cast<::DataType>(request->meta.data_types[0]);
+  size_t len = request->meta.data_sizes[0] / GetElementSize(input_dt);
+
+  int64_t * int_para = static_cast<int64_t*> (request->memory_contexts[1]->GetPointer());
+  int64_t edge_idx = int_para[0];
+
+  auto result = graph_table_->get_node_degree_signle_one_table(gpu_id, edge_idx, input_idx_ptr, len, calc_stream, mem_stream); 
+  MemoryContextBase* val_context = allocator->ToMemoryContext(result, len, DT_INT64);
+
+  response->meta.valid_data_count = 1;
+  response->memory_contexts[0] = val_context;
+  response->FillMetaByMemoryContext();
+}
+
+void FeaturePullRunner::RegisterFunctions() {
+    std::vector<FunctionInfo> function_info(2);
+    for (int i = 0; i < 2; ++i) {
+        function_info[i].function_id = i;
+        function_info[i].input_data_count = 1;
+        function_info[i].output_data_count = 4;
+        function_info[i].need_response = true;
+
+        function_info[i].input_locations[0] = ML_DEVICE;
+        for (int j = 0; j < 4; ++j) {
+            function_info[i].output_locations[j] = ML_DEVICE;
+        }
+    }
+
+    function_info[0].func_ = [this](struct AsyncReqRes* request, struct AsyncReqRes* response) {
+        FeaturePull<uint64_t>(request, response);
+    };
+
+    function_info[1].func_ = [this](struct AsyncReqRes* request, struct AsyncReqRes* response) {
+        FeaturePull<float>(request, response);
+    };
+
+    function_info_table_.push_back(function_info[0]);
+    function_info_table_.push_back(function_info[1]);
+}
+
+AsyncReqRes* FeaturePullRunner::MakeFloatFeaturePullRequest(MemoryContextBase *node_key_context,
+                                                       int target_global_rank){             
+    AsyncReqRes *request = CreateAsyncReqRes();
+    InitMeta(&request->meta);
+
+	  request->meta.valid_data_count = 1;
+	  request->memory_contexts[0] = node_key_context;
+	  request->FillMetaByMemoryContext();
+	  static constexpr int kFeatureFloatPullFuncId = 1;
+	  CreateRequestMeta(&request->meta, target_global_rank, kFeatureFloatPullFuncId);
+	  return request;
+}
+
+AsyncReqRes* FeaturePullRunner::MakeUintFeaturePullRequest(MemoryContextBase *node_key_context,
+                                                       int target_global_rank){             
+    AsyncReqRes *request = CreateAsyncReqRes();
+    InitMeta(&request->meta);
+
+	  request->meta.valid_data_count = 1;
+	  request->memory_contexts[0] = node_key_context;
+	  request->FillMetaByMemoryContext();
+	  static constexpr int kFeatureUintPullFuncId = 0;
+	  CreateRequestMeta(&request->meta, target_global_rank, kFeatureUintPullFuncId);
+	  return request;
+}
+
+template <typename FeatureType>
+void FeaturePullRunner::FeaturePull(struct AsyncReqRes *request, struct AsyncReqRes *response) {
+	  int gpu_id = partitioner_->GetLocalRank();
+	  platform::CUDADeviceGuard guard(gpu_id);
+
+    auto allocator = dynamic_cast<AsyncComAllocator*> (allocator_);
+	  auto mem_stream = allocator->GetCudaMemoryStream();
+    auto calc_stream = stream_;
+	  
+    uint64_t* input_idx_ptr = static_cast<uint64_t*> (request->memory_contexts[0]->GetPointer());
+    auto input_dt = static_cast<::DataType>(request->meta.data_types[0]);
+    size_t len = request->meta.data_sizes[0] / GetElementSize(input_dt);
+
+    std::shared_ptr<phi::Allocation> d_feature_list;
+    std::shared_ptr<phi::Allocation> d_slot_list;
+
+    uint32_t *d_feature_size_ptr = static_cast<uint32_t*> (allocator_->AllocateOrUseExistContextPointer(response, 0, ML_DEVICE, DT_UINT32, len));
+    uint32_t *d_feature_size_prefix_sum_ptr = static_cast<uint32_t*> (allocator_->AllocateOrUseExistContextPointer(response, 1, ML_DEVICE, DT_UINT32, len + 1));
+
+	  auto feature_num = graph_table_->get_feature_info_of_nodes_normal_one_table<FeatureType>(
+      gpu_id, input_idx_ptr, len, d_feature_size_ptr, d_feature_size_prefix_sum_ptr, d_feature_list, d_slot_list, calc_stream, mem_stream);
+
+    MemoryContextBase* feature_list_context = allocator->ToMemoryContext(d_feature_list, feature_num* sizeof(FeatureType), DT_UINT8);
+    MemoryContextBase* slot_list_context = allocator->ToMemoryContext(d_slot_list, feature_num , DT_UINT8);
+
+	  response->meta.valid_data_count = 4;
+	  response->memory_contexts[2] = feature_list_context;
+	  response->memory_contexts[3] = slot_list_context;
+	  response->FillMetaByMemoryContext();
+}
 };  // namespace framework
 };  // namespace paddle
 #endif

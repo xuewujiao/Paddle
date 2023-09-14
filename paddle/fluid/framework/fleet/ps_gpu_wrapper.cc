@@ -2071,7 +2071,9 @@ void PSGPUWrapper::BeginPass() {
   timer.Pause();
   auto gloo = paddle::framework::GlooWrapper::GetInstance();
   if (gloo->Size() > 1 && FLAGS_enable_async_comm) {
+      VLOG(0) << "passid=" << current_task_->pass_id_ << "start Barrier";
       gloo->Barrier();
+      VLOG(0) << "passid=" << current_task_->pass_id_ << "end Barrier";
   }
 
   if (current_task_ == nullptr) {
@@ -2095,6 +2097,12 @@ void PSGPUWrapper::EndPass() {
     return;
   }
 #endif
+  auto gloo = paddle::framework::GlooWrapper::GetInstance();
+  if (gloo->Size() > 1 && FLAGS_enable_async_comm) {
+      VLOG(0) << "passid=" << current_task_->pass_id_ << "start Barrier";
+      gloo->Barrier();
+      VLOG(0) << "passid=" << current_task_->pass_id_ << "end Barrier";
+  }
   if (current_task_ == nullptr) {
     return;
   }

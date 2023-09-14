@@ -50,6 +50,14 @@ enum GpuGraphStorageMode {
   SSD_EMB_AND_MEM_FEATURE_GPU_GRAPH
 };
 
+enum RunnerID {
+  RID_DEEPWALK = 0,
+  RID_SPARSE = 1, // for sparse pull and push
+  RID_SAGE = 2,
+  RID_DEGREE = 3,
+  RID_FEATUREPULL = 4,
+};
+
 class GraphGpuWrapper {
  public:
   static std::shared_ptr<GraphGpuWrapper> GetInstance() {
