@@ -256,7 +256,9 @@ class GpuPsGraphTable
                        bool need_neighbor_count,
                        unsigned long long random_seed,
                        float *weight_array,
-                       bool return_weight);
+                       bool return_weight,
+                       cudaStream_t calc_stream = nullptr,
+                       cudaStream_t mem_stream = nullptr);
   void unweighted_sample(GpuPsCommGraph &graph,
                          GpuPsNodeInfo *node_info_list,
                          int *actual_size_array,
