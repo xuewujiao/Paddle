@@ -150,7 +150,9 @@ class ValueAccessor {
                          size_t num) = 0;
 
   // used to save model, will filter feature
-  virtual std::string ParseToString(const float* value, int param) = 0;
+  virtual std::string ParseToString(const float* value,
+                                    int param,
+                                    bool only_save_embedx_w = false) = 0;
   //  parse value from string, used to load model
   virtual int32_t ParseFromString(const std::string& data, float* value) = 0;
 

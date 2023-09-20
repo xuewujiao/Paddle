@@ -38,7 +38,6 @@ class CommMergeAccessor : public ValueAccessor {
   // 判断该value是否在save阶段dump,
   // param作为参数用于标识save阶段，如downpour的xbox与batch_model
   virtual bool Save(float * /*value*/, int /*param*/);
-
   bool SaveCache(float *value, int param, double global_cache_threshold) {
     return false;
   }
@@ -65,7 +64,9 @@ class CommMergeAccessor : public ValueAccessor {
   virtual int SetWeight(float **values,
                         const float **update_values,
                         size_t num);
-  virtual std::string ParseToString(const float *value, int param) {
+  virtual std::string ParseToString(const float *value,
+                                    int param,
+                                    bool only_save_embedx_w = false) {
     return "";
   }
   virtual int ParseFromString(const std::string &str, float *v) { return 0; }
