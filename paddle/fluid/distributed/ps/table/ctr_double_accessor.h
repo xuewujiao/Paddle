@@ -25,7 +25,6 @@
 
 namespace paddle {
 namespace distributed {
-
 class CtrDoubleAccessor : public ValueAccessor {
  public:
   struct CtrDoubleFeatureValue {
@@ -197,7 +196,9 @@ class CtrDoubleAccessor : public ValueAccessor {
   virtual int32_t Update(float** values,
                          const float** update_values,
                          size_t num);
-  std::string ParseToString(const float* value, int param) override;
+  std::string ParseToString(const float* value,
+                            int param,
+                            bool only_save_embedx_w = false) override;
   int32_t ParseFromString(const std::string& str, float* v) override;
   virtual bool CreateValue(int type, const float* value);
   // 这个接口目前只用来取show
