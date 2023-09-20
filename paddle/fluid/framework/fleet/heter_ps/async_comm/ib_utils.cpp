@@ -16,22 +16,6 @@ struct IbEnvs {
 
 static IbEnvs g_ib_envs{};
 
-static int GetIntEnv(const char* env_name, int default_value) {
-  char* str_env = getenv(env_name);
-  int value = default_value;
-  if (str_env && strlen(str_env) > 0) {
-    errno = 0;
-    value = strtol(str_env, nullptr, 0);
-    if (errno) {
-      value = default_value;
-      printf("Invalid value %s for %s, using default %d.", str_env, env_name, default_value);
-    } else {
-      printf("%s set by environment to %d", env_name, value);
-    }
-  }
-  return value;
-}
-
 static int GetIntEnv(const char* env_name, const char* second_env_name, int default_value) {
   char* str_env = nullptr;
   int value;
@@ -217,11 +201,15 @@ struct ibv_device *SelectIbDeviceByName(const std::string &name) {
   return nullptr;
 }
 
-struct ibv_mr* RegisterIbMr(struct ibv_pd *pd, void* data, size_t size) {
+struct ibv_mr* TryRegisterIbMr(struct ibv_pd *pd, void* data, size_t size) {
   struct ibv_mr *ib_mr = ibv_reg_mr(pd,
                                     data,
                                     size,
                                     IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE);
+  return ib_mr;
+}
+struct ibv_mr* RegisterIbMr(struct ibv_pd *pd, void* data, size_t size) {
+  auto* ib_mr = TryRegisterIbMr(pd, data, size);
   BOOL_CHECK(ib_mr != nullptr);
   return ib_mr;
 }

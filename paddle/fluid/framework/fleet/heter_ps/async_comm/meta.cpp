@@ -13,6 +13,7 @@ void InitMeta(Meta* meta) {
   meta->requester_node_id = meta->runner_node_id = -1;
   meta->requester_lane_id = meta->runner_lane_id = -1;
   meta->is_response = 0;
+  meta->merged_flag = 0;
   meta->runner_id = -1;
   meta->function_id = -1;
   meta->valid_data_count = 0;
@@ -36,6 +37,14 @@ void MakeResponseMeta(Meta* response_meta, const Meta* request_meta) {
 
 bool IsStopMeta(const Meta* meta) {
   return meta->runner_id == -1 && meta->function_id == -1 && meta->status_code == -1;
+}
+
+bool IsMergedMeta(const Meta* meta) {
+  return meta->merged_flag == 1;
+}
+
+bool IsMergedSplittedMeta(const Meta* meta) {
+  return meta->merged_flag == 2;
 }
 
 bool SameMeta(const Meta* meta_lhs, const Meta* meta_rhs) {

@@ -63,6 +63,8 @@ void PrintPortInfo(struct ibv_port_attr *attr);
 
 struct ibv_device *SelectIbDeviceByName(const std::string &name);
 
+struct ibv_mr* TryRegisterIbMr(struct ibv_pd *pd, void* data, size_t size);
+
 struct ibv_mr* RegisterIbMr(struct ibv_pd *pd, void* data, size_t size);
 
 void DeRegIbMr(struct ibv_mr* mr);

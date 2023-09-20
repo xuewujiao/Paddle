@@ -3,6 +3,7 @@
 #include <pthread.h>
 
 #include <condition_variable>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -13,6 +14,7 @@
 #include "internode_communicator.h"
 #include "meta.h"
 #include "memory_allocator.h"
+#include "merged_handler.h"
 #include "message_queue.h"
 #include "partitioner.h"
 #include "runner.h"
@@ -28,7 +30,7 @@ class AsyncReqRes {
   MemoryContextBase* memory_contexts[MAX_VEC_COUNT];
   void FillMetaByMemoryContext();
  private:
-  RequestHandle* to_complete_oneway_handle = nullptr;
+  std::function<void()> complete_cb = nullptr;
   AsyncReqRes();
   void Init();
   friend AsyncReqRes *CreateAsyncReqRes();
@@ -114,6 +116,7 @@ class AsyncCommunicator {
   MemoryAllocatorBase* allocator_ = nullptr;
   RunnerRegistry* runner_registry_ = nullptr;
   Config* config_ = nullptr;
+  std::unique_ptr<MergedHandler> merged_handler_;
 
   MessageQueue<AsyncReqRes*> response_queue_;
 
@@ -124,4 +127,6 @@ class AsyncCommunicator {
   std::unordered_map<uint64_t, RequestHandle*> pending_mapping_;
 
   std::unique_ptr<SideBandCommunicator> sideband_communicator_;
+
+  friend class MergedHandler;
 };

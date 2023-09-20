@@ -1,20 +1,27 @@
 #include "runner.h"
+#include "batched_queued_runner.h"
 
 #include <cuda_runtime_api.h>
 
-class DemoRandomWalkRunner : public QueuedRunner {
+class DemoRandomWalkRunner : public BatchedQueuedRunner {
  public:
   DemoRandomWalkRunner(Partitioner *partitioner, MemoryAllocatorBase *allocator)
-      : QueuedRunner(partitioner, allocator) {}
+      : BatchedQueuedRunner(partitioner, allocator) {}
   ~DemoRandomWalkRunner() override = default;
   void RegisterFunctions() override;
 
   AsyncReqRes* MakeRandomWalkRequest(MemoryContextBase* memory_context, int target_global_rank);
+  AsyncReqRes *MakeRandomWalkRequestWithPara(MemoryContextBase *memory_context,
+                                             MemoryContextBase *para_context,
+                                             int target_global_rank);
  protected:
   void ProcessSetup() override;
   void ProcessCleanUp() override;
 
   void GetRandomWalkResult(AsyncReqRes *request, AsyncReqRes *response);
+  void GetRandomWalkResultBatched(AsyncReqRes **request, AsyncReqRes **response, size_t batch_size);
+  void GetRandomWalkResultWithPara(AsyncReqRes *request, AsyncReqRes *response);
+  void GetRandomWalkResultWithParaBatched(AsyncReqRes **request, AsyncReqRes **response, size_t batch_size);
 
   cudaStream_t stream_ = nullptr;
 };

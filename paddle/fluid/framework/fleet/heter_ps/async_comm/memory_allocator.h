@@ -77,12 +77,16 @@ class MemoryContextBase {
   bool IsValid() const {
     return valid_;
   }
+  bool NeedAllocator() const {
+    return need_allocator_;
+  }
  protected:
   bool valid_ = false;
   size_t size_ = 0;
   MemoryLocation memory_location_ = ML_UNDEFINED;
   DataType data_type_ = DT_UNDEFINED;
   size_t elt_count_ = 0;
+  bool need_allocator_ = true;
 };
 
 struct AsyncReqRes;
