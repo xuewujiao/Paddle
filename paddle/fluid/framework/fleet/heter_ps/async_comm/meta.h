@@ -10,8 +10,9 @@ struct Meta {
   int32_t status_code;                // for stop signal -1, otherwise,  for request 0, for response it is return code.
   uint64_t request_id;                // id for request / response (per runner), -1 for stop signal
   int8_t is_response;                 // 0 for request, 1 for response
+  int8_t merged_flag;                 // 0 for normal, 1 for merged request
   int8_t runner_id;                   // requested runner id, or -1 for stop signal
-  int16_t function_id;                // requested function id, or -1 for stop signal
+  int8_t function_id;                 // requested function id, or -1 for stop signal
   int16_t requester_node_id;          // requester node id
   int16_t runner_node_id;             // runner node id
   int8_t requester_lane_id;           // requester lane id
@@ -27,6 +28,10 @@ void InitMeta(Meta* meta);
 void MakeResponseMeta(Meta* response_meta, const Meta* request_meta);
 
 bool IsStopMeta(const Meta* meta);
+
+bool IsMergedMeta(const Meta* meta);
+
+bool IsMergedSplittedMeta(const Meta* meta);
 
 bool SameMeta(const Meta* meta_lhs, const Meta* meta_rhs);
 

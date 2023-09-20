@@ -38,13 +38,17 @@ void MemoryAllocatorBase::FreeReqRes(AsyncReqRes* req_res) {
   for (int i = 0; i < data_count; i++) {
     MemoryContextBase* memory_context = req_res->memory_contexts[i];
     BOOL_CHECK(memory_context != nullptr);
-    Free(memory_context);
-    DestroyMemoryContext(memory_context);
+    if (memory_context->NeedAllocator()) {
+      Free(memory_context);
+      DestroyMemoryContext(memory_context);
+    } else {
+      delete memory_context;
+    }
     req_res->memory_contexts[i] = nullptr;
   }
-  if (req_res->to_complete_oneway_handle != nullptr) {
-    req_res->to_complete_oneway_handle->SetCompleted();
-    req_res->to_complete_oneway_handle = nullptr;
+  if (req_res->complete_cb != nullptr) {
+    req_res->complete_cb();
+    req_res->complete_cb = nullptr;
   }
   InitMeta(&req_res->meta);
   DestroyAsyncReqRes(req_res);

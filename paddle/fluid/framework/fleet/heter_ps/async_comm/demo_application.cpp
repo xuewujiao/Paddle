@@ -13,6 +13,7 @@
 #include "demo_memory_allocator.h"
 #include "demo_runner.h"
 #include "demo_kernels.h"
+#include "merged_handler.h"
 
 int node_rank = -1;
 std::string config_file;
@@ -146,7 +147,7 @@ void AllRequestWorkFunction(int global_rank,
   auto *allocator = dynamic_cast<DemoMemoryAllocator *>(async_communicator->GetMemoryAllocator());
   std::default_random_engine engine(std::random_device{}());
   constexpr int kMaxVertexId = 5000000;
-  constexpr int kAvgLoopCount = 10000;
+  constexpr int kAvgLoopCount = 1000;
   constexpr int kMaxVertexCount = 2000000;
   int max_vertex_count_per_rank = kMaxVertexCount / global_size;
   std::uniform_int_distribution<int> random_seed_dist(0, INT32_MAX);
@@ -163,6 +164,8 @@ void AllRequestWorkFunction(int global_rank,
   DemoTensor gradient_tensor = allocator->CreateTensor(ML_DEVICE, DT_FLOAT, kMaxVertexCount * embedding_dim);
   std::vector<int> rank_counts(global_size);
   std::vector<int> rank_offsets(global_size);
+  std::vector<int> node_counts(global_node_count, 0);
+  std::vector<int> node_offsets(global_node_count, 0);
 
   std::mt19937 perm_gen(std::random_device{}());
   std::vector<int> rand_idx_mapping(global_size);
@@ -175,6 +178,12 @@ void AllRequestWorkFunction(int global_rank,
     for (int r = 0; r < global_size; r++) {
       rank_counts[r] = vertex_count_dist(engine);
       rank_offsets[r] = offset;
+      if (r % ranks_per_node == 0) {
+        node_counts[r / ranks_per_node] = rank_counts[r];
+        node_offsets[r / ranks_per_node] = offset;
+      } else {
+        node_counts[r / ranks_per_node] += rank_counts[r];
+      }
       offset += rank_counts[r];
     }
     int random_seed = random_seed_dist(engine);
@@ -184,16 +193,23 @@ void AllRequestWorkFunction(int global_rank,
     float *embedding_ptr = (float *) embedding_tensor.DataPtr();
     float *gradient_ptr = (float *) gradient_tensor.DataPtr();
     GenerateRandomIds(rank_raw_ptr, vertex_count, kMaxVertexId, random_seed, stream);
+    std::vector<MergeHeader> merge_headers(global_node_count);
     std::vector<DemoTensor> rank_raw_tensors(global_size);
     std::vector<DemoTensor> rank_walked_tensors(global_size);
+    std::vector<DemoTensor> node_raw_tensors(global_node_count);
+    std::vector<DemoTensor> node_walked_tensors(global_node_count);
+    std::vector<DemoTensor> node_header_tensors(global_node_count);
     std::vector<DemoTensor> rank_embedding_tensors(global_size);
     std::vector<DemoTensor> rank_gradient_tensors(global_size);
     std::vector<RequestHandle> walk_request_handles(global_size);
     std::vector<RequestHandle> get_embedding_request_handles(global_size);
     std::vector<RequestHandle> update_embedding_request_handles(global_size);
     std::shuffle(rand_idx_mapping.begin(), rand_idx_mapping.end(), perm_gen);
+    int64_t int_para[4] = {global_rank, global_size, vertex_count, vertex_count + 1};
+    auto int_para_tensor = MakeNotOwnedTensor(&int_para[0], ML_HOST, DT_INT64, 4);
+
     for (int i = 0; i < global_size; i++) {
-      int r = rand_idx_mapping[i];
+      int r = i;
       rank_raw_tensors[r] = MakeNotOwnedTensor(rank_raw_ptr + rank_offsets[r], ML_DEVICE, DT_INT32, rank_counts[r]);
       rank_walked_tensors[r] =
           MakeNotOwnedTensor(rank_walked_ptr + rank_offsets[r], ML_DEVICE, DT_INT32, rank_counts[r]);
@@ -205,17 +221,70 @@ void AllRequestWorkFunction(int global_rank,
                                                     ML_DEVICE,
                                                     DT_FLOAT,
                                                     rank_counts[r] * (size_t) embedding_dim);
+
+    }
+    for (int i = 0; i < global_node_count; i++) {
+      int r = i;
+      node_raw_tensors[r] = MakeNotOwnedTensor(rank_raw_ptr + node_offsets[r], ML_DEVICE, DT_INT32, node_counts[r]);
+      node_walked_tensors[r] =
+          MakeNotOwnedTensor(rank_walked_ptr + node_offsets[r], ML_DEVICE, DT_INT32, node_counts[r]);
+      node_header_tensors[r] = MakeNotOwnedTensor(&merge_headers[r], ML_HOST, DT_INT8, sizeof(MergeHeader));
+      merge_headers[r].response_data_count = 1;
+
+      size_t raw_tensor_offset = 0;
+      size_t walked_tensor_offset = 0;
+      for (int lr = 0; lr < ranks_per_node; lr++) {
+        size_t rank_count = rank_counts[lr + i * ranks_per_node];
+        merge_headers[r].ranks_info[lr].request_offset[0] = raw_tensor_offset * sizeof(int);
+        merge_headers[r].ranks_info[lr].request_size[0] = rank_count * sizeof(int);
+        merge_headers[r].ranks_info[lr].response_offset[0] = walked_tensor_offset * sizeof(int);
+        merge_headers[r].ranks_info[lr].response_size[0] = rank_count * sizeof(int);
+        raw_tensor_offset += rank_count;
+        walked_tensor_offset += rank_count;
+      }
+      merge_headers[r].response_info[0].location = ML_DEVICE;
+      merge_headers[r].response_info[0].dtype = DT_INT32;
+      merge_headers[r].response_info[0].data_size = walked_tensor_offset * sizeof(int);
+    }
+    for (int nr = 0; nr < global_node_count; nr++) {
+      int r = nr * ranks_per_node + local_rank;
       walk_request_handles[r].request_ =
-          random_walk_runner->MakeRandomWalkRequest(allocator->ToMemoryContext(rank_raw_tensors[r]), r);
+          random_walk_runner->MakeRandomWalkRequest(allocator->ToMemoryContext(node_raw_tensors[nr]),
+                                                    r);
+      walk_request_handles[r].request_->memory_contexts[1] = allocator->ToMemoryContext(node_header_tensors[nr]);
+      walk_request_handles[r].request_->meta.data_sizes[1] = sizeof(MergeHeader);
+      walk_request_handles[r].request_->meta.data_types[1] = DT_INT8;
+      walk_request_handles[r].request_->meta.locations[1] = ML_HOST;
+      walk_request_handles[r].request_->meta.valid_data_count++;
+      walk_request_handles[r].request_->meta.merged_flag = 1;
+      walk_request_handles[r].response_ = CreateAsyncReqRes();
+      walk_request_handles[r].response_->memory_contexts[0] = allocator->ToMemoryContext(node_walked_tensors[nr]);
+      async_communicator->PutRequestAsync(&walk_request_handles[r]);
+    }
+    for (int nr = 0; nr < global_node_count; nr++) {
+      int r = nr * ranks_per_node + local_rank;
+      walk_request_handles[r].Wait();
+      allocator->FreeReqRes(walk_request_handles[r].response_);
+      walk_request_handles[r].response_ = nullptr;
+    }
+#if 0
+    for (int i = 0; i < global_size; i++) {
+      int r = rand_idx_mapping[i];
+      walk_request_handles[r].request_ =
+          random_walk_runner->MakeRandomWalkRequestWithPara(allocator->ToMemoryContext(rank_raw_tensors[r]),
+                                                            allocator->ToMemoryContext(int_para_tensor),
+                                                            r);
       walk_request_handles[r].response_ = CreateAsyncReqRes();
       walk_request_handles[r].response_->memory_contexts[0] = allocator->ToMemoryContext(rank_walked_tensors[r]);
       async_communicator->PutRequestAsync(&walk_request_handles[r]);
     }
+
     for (int r = 0; r < global_size; r++) {
       walk_request_handles[r].Wait();
       allocator->FreeReqRes(walk_request_handles[r].response_);
       walk_request_handles[r].response_ = nullptr;
     }
+#endif
     CheckNextRandomWalkId(rank_raw_ptr, vertex_count, rank_walked_ptr, stream);
 
     std::shuffle(rand_idx_mapping.begin(), rand_idx_mapping.end(), perm_gen);
@@ -305,7 +374,9 @@ int main(int argc, char **argv) {
   global_node_count = config.GetNodeCount();
   ranks_per_node = config.GetRanksPerNode();
 
-  IbInit();
+  if (global_node_count > 1) {
+    IbInit();
+  }
   EnableAllPeerAccess();
 
   int local_size = ranks_per_node;
@@ -322,7 +393,9 @@ int main(int argc, char **argv) {
   PrintRefCounts();
   PrintReqResCount();
 
-  IbDeInit();
+  if (global_node_count > 1) {
+    IbDeInit();
+  }
 
   return 0;
 }

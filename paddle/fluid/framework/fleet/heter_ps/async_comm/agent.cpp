@@ -31,6 +31,27 @@ Agent::Agent(Partitioner *partitioner, Config *config) :
 }
 Agent::~Agent() {
 }
+static bool SupportGPUDirectRDMA(struct ibv_pd *pd) {
+  void* cuda_ptr = nullptr;
+  const size_t buf_size = 128;
+  CUDA_CHECK(cudaMalloc(&cuda_ptr, 128));
+  auto* ib_mr = TryRegisterIbMr(pd, cuda_ptr, buf_size);
+  bool support_gdr = ib_mr != nullptr;
+  if (support_gdr) {
+    DeRegIbMr(ib_mr);
+  } else {
+    void* cpu_ptr = malloc(buf_size);
+    ib_mr = TryRegisterIbMr(pd, cuda_ptr, buf_size);
+    if (ib_mr == nullptr) {
+      LOG_FATAL("CPU RDMA is also not supported!");
+    } else {
+      DeRegIbMr(ib_mr);
+    }
+    free(cpu_ptr);
+  }
+  CUDA_CHECK(cudaFree(cuda_ptr));
+  return support_gdr;
+}
 void Agent::CreateResources() {
   recv_fifo_fd_ = CreateFifo(GetAgentCopyFifoName("agent_recv",
                                                   partitioner_->GetNodeID(),
@@ -43,13 +64,21 @@ void Agent::CreateResources() {
   auto *pd = ib_local_context_.pd;
   auto *cq = ib_local_context_.default_cq;
 
+  use_gpu_direct_rdma_ = SupportGPUDirectRDMA(ib_local_context_.pd);
+
   // allocate register memory
   size_t all_reg_mem_size = kRegBufferSize * kRegBufferCount * partitioner_->GetNodeCount();
   int old_dev_id;
   CUDA_CHECK(cudaGetDevice(&old_dev_id));
   CUDA_CHECK(cudaSetDevice(config_->agent_local_rank[partitioner_->GetLocalRank()]));
-  CUDA_CHECK(cudaMalloc(reinterpret_cast<void **>(&send_reg_mem_), all_reg_mem_size));
-  CUDA_CHECK(cudaMalloc(reinterpret_cast<void **>(&recv_reg_mem_), all_reg_mem_size));
+  if (use_gpu_direct_rdma_) {
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void **>(&send_reg_mem_), all_reg_mem_size));
+    CUDA_CHECK(cudaMalloc(reinterpret_cast<void **>(&recv_reg_mem_), all_reg_mem_size));
+  } else {
+    LOG_WARN("GPU Direct RDMA is not supported, degrading to CPU RDMA, performance may suffer!");
+    CUDA_CHECK(cudaMallocHost(reinterpret_cast<void **>(&send_reg_mem_), all_reg_mem_size));
+    CUDA_CHECK(cudaMallocHost(reinterpret_cast<void **>(&recv_reg_mem_), all_reg_mem_size));
+  }
   CUDA_CHECK(cudaSetDevice(old_dev_id));
   credit_reg_mem_ = (char *) malloc(kCreditRegMemSize);
   size_t all_imm_size = 2 * kRegBufferCount * partitioner_->GetNodeCount() * sizeof(int64_t);
@@ -110,8 +139,13 @@ void Agent::DestroyResources() {
   int old_dev_id;
   CUDA_CHECK(cudaGetDevice(&old_dev_id));
   CUDA_CHECK(cudaSetDevice(config_->agent_local_rank[partitioner_->GetLocalRank()]));
-  CUDA_CHECK(cudaFree(send_reg_mem_));
-  CUDA_CHECK(cudaFree(recv_reg_mem_));
+  if (use_gpu_direct_rdma_) {
+    CUDA_CHECK(cudaFree(send_reg_mem_));
+    CUDA_CHECK(cudaFree(recv_reg_mem_));
+  } else {
+    CUDA_CHECK(cudaFreeHost(send_reg_mem_));
+    CUDA_CHECK(cudaFreeHost(recv_reg_mem_));
+  }
   CUDA_CHECK(cudaSetDevice(old_dev_id));
   free(credit_reg_mem_);
   free(imm_mem_);
@@ -165,6 +199,7 @@ int Agent::GetBufferIndex(char *ptr, bool is_recv) {
   char *reg_buffer = is_recv ? recv_reg_mem_ : send_reg_mem_;
   int64_t ptr_diff = ptr - reg_buffer;
   BOOL_CHECK(ptr_diff >= 0 && 0 < partitioner_->GetNodeCount() * kRegBufferSize * kRegBufferCount - ptr_diff);
+  // BOOL_CHECK(ptr_diff >= 0 && ptr_diff < partitioner_->GetNodeCount() * kRegBufferSize * kRegBufferCount);
   BOOL_CHECK(ptr_diff % kRegBufferSize == 0);
   return ptr_diff / kRegBufferSize;
 }
@@ -266,8 +301,8 @@ void Agent::PollCQThreadFunc() {
       // 3 types of completion event may be received
       // (completion event of add credit from send side is not used, because only imm is used in this case)
       if (wc.opcode != IBV_WC_RDMA_WRITE && wc.opcode != IBV_WC_SEND && wc.opcode != IBV_WC_RECV_RDMA_WITH_IMM) {
-            LOG_FATAL("wc.opcode=%d, not IBV_WC_RDMA_WRITE(%d), IBV_WC_SEND(%d) or IBV_WC_RECV_RDMA_WITH_IMM(%d)",
-                      wc.opcode, IBV_WC_RDMA_WRITE, IBV_WC_SEND, IBV_WC_RECV_RDMA_WITH_IMM);
+        LOG_FATAL("wc.opcode=%d, not IBV_WC_RDMA_WRITE(%d), IBV_WC_SEND(%d) or IBV_WC_RECV_RDMA_WITH_IMM(%d)",
+                  wc.opcode, IBV_WC_RDMA_WRITE, IBV_WC_SEND, IBV_WC_RECV_RDMA_WITH_IMM);
       }
       BOOL_CHECK(wc.opcode == IBV_WC_RDMA_WRITE || wc.opcode == IBV_WC_SEND || wc.opcode == IBV_WC_RECV_RDMA_WITH_IMM);
       if (wc.status != IBV_WC_SUCCESS) {

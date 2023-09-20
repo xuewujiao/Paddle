@@ -18,6 +18,7 @@ class AsyncReqRes;
 class AsyncCommunicator;
 typedef std::function<void(AsyncReqRes*, AsyncReqRes*)> ProcessFuncType;
 typedef std::function<void(AsyncReqRes*)> ProcessCallBackFuncType;
+typedef std::function<void(AsyncReqRes**, AsyncReqRes**, size_t)> BatchedProcessFuncType;
 
 struct FunctionInfo {
   int16_t function_id = -1;
@@ -25,6 +26,8 @@ struct FunctionInfo {
   int16_t output_data_count = 0;
   bool need_response = false;
   ProcessFuncType func_ = nullptr;
+  int max_batchsize = 1;
+  BatchedProcessFuncType batched_func_ = nullptr;
   int8_t input_locations[MAX_VEC_COUNT] = {};
   int8_t output_locations[MAX_VEC_COUNT] = {};
 };

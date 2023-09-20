@@ -21,7 +21,7 @@ struct Header {
 };
 
 constexpr size_t kRegBufferSize = 1 << 22;
-constexpr int kRegBufferCount = 4;
+constexpr int kRegBufferCount = 8;
 constexpr size_t kDataSizePerBuffer = kRegBufferSize - sizeof(Header);
 
 struct AgentCopyMessage {

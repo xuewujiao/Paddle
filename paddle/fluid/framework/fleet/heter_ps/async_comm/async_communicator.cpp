@@ -106,33 +106,48 @@ AsyncCommunicator::~AsyncCommunicator() {
 
 void AsyncCommunicator::CreateResources() {
   intra_node_communicator_ = std::make_unique<IntraNodeCommunicator>(partitioner_, allocator_);
-  inter_node_communicator_ = std::make_unique<InterNodeCommunicator>(partitioner_, allocator_, config_);
-  sideband_communicator_ = std::make_unique<SideBandCommunicator>(partitioner_, config_->sideband_server_name, config_->sideband_server_port);
+  merged_handler_ = std::make_unique<MergedHandler>(partitioner_, allocator_, this);
+  if (partitioner_->GetNodeCount() > 1) {
+    inter_node_communicator_ = std::make_unique<InterNodeCommunicator>(partitioner_, allocator_, config_);
+  }
+  sideband_communicator_ = std::make_unique<SideBandCommunicator>(partitioner_,
+                                                                  config_->sideband_server_name,
+                                                                  config_->sideband_server_port);
   sideband_communicator_->Start();
   intra_node_communicator_->SetAsyncCommunicator(this);
   intra_node_communicator_->CreateResources();
-  inter_node_communicator_->SetAsyncCommunicator(this);
-  inter_node_communicator_->CreateResources();
+  if (partitioner_->GetNodeCount() > 1) {
+    inter_node_communicator_->SetAsyncCommunicator(this);
+    inter_node_communicator_->CreateResources();
+  }
   runner_registry_->Traverse([this](RunnerBase* runner_base) {
     runner_base->SetAsyncCommunicator(this);
   });
   sideband_communicator_->Barrier();
   intra_node_communicator_->ConnectFifos();
   sideband_communicator_->Barrier();
-  inter_node_communicator_->Connect();
+  if (partitioner_->GetNodeCount() > 1) {
+    inter_node_communicator_->Connect();
+  }
   sideband_communicator_->Stop();
 }
 
 void AsyncCommunicator::DestroyResources() {
   intra_node_communicator_->DestroyResources();
   intra_node_communicator_.reset();
-  inter_node_communicator_->DestroyResources();
-  inter_node_communicator_.reset();
+  if (partitioner_->GetNodeCount() > 1) {
+    inter_node_communicator_->DestroyResources();
+    inter_node_communicator_.reset();
+  }
+  merged_handler_.reset();
 }
 
 void AsyncCommunicator::Start() {
+  merged_handler_->Start();
   intra_node_communicator_->Start();
-  inter_node_communicator_->Start();
+  if (partitioner_->GetNodeCount() > 1) {
+    inter_node_communicator_->Start();
+  }
 }
 
 void AsyncCommunicator::PutRequestAsync(RequestHandle *request_handle, bool need_notify_oneway_req) {
@@ -142,10 +157,12 @@ void AsyncCommunicator::PutRequestAsync(RequestHandle *request_handle, bool need
     RunnerBase *runner = runner_registry_->Find(request->meta.runner_id);
     need_response = runner->FuncNeedResponse(&request->meta);
   }
-  if (!need_response && need_notify_oneway_req) {
-    request->to_complete_oneway_handle = request_handle;
-  }
   request_handle->SetStarted();
+  if (!need_response && need_notify_oneway_req) {
+    request->complete_cb = [request_handle]() {
+      request_handle->SetCompleted();
+    };
+  }
   if (need_response) {
     BOOL_CHECK(request_handle->response_ != nullptr);
     std::unique_lock<std::mutex> mlock(mutex_);
@@ -201,8 +218,12 @@ void AsyncCommunicator::WaitStopped() {
   BOOL_CHECK(pending_mapping_.empty());
   intra_node_communicator_->Stop();
   intra_node_communicator_->WaitStopped();
-  inter_node_communicator_->Stop();
-  inter_node_communicator_->WaitStopped();
+  if (partitioner_->GetNodeCount() > 1) {
+    inter_node_communicator_->Stop();
+    inter_node_communicator_->WaitStopped();
+  }
+  merged_handler_->Stop();
+  merged_handler_->WaitStopped();
 }
 
 void AsyncCommunicator::OnReceiveRequest(AsyncReqRes* request) {
@@ -211,6 +232,10 @@ void AsyncCommunicator::OnReceiveRequest(AsyncReqRes* request) {
       runner->Process(request, nullptr);
     });
     allocator_->FreeReqRes(request);
+    return;
+  }
+  if (IsMergedMeta(&request->meta)) {
+    merged_handler_->PutRequestAsync(request);
     return;
   }
   RunnerBase* runner = runner_registry_->Find(request->meta.runner_id);
@@ -223,6 +248,10 @@ void AsyncCommunicator::OnReceiveRequest(AsyncReqRes* request) {
 }
 
 void AsyncCommunicator::OnReceiveResponse(AsyncReqRes *response) {
+  if (IsMergedSplittedMeta(&response->meta)) {
+    merged_handler_->OnReceiveResponse(response);
+    return;
+  }
   RequestHandle* request_handle = nullptr;
   {
     std::unique_lock<std::mutex> mlock(mutex_);
@@ -238,12 +267,16 @@ void AsyncCommunicator::OnReceiveResponse(AsyncReqRes *response) {
 AsyncReqRes* AsyncCommunicator::OnRunnerGetResponse(AsyncReqRes* request) {
   AsyncReqRes* response = nullptr;
   if (IsLocalGPU(&request->meta)) {
-    // [Optimization] Local GPU can just pick response from pending_map_ to save one copy.
-    std::unique_lock<std::mutex> mlock(mutex_);
-    auto it = pending_mapping_.find(request->meta.request_id);
-    BOOL_CHECK(it != pending_mapping_.end());
-    auto* request_handle = it->second;
-    response = request_handle->response_;
+    if (IsMergedSplittedMeta(&request->meta)) {
+      return merged_handler_->OnRunnerGetResponse(&request->meta);
+    } else {
+      // [Optimization] Local GPU can just pick response from pending_map_ to save one copy.
+      std::unique_lock<std::mutex> mlock(mutex_);
+      auto it = pending_mapping_.find(request->meta.request_id);
+      BOOL_CHECK(it != pending_mapping_.end());
+      auto *request_handle = it->second;
+      response = request_handle->response_;
+    }
   }
   if (response == nullptr) {
     response = CreateAsyncReqRes();
@@ -253,9 +286,13 @@ AsyncReqRes* AsyncCommunicator::OnRunnerGetResponse(AsyncReqRes* request) {
 }
 
 AsyncReqRes* AsyncCommunicator::OnReceiveGetResponse(Meta* meta) {
-  std::unique_lock<std::mutex> mlock(mutex_);
-  auto it = pending_mapping_.find(meta->request_id);
-  BOOL_CHECK(it != pending_mapping_.end());
-  auto* request_handle = it->second;
-  return request_handle->response_;
+  if (IsMergedSplittedMeta(meta)) {
+    return merged_handler_->OnReceiveGetResponse(meta);
+  } else {
+    std::unique_lock<std::mutex> mlock(mutex_);
+    auto it = pending_mapping_.find(meta->request_id);
+    BOOL_CHECK(it != pending_mapping_.end());
+    auto *request_handle = it->second;
+    return request_handle->response_;
+  }
 }

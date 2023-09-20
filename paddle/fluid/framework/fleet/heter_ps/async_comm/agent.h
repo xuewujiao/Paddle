@@ -1,7 +1,5 @@
 #pragma once
 
-#pragma once
-
 #include <atomic>
 #include <condition_variable>
 #include <memory>
@@ -123,4 +121,6 @@ class Agent {
   std::atomic<bool> sender_exited_{};
   std::atomic<int> uncompleted_data_sends_{};
   std::atomic<int> total_credit_count_{};
+
+  bool use_gpu_direct_rdma_ = true;
 };
