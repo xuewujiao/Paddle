@@ -977,6 +977,51 @@ class InMemoryDataset(DatasetBase):
         since="2.0.0",
         update_to="paddle.distributed.InMemoryDataset.get_memory_data_size",
     )
+    
+    def get_max_memory_data_size(self, fleet=None):
+        """
+        Get memory data size, user can call this function to know the num
+        of ins in all workers after load into memory.
+
+        Note:
+            This function may cause bad performance, because it has barrier
+
+        Args:
+            fleet(Fleet): Fleet Object.
+
+        Returns:
+            The size of memory data.
+
+        Examples:
+            .. code-block:: python
+
+              # required: skiptest
+              import paddle.fluid as fluid
+              from paddle.fluid.incubate.fleet.parameter_server.pslib import fleet
+              dataset = fluid.DatasetFactory().create_dataset("InMemoryDataset")
+              filelist = ["a.txt", "b.txt"]
+              dataset.set_filelist(filelist)
+              dataset.load_into_memory()
+              print dataset.get_memory_data_size(fleet)
+
+        """
+        import numpy as np
+
+        local_data_size = self.dataset.get_max_memory_data_size()
+        local_data_size = np.array([local_data_size])
+        if fleet is not None:
+            global_data_size = local_data_size * 0
+            fleet._role_maker.all_reduce_worker(
+                local_data_size, global_data_size
+            )
+            return global_data_size[0]
+        return local_data_size[0]
+
+    @deprecated(
+        since="2.0.0",
+        update_to="paddle.distributed.InMemoryDataset.get_shuffle_data_size",
+    )
+    
     def get_memory_data_size(self, fleet=None):
         """
         Get memory data size, user can call this function to know the num

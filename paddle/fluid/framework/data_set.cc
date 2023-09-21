@@ -463,6 +463,52 @@ GetReadThreadPool(int thread_num) {
   }
   return thread_pools;
 }
+
+// load data into memory, Dataset hold this memory,
+// which will later be fed into readers' channel
+template <typename T>
+void DatasetImpl<T>::LoadEmptyIntoMemory() {
+	VLOG(3) << "DatasetImpl<T>::LoadIntoMemory() begin";
+	platform::Timer timeline;
+	timeline.Start();
+	if (gpu_graph_mode_) {
+	  VLOG(1) << "in gpu_graph_mode";
+#ifdef PADDLE_WITH_HETERPS
+	  for (size_t i = 0; i < readers_.size(); i++) {
+	      readers_[i]->SetGpuGraphMode(gpu_graph_mode_);
+	      readers_[i]->SetSkipTrain(1);
+	      readers_[i]->SetEpochFinish();
+	  }
+	  uint64_t zerokey = 0;
+	  gpu_graph_total_keys_.emplace_back(zerokey);
+	  VLOG(0) << "add zero key in multi node";
+	    // for fennel mode
+	  keys_vec_.resize(thread_num_);
+	  ranks_vec_.resize(thread_num_);
+	  keys2rank_tables_.resize(thread_num_);
+	  if (FLAGS_graph_edges_split_mode == "fennel" ||
+	            FLAGS_query_dest_rank_by_multi_node) {
+	      for (int i = 0; i < thread_num_; i++) {
+	        keys_vec_[i] = readers_[i]->GetHostVec();
+	        ranks_vec_[i] = readers_[i]->GetHostRanks();
+	        keys2rank_tables_[i] = readers_[i]->GetKeys2RankTable();
+	      }
+	      keys_vec_[0]->push_back(zerokey);
+	      if (readers_[0]->IsTrainMode() || readers_[0]->GetSageMode()) {
+	        ranks_vec_[0]->push_back(0);
+	      }
+	    }
+#endif
+  }
+  input_channel_->Close();
+  int64_t in_chan_size = input_channel_->Size();
+  input_channel_->SetBlockSize(in_chan_size / thread_num_ + 1);
+  timeline.Pause();
+  VLOG(3) << "DatasetImpl<T>::LoadEmptyIntoMemory() end"
+	   << ", memory data size=" << input_channel_->Size()
+	   << ", cost time=" << timeline.ElapsedSec() << " seconds";
+}
+
 // load data into memory, Dataset hold this memory,
 // which will later be fed into readers' channel
 template <typename T>

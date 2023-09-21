@@ -976,6 +976,7 @@ class GraphDataGenerator {
   bool GetMultiNodeMode() { return conf_.is_multi_node; }
   bool GetTrainState() { return conf_.gpu_graph_training; }
   void ResetEpochFinish() { epoch_finish_ = false; }
+  void SetEpochFinish() { epoch_finish_ = true; }
   void reset_pass_end() { pass_end_ = 0; }
   void ClearSampleState();
   void DumpWalkPath(std::string dump_path, size_t dump_rate);
@@ -1161,6 +1162,11 @@ class DataFeed {
   virtual void SetGpuGraphMode(int gpu_graph_mode) {
     gpu_graph_mode_ = gpu_graph_mode;
   }
+
+  virtual void SetSkipTrain(int skip_train) {
+    is_skip_train_ = skip_train;
+  }
+
   virtual void SetFileListMutex(std::mutex* mutex) {
     mutex_for_pick_file_ = mutex;
   }
@@ -1250,6 +1256,10 @@ class DataFeed {
 
   virtual void ResetEpochFinish() {
     gpu_graph_data_generator_.ResetEpochFinish();
+  }
+
+  virtual void SetEpochFinish() {
+    gpu_graph_data_generator_.SetEpochFinish();
   }
 
   virtual void DoWalkandSage() {
@@ -1343,6 +1353,7 @@ class DataFeed {
   // The input type of pipe reader, 0 for one sample, 1 for one batch
   int input_type_;
   int gpu_graph_mode_ = 0;
+  int is_skip_train_ = 0;
 #if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
   GraphDataGenerator gpu_graph_data_generator_;
 #endif

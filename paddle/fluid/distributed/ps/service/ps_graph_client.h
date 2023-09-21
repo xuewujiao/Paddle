@@ -13,6 +13,7 @@
 #if defined(PADDLE_WITH_GLOO) && defined(PADDLE_WITH_GPU_GRAPH)
 #pragma once
 #include "paddle/fluid/distributed/ps/service/ps_local_client.h"
+#include "paddle/fluid/distributed/ps/table/common_table.h"
 #include "paddle/fluid/framework/archive.h"
 #include "paddle/fluid/framework/barrier.h"
 #include "paddle/fluid/framework/threadpool.h"
@@ -23,6 +24,8 @@ namespace paddle {
 // };
 namespace distributed {
 namespace simple {
+const int max_barrier_table_num = 5;
+
 struct RpcMessageHead;
 };
 
@@ -65,6 +68,8 @@ class PsGraphClient : public PsLocalClient {
       const std::vector<std::unordered_map<uint64_t, uint32_t>> &keys2rank_vec,
       const uint16_t &dim_id = 0);
 
+  virtual void Barrier(uint32_t table_id);
+
   virtual std::shared_ptr<SparseShardValues> TakePassSparseReferedValues(
       const size_t &table_id, const uint16_t &pass_id, const uint16_t &dim_id);
 
@@ -73,12 +78,16 @@ class PsGraphClient : public PsLocalClient {
                        paddle::framework::BinaryArchive &iar);  // NOLINT
   void request_key_handler(const simple::RpcMessageHead &head,
                                      paddle::framework::BinaryArchive &iar);
+  void request_barrier(const simple::RpcMessageHead &head,
+                                     paddle::framework::BinaryArchive &iar);
   SparseTableInfo &get_table_info(const size_t &table_id);
 
  private:
   std::map<uint32_t, std::shared_ptr<SparseTableInfo>> _table_info;
   void *_service = nullptr;
   void *_partition_key_service = nullptr;
+  void * _barrier_service = nullptr;
+  std::vector<std::shared_ptr<EasyBarrierTable>> _barrier_table;
   int _rank_id = 0;
   int _rank_num = 0;
   std::vector<std::shared_ptr<framework::ThreadPool>> _thread_pools;
