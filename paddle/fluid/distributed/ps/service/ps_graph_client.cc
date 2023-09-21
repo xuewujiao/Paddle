@@ -36,6 +36,15 @@ PsGraphClient::PsGraphClient() {
              paddle::framework::BinaryArchive &iar) {
         request_key_handler(head, iar);
       });
+  _barrier_table.resize(simple::max_barrier_table_num);
+  for (int i=0; i < simple::max_barrier_table_num; i++) {
+    _barrier_table[i].reset(new EasyBarrierTable(_rank_num));
+  }
+  _barrier_service = simple::global_rpc_server().add_service(
+	      [this](const simple::RpcMessageHead &head,
+	             paddle::framework::BinaryArchive &iar) {
+	        request_barrier(head, iar);
+  });
   VLOG(0) << "PsGraphClient rank id=" << _rank_id << ", rank num=" << _rank_num;
 }
 PsGraphClient::~PsGraphClient() {}
@@ -71,6 +80,12 @@ void PsGraphClient::FinalizeWorker() {
     _partition_key_service = nullptr;
     fprintf(stdout, "FinalizeWorker remove rpc partition_key_service");
   }
+  if (_barrier_service != nullptr) {
+    simple::global_rpc_server().remove_service(_barrier_service);
+    _partition_key_service = nullptr;
+    fprintf(stdout, "FinalizeWorker remove rpc barrier_service");
+  }
+
   simple::global_rpc_server().finalize();
 }
 // add maco
@@ -260,6 +275,26 @@ void PsGraphClient::FinalizeWorker() {
   return done();
 }
 
+void PsGraphClient::Barrier(uint32_t table_id) {
+  paddle::framework::BinaryArchive ar;
+  ar.PutRaw(table_id);
+  paddle::framework::WaitGroup wg;
+  wg.add(1);
+  PADDLE_ENFORCE_EQ(
+               (table_id < simple::max_barrier_table_num),
+               true,
+               phi::errors::PreconditionNotMet(
+                   "barrier id %d should less than %d ", table_id, simple::max_barrier_table_num));
+  simple::global_rpc_server().send_request_consumer(
+    _rank_num - 1,
+    _rank_id,
+    _barrier_service,
+	ar,
+	  [this, &wg](const simple::RpcMessageHead & /**head*/,
+	      framework::BinaryArchive & /**ar*/) { wg.done(); });
+  wg.wait();
+}
+
 // server pull remote keys values
 void PsGraphClient::request_handler(const simple::RpcMessageHead &head,
                                     paddle::framework::BinaryArchive &iar) {
@@ -358,6 +393,21 @@ void PsGraphClient::request_handler(const simple::RpcMessageHead &head,
   // send response
   paddle::framework::BinaryArchive oar;
   simple::global_rpc_server().send_response(head, oar);
+}
+
+// server for barrier
+void PsGraphClient::request_barrier(
+    const simple::RpcMessageHead &head, paddle::framework::BinaryArchive &iar) {
+	uint32_t id = 0;
+    iar.ReadBack(&id, sizeof(uint32_t));
+    PADDLE_ENFORCE_EQ(
+              (id < simple::max_barrier_table_num),
+              true,
+              phi::errors::PreconditionNotMet(
+                  "barrier id %d should less than %d ", id, simple::max_barrier_table_num));
+    paddle::framework::BinaryArchive oar;
+    _barrier_table[id]->Barrier(head.client_id);
+    simple::global_rpc_server().send_response(head, oar);
 }
 
 // server pull remote keys (only key)

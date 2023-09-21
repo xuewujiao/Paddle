@@ -109,5 +109,22 @@ class BarrierTable : public Table {
   std::atomic<bool> exit_;
   std::unordered_map<uint32_t, std::shared_ptr<Table>> *table_map_;
 };
+
+class EasyBarrierTable {
+ public:
+  EasyBarrierTable(int n);
+  virtual ~EasyBarrierTable() {};
+  // only for barrier
+  // 0: send_barrier 1: recv_barrier 2: complete
+  void Barrier(const uint32_t trainer_id);
+
+ private:
+  std::mutex mutex_;
+  std::condition_variable trainer_wait_;
+  std::set<uint64_t> trainer_ids_;
+  std::set<uint64_t> trainer_all_;
+  std::atomic<int> trigger_;
+};
+
 }  // namespace distributed
 }  // namespace paddle
