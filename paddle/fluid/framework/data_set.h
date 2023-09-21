@@ -116,6 +116,8 @@ class Dataset {
   virtual void RegisterClientToClientMsgHandler() = 0;
   // load all data into memory
   virtual void LoadIntoMemory() = 0;
+  // load all data into memory
+  virtual void LoadEmptyIntoMemory() {;};
   // load all data into memory in async mode
   virtual void PreLoadIntoMemory() = 0;
   // wait async load done
@@ -133,6 +135,10 @@ class Dataset {
   virtual void DestroyReaders() = 0;
   // get memory data size
   virtual int64_t GetMemoryDataSize() = 0;
+  // set max memory data size
+  virtual void SetMaxMemoryDataSize(int64_t) = 0;
+  // get max memory data size
+  virtual int64_t GetMaxMemoryDataSize() = 0;
   // get memory data size in input_pv_channel_
   virtual int64_t GetPvDataSize() = 0;
   // get shuffle data size
@@ -242,6 +248,7 @@ class DatasetImpl : public Dataset {
   virtual void CreateChannel();
   virtual void RegisterClientToClientMsgHandler();
   virtual void LoadIntoMemory();
+  virtual void LoadEmptyIntoMemory();
   virtual void PreLoadIntoMemory();
   virtual void WaitPreLoadDone();
   virtual void ReleaseMemory();
@@ -306,6 +313,12 @@ class DatasetImpl : public Dataset {
 
   virtual void SetPassId(uint32_t pass_id) { pass_id_ = pass_id; }
   virtual uint32_t GetPassID() { return pass_id_; }
+  virtual void SetMaxMemoryDataSize(int64_t max_mem_data) {
+    total_ins_num_max_ = max_mem_data;
+  }
+  virtual int64_t GetMaxMemoryDataSize() {
+      return total_ins_num_max_;
+  }
 
  protected:
   virtual int ReceiveFromClient(int msg_type,
@@ -376,6 +389,7 @@ class DatasetImpl : public Dataset {
   // vector: refer to multi gpu card.
   std::vector<std::shared_ptr<HashTable<uint64_t, uint32_t>>> keys2rank_tables_;
   uint32_t pass_id_ = 0;
+  int64_t total_ins_num_max_ = 0;
 };
 
 // use std::vector<MultiSlotType> or Record as data type

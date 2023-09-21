@@ -1094,12 +1094,8 @@ void PSGPUWrapper::MergePull(std::shared_ptr<HeterContext> gpu_task) {
   platform::Timer timeline;
   timeline.Start();
   // barrier
-  auto gloo_wrapper = paddle::framework::GlooWrapper::GetInstance();
-  if (!gloo_wrapper->IsInitialized()) {
-    VLOG(0) << "GLOO is not inited";
-    gloo_wrapper->Init();
-  }
-  gloo_wrapper->Barrier();
+  fleet_ptr_->worker_ptr_->Barrier(BID_MERGEPULL);
+
   timeline.Pause();
 
   auto barrier_span = timeline.ElapsedSec();
@@ -1306,12 +1302,8 @@ void PSGPUWrapper::MergeKeys(std::shared_ptr<HeterContext> gpu_task) {
   platform::Timer timeline;
   timeline.Start();
   // barrier
-  auto gloo_wrapper = paddle::framework::GlooWrapper::GetInstance();
-  if (!gloo_wrapper->IsInitialized()) {
-    VLOG(0) << "GLOO is not inited";
-    gloo_wrapper->Init();
-  }
-  gloo_wrapper->Barrier();
+  fleet_ptr_->worker_ptr_->Barrier(BID_MERGEKEY);
+
   timeline.Pause();
 
   auto barrier_span = timeline.ElapsedSec();
@@ -1934,14 +1926,31 @@ void PSGPUWrapper::LoadIntoMemory(bool is_shuffle) {
   platform::Timer timer;
   VLOG(3) << "Begin LoadIntoMemory(), dataset[" << dataset_ << "]";
   timer.Start();
-  dataset_->LoadIntoMemory();
+  if (local_end_ && !global_end_) {
+	VLOG(0) << "generate a empty pass";
+    dataset_->LoadEmptyIntoMemory();
+  }
+  else {
+    dataset_->LoadIntoMemory();
+  }
   timer.Pause();
   int64_t total_ins_num = dataset_->GetMemoryDataSize();
   VLOG(1) << "LoadIntoMemory cost: " << timer.ElapsedSec()
           << "s, total ins num:" << total_ins_num << ", dataset[" << dataset_
           << "]";
   gpu_graph_mode_ = dataset_->GetGpuGraphMode();
-  if (total_ins_num == 0) {
+  int64_t total_ins_num_max = total_ins_num;
+
+  if (node_size_ > 1  && FLAGS_enable_async_comm) {
+	auto gloo_wrapper = paddle::framework::GlooWrapper::GetInstance();
+	std::vector<int64_t> send_buf;
+	send_buf.push_back(total_ins_num_max);
+	auto recv_buf = gloo_wrapper->AllReduce(send_buf, "max");
+	total_ins_num_max = recv_buf[0];
+	dataset_->SetMaxMemoryDataSize(total_ins_num_max);
+  }
+
+  if (total_ins_num_max == 0) {
     VLOG(0) << "GetMemoryDataSize == 0";
     return;
   }
@@ -1956,6 +1965,28 @@ void PSGPUWrapper::LoadIntoMemory(bool is_shuffle) {
     AddSparseKeys();
   } else if (hbm_sparse_table_initialized_ == false) {
     SparseTableToHbm();
+  }
+  if (node_size_ > 1  && FLAGS_enable_async_comm) {
+	int64_t is_local_end = 0;
+    if (!infer_mode_) {
+    	is_local_end = int64_t(dataset_->GetEpochFinish());
+    } else {
+    	is_local_end = int64_t(total_ins_num == 0);
+    }
+    auto gloo_wrapper = paddle::framework::GlooWrapper::GetInstance();
+    std::vector<int64_t> send_buf;
+    send_buf.push_back(is_local_end);
+    auto recv_buf = gloo_wrapper->AllReduce(send_buf, "min");
+    auto is_global_end = recv_buf[0];
+    if (is_global_end) {
+    	local_end_ = 0;
+    	global_end_ = 0;
+    } else {
+      local_end_ = is_local_end;
+	  global_end_ = is_global_end;
+    }
+    VLOG(0) <<  "is_local_end is " << is_local_end << " is_global_end is " << is_global_end << "local_end_ is " << local_end_ << " global_end_ is " << global_end_;
+
   }
 #else
   AddSparseKeys();
@@ -2018,6 +2049,9 @@ void PSGPUWrapper::build_pull_thread() {
     BuildPull(gpu_task);
     // merge pull
     MergePull(gpu_task);
+    if (multi_mf_dim_) {
+      divide_to_device(gpu_task);
+    }
     timer.Pause();
     VLOG(0) << "passid=" << gpu_task->pass_id_
             << ", thread BuildPull end, cost time: " << timer.ElapsedSec()
@@ -2038,9 +2072,7 @@ void PSGPUWrapper::build_task() {
   VLOG(1) << "passid=" << gpu_task->pass_id_ << ", PrepareGPUTask start.";
   platform::Timer timer;
   timer.Start();
-  if (multi_mf_dim_) {
-    divide_to_device(gpu_task);
-  } else {
+  if (!multi_mf_dim_) {
     PrepareGPUTask(gpu_task);
   }
   BuildGPUTask(gpu_task);
@@ -2072,7 +2104,7 @@ void PSGPUWrapper::BeginPass() {
   auto gloo = paddle::framework::GlooWrapper::GetInstance();
   if (gloo->Size() > 1 && FLAGS_enable_async_comm) {
       VLOG(0) << "passid=" << current_task_->pass_id_ << "start Barrier";
-      gloo->Barrier();
+      fleet_ptr_->worker_ptr_->Barrier(BID_BEGIN_PASS);
       VLOG(0) << "passid=" << current_task_->pass_id_ << "end Barrier";
   }
 
@@ -2100,7 +2132,7 @@ void PSGPUWrapper::EndPass() {
   auto gloo = paddle::framework::GlooWrapper::GetInstance();
   if (gloo->Size() > 1 && FLAGS_enable_async_comm) {
       VLOG(0) << "passid=" << current_task_->pass_id_ << "start Barrier";
-      gloo->Barrier();
+      fleet_ptr_->worker_ptr_->Barrier(BID_END_PASS);
       VLOG(0) << "passid=" << current_task_->pass_id_ << "end Barrier";
   }
   if (current_task_ == nullptr) {

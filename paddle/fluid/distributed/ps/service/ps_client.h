@@ -202,6 +202,10 @@ class PSClient {
   virtual std::future<int32_t> Barrier(size_t table_id,
                                        uint32_t barrier_type) = 0;
 
+  virtual void Barrier(uint32_t table_id) {
+	VLOG(0) << "Barrier Did not implement";
+  }
+
   virtual std::future<int32_t> PullGeoParam(size_t table_id,
                                             std::vector<float> *values,
                                             std::vector<uint64_t> *keys,

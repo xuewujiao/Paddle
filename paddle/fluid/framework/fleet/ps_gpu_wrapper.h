@@ -73,6 +73,13 @@ namespace framework {
 
 class Dataset;
 
+enum BarrierID {
+  BID_MERGEPULL = 0,
+  BID_MERGEKEY = 1, // for sparse pull and push
+  BID_BEGIN_PASS = 2,
+  BID_END_PASS = 3,
+};
+
 #ifdef PADDLE_WITH_PSLIB
 class AfsWrapper {
  public:
@@ -976,6 +983,8 @@ class PSGPUWrapper {
   int device_num_ = 8;
   uint64_t table_id_;
   int gpu_graph_mode_ = 0;
+  int64_t local_end_ = 0;
+  int64_t global_end_ = 0;
 #ifdef PADDLE_WITH_CUDA
   std::vector<ncclComm_t> inner_comms_;
   std::vector<ncclComm_t> inter_comms_;

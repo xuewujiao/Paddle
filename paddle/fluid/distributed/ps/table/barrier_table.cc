@@ -74,5 +74,37 @@ int32_t BarrierTable::SetTableMap(
   return 0;
 }
 
+EasyBarrierTable::EasyBarrierTable(int n) {
+  trigger_.store(n);
+
+  for (int x = 0; x < n; ++x) {
+    trainer_all_.insert(x);
+  }
+  VLOG(1) << "EasyBarrierTable init trigger: " << trigger_.load();
+}
+
+// 0: send_barrier 1: recv_barrier 2: complete
+void EasyBarrierTable::Barrier(const uint32_t trainer_id) {
+  std::unique_lock<std::mutex> lock(mutex_);
+  trainer_ids_.insert(trainer_id);
+
+  if (static_cast<int>(trainer_ids_.size()) < trigger_.load()) {
+    std::vector<uint32_t> diffs(trainer_all_.size());
+    auto iter = std::set_difference(trainer_all_.begin(),
+                                    trainer_all_.end(),
+                                    trainer_ids_.begin(),
+                                    trainer_ids_.end(),
+                                    diffs.begin());
+    diffs.resize(iter - diffs.begin());
+
+    auto diff = to_string<uint32_t>(diffs);
+    VLOG(1) << "still need trainers: " << diff;
+    trainer_wait_.wait(lock, [&] { return trainer_ids_.count(trainer_id) == 0; });
+  } else {
+    trainer_ids_.clear();
+    trainer_wait_.notify_all();
+  }
+}
+
 }  // namespace distributed
 }  // namespace paddle

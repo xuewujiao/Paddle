@@ -2703,7 +2703,12 @@ int SlotRecordInMemoryDataFeed::Next() {
   } else {
     VLOG(3) << "datafeed in gpu graph mode";
 #if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
-    this->batch_size_ = gpu_graph_data_generator_.GenerateBatch();
+    if (is_skip_train_) {
+       this->batch_size_ = 0;
+    }
+    else {
+       this->batch_size_ = gpu_graph_data_generator_.GenerateBatch();
+    }
 #endif
   }
 

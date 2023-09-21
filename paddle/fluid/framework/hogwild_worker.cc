@@ -1251,6 +1251,7 @@ void HogwildWorker::TrainFilesWithProfiler() {
   while (1) {
     cur_batch = device_reader_->Next();
 #if defined(PADDLE_WITH_GPU_GRAPH)
+    if(!FLAGS_enable_async_comm) {
     if (FLAGS_gpugraph_force_device_batch_num_equal) {
       if (!CheckBatchNum(cur_batch)) {
         break;
@@ -1285,6 +1286,7 @@ void HogwildWorker::TrainFilesWithProfiler() {
           break;
         }
       }
+    }
     }
 #endif
     if (cur_batch <= 0 && !infer_out_of_ins) {
@@ -1455,11 +1457,12 @@ void HogwildWorker::TrainFiles() {
   while (1) {
     cur_batch = device_reader_->Next();
 #if defined(PADDLE_WITH_GPU_GRAPH)
+    if(!FLAGS_enable_async_comm) {
     if (FLAGS_gpugraph_force_device_batch_num_equal) {
       if (!CheckBatchNum(cur_batch)) {
         break;
       }
-    } else if (train_mode && is_multi_node && !FLAGS_enable_async_comm) {
+    } else if (train_mode && is_multi_node) {
       bool sage_mode = device_reader_->GetSageMode();
       if (!sage_mode) {
         int pass_end = device_reader_->get_pass_end();
@@ -1492,6 +1495,7 @@ void HogwildWorker::TrainFiles() {
           break;
         }
       }
+    }
     }
 #endif
     if (cur_batch <= 0 && !infer_out_of_ins) {
