@@ -175,6 +175,8 @@ class Dataset {
   virtual void SetGpuGraphMode(int is_graph_mode) = 0;
   virtual int GetGpuGraphMode() = 0;
   virtual bool GetEpochFinish() = 0;
+  virtual bool GetAllEpochFinish() = 0;
+  virtual void SetAllEpochFinish(bool) = 0;
   virtual void ClearSampleState() = 0;
 
   virtual void SetPassId(uint32_t pass_id) = 0;
@@ -282,6 +284,14 @@ class DatasetImpl : public Dataset {
   virtual void SetFleetSendSleepSeconds(int seconds);
   virtual std::vector<std::string> GetSlots();
   virtual bool GetEpochFinish();
+  virtual void SetAllEpochFinish(bool is_all_epoch_finish) {
+	 all_epoch_finish_ = is_all_epoch_finish;
+  }
+
+  virtual bool GetAllEpochFinish() {
+	return all_epoch_finish_;
+  }
+
   virtual void ClearSampleState();
   virtual void DumpWalkPath(std::string dump_path, size_t dump_rate);
   virtual void DumpSampleNeighbors(std::string dump_path);
@@ -367,6 +377,7 @@ class DatasetImpl : public Dataset {
   bool shuffle_by_uid_;
   bool parse_uid_;
   bool enable_pv_merge_;  // True means to merge pv
+  bool all_epoch_finish_ = false;
   int current_phase_;     // 1 join, 0 update
   size_t merge_size_;
   bool slots_shuffle_fea_eval_ = false;

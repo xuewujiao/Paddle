@@ -46,6 +46,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/fleet/heter_ps/mem_pool.h"
 #include "paddle/fluid/platform/device/gpu/gpu_info.h"
 #include "paddle/fluid/platform/dynload/nccl.h"
+#include "paddle/fluid/framework/fleet/heter_ps/heter_async_comm.h"
 #endif
 #ifdef PADDLE_WITH_XPU_KP
 #include "paddle/fluid/platform/device/xpu/enforce_xpu.h"
@@ -785,7 +786,6 @@ class PSGPUWrapper {
                           ? 1
                           : static_cast<int>(config["optimizer_type"]);
 
-    init_heter_ps();
     VLOG(0) << "InitializeGPUServer optimizer_type_:" << optimizer_type_
             << " nodeid_slot:" << nodeid_slot
             << " feature_learning_rate:" << feature_learning_rate;

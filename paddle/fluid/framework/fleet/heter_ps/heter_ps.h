@@ -67,7 +67,7 @@ class HeterPs : public HeterPsBase {
   void * get_com() {
 	  return (void*) comm_.get();
   }
-  void init_async_com(int optimizer_type, int device_num, int node_size, int rank_id);
+  void init_ps_runner(int optimizer_type, int device_num, int node_size, int rank_id);
   void show_table_collisions() override;
 #if defined(PADDLE_WITH_CUDA)
   // dedup

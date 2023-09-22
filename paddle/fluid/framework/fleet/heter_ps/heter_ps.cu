@@ -131,7 +131,7 @@ void HeterPs<GPUAccessor, GPUOptimizer>::set_nccl_comm_and_size(
 }
 
 template <typename GPUAccessor, template <typename T> class GPUOptimizer>
-void HeterPs<GPUAccessor, GPUOptimizer>::init_async_com(int optimizer_type, int device_num, int node_size, int rank_id) {
+void HeterPs<GPUAccessor, GPUOptimizer>::init_ps_runner(int optimizer_type, int device_num, int node_size, int rank_id) {
        auto async_com = paddle::framework::AsyncContext::GetInstance();
        async_com->init(node_size, device_num, rank_id);
        auto* accessor_wrapper_ptr =
