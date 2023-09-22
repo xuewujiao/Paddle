@@ -2246,6 +2246,14 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_async(
     compress_sample(gpu_id, final, len, sample_size,  stream, stream);
   }
   CUDA_CHECK(cudaStreamSynchronize(stream));
+  for (int i = 0; i < shard_num; ++i) {
+    if (h_local_part_sizes[i] == 0) {
+      continue;
+    }
+	allocator->FreeReqRes(request_handles[i].response_);
+	request_handles[i].response_ = nullptr;
+  }
+  
   loc.scatter_and_compress_.Pause();
   return final;
 }
@@ -3134,7 +3142,13 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_sage_async(
     return_weight);
   CUDA_CHECK(cudaStreamSynchronize(stream));
   VLOG(2) << "scatter_vals for val finish";
-
+  for (int i = 0; i < shard_num; ++i) {
+    if (h_local_part_sizes[i] == 0) {
+      continue;
+    }
+	allocator->FreeReqRes(request_handles[i].response_);
+	request_handles[i].response_ = nullptr;
+  }
   return final;
 }
 
@@ -3250,8 +3264,6 @@ void GpuPsGraphTable::graph_neighbor_sample_all_edge_type_one_table(
     NeighborSampleResultV2 &result,
     cudaStream_t calc_stream,
     cudaStream_t mem_stream) {
-  // result.set_stream(mem_stream);
-  // result.initialize(sample_size, len, resource_->dev_id(gpu_id));
   VLOG(2) << "start graph_neighbor_sample_all_edge_type_one_table(), len = " << len;
   if (len == 0) {
     return ;
@@ -3290,6 +3302,7 @@ void GpuPsGraphTable::graph_neighbor_sample_all_edge_type_one_table(
         reinterpret_cast<uint64_t*>(node_info_ptr + idx * len),
         static_cast<size_t>(len),
         calc_stream);
+    //CUDA_CHECK(cudaStreamSynchronize(calc_stream));
   }
   
   thread_local std::random_device rd;
@@ -3821,7 +3834,14 @@ std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree_async(
       len,
       sizeof(int),
       stream);
-
+  CUDA_CHECK(cudaStreamSynchronize(stream));    
+  for (int i = 0; i < shard_num; ++i) {
+    if (h_local_part_sizes[i] == 0) {
+      continue;
+    }
+	allocator->FreeReqRes(request_handles[i].response_);
+	request_handles[i].response_ = nullptr;
+  }
   return node_degree;
 }
 
@@ -4335,6 +4355,14 @@ int GpuPsGraphTable::get_feature_info_of_nodes_async(
   VLOG(2) << "end all2all get slot info, node_num: " << node_num
           << ", fea num: " << fea_num;
   CUDA_CHECK(cudaStreamSynchronize(stream));
+  for (int i = 0; i < shard_num; ++i) {
+    if (h_local_part_sizes[i] == 0) {
+      continue;
+    }
+	allocator->FreeReqRes(request_handles[i].response_);
+	request_handles[i].response_ = nullptr;
+  }
+  
   return fea_num;
 }
 
@@ -5572,7 +5600,6 @@ void SageSampleRunner::SageNeighborSample(struct AsyncReqRes *request, struct As
   final.weight = weight_ptr;
   final.set_alloc_ed(true); 
 
-  CUDA_CHECK(cudaStreamSynchronize(calc_stream));
   graph_table_->graph_neighbor_sample_all_edge_type_one_table(
   gpu_id, edge_type_len, input_idx_ptr, sample_size, len, weighted, return_weight, final, calc_stream, mem_stream); 
 

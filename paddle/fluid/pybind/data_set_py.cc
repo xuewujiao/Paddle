@@ -296,6 +296,9 @@ void BindDataset(py::module *m) {
       .def("get_epoch_finish",
            &framework::Dataset::GetEpochFinish,
            py::call_guard<py::gil_scoped_release>())
+	  .def("get_all_epoch_finish",
+		   &framework::Dataset::GetAllEpochFinish,
+		   py::call_guard<py::gil_scoped_release>())
       .def("clear_sample_state",
            &framework::Dataset::ClearSampleState,
            py::call_guard<py::gil_scoped_release>())

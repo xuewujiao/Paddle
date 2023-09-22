@@ -1926,7 +1926,10 @@ void PSGPUWrapper::LoadIntoMemory(bool is_shuffle) {
   platform::Timer timer;
   VLOG(3) << "Begin LoadIntoMemory(), dataset[" << dataset_ << "]";
   timer.Start();
-  if (local_end_ && !global_end_) {
+  InitSlotInfo();
+  init_heter_ps();
+
+  if (FLAGS_enable_async_comm && local_end_ && !global_end_) {
 	VLOG(0) << "generate a empty pass";
     dataset_->LoadEmptyIntoMemory();
   }
@@ -1941,13 +1944,35 @@ void PSGPUWrapper::LoadIntoMemory(bool is_shuffle) {
   gpu_graph_mode_ = dataset_->GetGpuGraphMode();
   int64_t total_ins_num_max = total_ins_num;
 
-  if (node_size_ > 1  && FLAGS_enable_async_comm) {
+  if (node_size_ > 1) {
 	auto gloo_wrapper = paddle::framework::GlooWrapper::GetInstance();
 	std::vector<int64_t> send_buf;
-	send_buf.push_back(total_ins_num_max);
-	auto recv_buf = gloo_wrapper->AllReduce(send_buf, "max");
-	total_ins_num_max = recv_buf[0];
+	int64_t is_local_end = 0;
+	if (!infer_mode_) {
+	  is_local_end = int64_t(dataset_->GetEpochFinish());
+	} else {
+	  is_local_end = int64_t(total_ins_num == 0);
+	}
+	send_buf.push_back(total_ins_num_max * (-1));
+	send_buf.push_back(is_local_end);
+	auto recv_buf = gloo_wrapper->AllReduce(send_buf, "min");
+	total_ins_num_max = recv_buf[0] * (-1) ;
 	dataset_->SetMaxMemoryDataSize(total_ins_num_max);
+    auto is_global_end = recv_buf[1];
+    if (is_global_end) {
+      local_end_ = 0;
+      global_end_ = 0;
+      if (!infer_mode_) {
+    	dataset_->SetAllEpochFinish(true);
+      }
+    } else {
+      local_end_ = is_local_end;
+	  global_end_ = is_global_end;
+    }
+    VLOG(0) << "pass " <<  dataset_->GetPassID() << " is_local_end is " << is_local_end
+        <<  " is_global_end is " << is_global_end << " local_end_ is "
+		<< local_end_ << " global_end_ is " << global_end_
+		<< " total_ins_num is " << total_ins_num << " total_ins_num_max is " << total_ins_num_max;
   }
 
   if (total_ins_num_max == 0) {
@@ -1959,34 +1984,11 @@ void PSGPUWrapper::LoadIntoMemory(bool is_shuffle) {
     dataset_->LocalShuffle();
   }
 
-  InitSlotInfo();
 #if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
   if (FLAGS_gpugraph_storage_mode != GpuGraphStorageMode::WHOLE_HBM) {
     AddSparseKeys();
   } else if (hbm_sparse_table_initialized_ == false) {
     SparseTableToHbm();
-  }
-  if (node_size_ > 1  && FLAGS_enable_async_comm) {
-	int64_t is_local_end = 0;
-    if (!infer_mode_) {
-    	is_local_end = int64_t(dataset_->GetEpochFinish());
-    } else {
-    	is_local_end = int64_t(total_ins_num == 0);
-    }
-    auto gloo_wrapper = paddle::framework::GlooWrapper::GetInstance();
-    std::vector<int64_t> send_buf;
-    send_buf.push_back(is_local_end);
-    auto recv_buf = gloo_wrapper->AllReduce(send_buf, "min");
-    auto is_global_end = recv_buf[0];
-    if (is_global_end) {
-    	local_end_ = 0;
-    	global_end_ = 0;
-    } else {
-      local_end_ = is_local_end;
-	  global_end_ = is_global_end;
-    }
-    VLOG(0) <<  "is_local_end is " << is_local_end << " is_global_end is " << is_global_end << "local_end_ is " << local_end_ << " global_end_ is " << global_end_;
-
   }
 #else
   AddSparseKeys();
@@ -1996,7 +1998,6 @@ void PSGPUWrapper::LoadIntoMemory(bool is_shuffle) {
 
 void PSGPUWrapper::init_heter_ps(size_t size) {
    if (HeterPs_ == NULL) {
-	    resource_->set_multi_mf(1, 64);
 	    HeterPs_ = HeterPsBase::get_instance(
 	      size, resource_, fleet_config_, accessor_class_, optimizer_type_);
 	#ifdef PADDLE_WITH_CUDA
@@ -2005,7 +2006,9 @@ void PSGPUWrapper::init_heter_ps(size_t size) {
 	    HeterPs_->set_sparse_sgd(optimizer_config_);
 	    HeterPs_->set_embedx_sgd(optimizer_config_);
 	    if (node_size_ > 1  && FLAGS_enable_async_comm) {
-	       HeterPs_->init_async_com(optimizer_type_, (int)heter_devices_.size(), node_size_, rank_id_);
+	       HeterPs_->init_ps_runner(optimizer_type_, (int)heter_devices_.size(), node_size_, rank_id_);
+	       auto async_com = paddle::framework::AsyncContext::GetInstance();
+	       async_com->start();
 	    }
 	#endif
     }
@@ -2086,6 +2089,7 @@ void PSGPUWrapper::build_task() {
 
 void PSGPUWrapper::BeginPass() {
   platform::Timer timer;
+  platform::Timer wait_timer;
 #if defined(PADDLE_WITH_GPU_GRAPH) && defined(PADDLE_WITH_HETERPS)
   if (FLAGS_gpugraph_storage_mode == GpuGraphStorageMode::WHOLE_HBM) {
     return;
@@ -2102,11 +2106,13 @@ void PSGPUWrapper::BeginPass() {
   debug_gpu_memory_info("after build task");
   timer.Pause();
   auto gloo = paddle::framework::GlooWrapper::GetInstance();
+  wait_timer.Start();
   if (gloo->Size() > 1 && FLAGS_enable_async_comm) {
-      VLOG(0) << "passid=" << current_task_->pass_id_ << "start Barrier";
+      VLOG(0) << "passid=" << current_task_->pass_id_ << " begin pass start Barrier";
       fleet_ptr_->worker_ptr_->Barrier(BID_BEGIN_PASS);
-      VLOG(0) << "passid=" << current_task_->pass_id_ << "end Barrier";
+      VLOG(0) << "passid=" << current_task_->pass_id_ << " begin pass end Barrier";
   }
+  wait_timer.Pause();
 
   if (current_task_ == nullptr) {
     PADDLE_THROW(platform::errors::Fatal(
@@ -2116,10 +2122,12 @@ void PSGPUWrapper::BeginPass() {
     VLOG(0) << "passid=" << current_task_->pass_id_
             << ", BeginPass end, cost time: " << timer.ElapsedSec()
             << "s, enable pull push dedup mode="
-            << FLAGS_gpugraph_dedup_pull_push_mode;
+            << FLAGS_gpugraph_dedup_pull_push_mode
+			<< " barrier cost time: " << wait_timer.ElapsedSec() << "s" ;
   } else {
     VLOG(0) << "passid=" << current_task_->pass_id_
-            << ", BeginPass end, cost time: " << timer.ElapsedSec() << "s";
+            << ", BeginPass end, cost time: " << timer.ElapsedSec() << "s"
+			<< " barrier cost time: " << wait_timer.ElapsedSec() << "s" ;
   }
 }
 
@@ -2129,22 +2137,26 @@ void PSGPUWrapper::EndPass() {
     return;
   }
 #endif
+  platform::Timer stagetime;
+  platform::Timer wait_time;
   auto gloo = paddle::framework::GlooWrapper::GetInstance();
+  wait_time.Start();
   if (gloo->Size() > 1 && FLAGS_enable_async_comm) {
-      VLOG(0) << "passid=" << current_task_->pass_id_ << "start Barrier";
+      VLOG(0) << "passid=" << current_task_->pass_id_ << " end pass start Barrier";
       fleet_ptr_->worker_ptr_->Barrier(BID_END_PASS);
-      VLOG(0) << "passid=" << current_task_->pass_id_ << "end Barrier";
+      VLOG(0) << "passid=" << current_task_->pass_id_ << " end pass end Barrier";
   }
+  wait_time.Pause();
   if (current_task_ == nullptr) {
     return;
   }
-  platform::Timer stagetime;
+
   stagetime.Start();
   HbmToSparseTable();
   stagetime.Pause();
   VLOG(0) << "passid=" << current_task_->pass_id_
           << ", EndPass HbmToSparseTable cost time: " << stagetime.ElapsedSec()
-          << "s";
+          << "s" << " barrier cost time：" << wait_time.ElapsedSec() ;
 
   gpu_task_pool_.Push(current_task_);
   current_task_ = nullptr;

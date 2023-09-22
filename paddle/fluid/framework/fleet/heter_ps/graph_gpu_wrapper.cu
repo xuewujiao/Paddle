@@ -925,8 +925,6 @@ void GraphGpuWrapper::init_service() {
     } 
     g->set_runner(request_runners);
     VLOG(0) << " sample runner init  end";
-    async_com->start();
-    VLOG(0) << "async_com  start"; 
   }
 }
 
