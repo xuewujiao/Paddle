@@ -2301,6 +2301,8 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_async(
 	//等待异步执行结束
     for (int i = 0; i < node_size_; ++i) {
 	  request_handles[i].Wait();
+	  allocator->FreeReqRes(request_handles[i].response_);
+	  request_handles[i].response_ = nullptr;
 	}
 }
 
@@ -2378,6 +2380,8 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_async_one(
   		  continue;
   	  }
 	  request_handles[i].Wait();
+	  allocator->FreeReqRes(request_handles[i].response_);
+	  request_handles[i].response_ = nullptr;
 	}
     cache.wait_push_.Pause();
     cache.train_time_.Pause();
@@ -2835,6 +2839,10 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_async(
 		  pull_type_size_,
 	      stream);
 	CUDA_CHECK(cudaStreamSynchronize(stream));
+	for (int i = 0; i < node_size_; ++i) {
+	  allocator->FreeReqRes(request_handles[i].response_);
+	  request_handles[i].response_ = nullptr;
+    }
 }
 
 template <typename KeyType,
@@ -2910,7 +2918,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_async_one(
 	cache.set_async_.Pause();
 	//等待异步执行结束
 	cache.wait_pull_.Resume();
-	for(int i = 0; i < shard_num; ++i) {
+	for (int i = 0; i < shard_num; ++i) {
 		if (h_local_part_sizes[i] == 0) {
 		  continue;
 		}
@@ -2927,6 +2935,13 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_async_one(
 		  pull_type_size_,
 	      stream);
 	CUDA_CHECK(cudaStreamSynchronize(stream));
+	for (int i = 0; i < shard_num; ++i) {
+	  if (h_local_part_sizes[i] == 0) {
+		continue;
+	  }
+	  allocator->FreeReqRes(request_handles[i].response_);
+	  request_handles[i].response_ = nullptr;
+    }
 	cache.pull_scatter_.Pause();
 }
 

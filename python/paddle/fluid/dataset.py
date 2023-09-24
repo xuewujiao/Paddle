@@ -969,6 +969,9 @@ class InMemoryDataset(DatasetBase):
 
     def get_epoch_finish(self):
         return self.dataset.get_epoch_finish()
+    
+    def get_all_epoch_finish(self):
+        return self.dataset.get_all_epoch_finish()
 
     def clear_sample_state(self):
         self.dataset.clear_sample_state()
