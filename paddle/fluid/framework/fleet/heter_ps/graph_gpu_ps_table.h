@@ -286,11 +286,12 @@ class GpuPsGraphTable
                                                            int edge_idx,
                                                            uint64_t *key,
                                                            int len);
-  std::shared_ptr<phi::Allocation> get_node_degree_signle_one_table(
+  void get_node_degree_signle_one_table(
       int gpu_id, 
       int edge_idx, 
       uint64_t* key, 
       int len, 
+      int* node_degree_ptr,
       cudaStream_t calc_stream,
       cudaStream_t mem_stream);
   std::shared_ptr<phi::Allocation> get_node_degree_single(int gpu_id,
