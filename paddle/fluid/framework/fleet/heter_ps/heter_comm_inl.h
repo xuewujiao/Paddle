@@ -26,7 +26,7 @@ limitations under the License. */
 #include "paddle/fluid/platform/device/xpu/xpu_info.h"
 #endif
 
-DECLARE_double(gpugraph_hbm_table_load_factor);
+DECLARE_double(gpugraph_hbm_table_train_load_factor);
 DECLARE_bool(gpugraph_enable_gpu_direct_access);
 DECLARE_bool(gpugraph_enable_segment_merge_grads);
 DECLARE_uint64(gpugraph_merge_grads_segment_size);
@@ -189,7 +189,7 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::HeterComm(
   device_num_ = resource_->total_device();
   storage_.resize(device_num_);
   multi_mf_dim_ = resource->multi_mf();
-  load_factor_ = FLAGS_gpugraph_hbm_table_load_factor;
+  load_factor_ = FLAGS_gpugraph_hbm_table_train_load_factor;
   multi_node_ = resource_->multi_node();
 #if defined(PADDLE_WITH_CUDA)
   rdma_checker_ = GpuRDMAChecker::get(device_num_);
@@ -271,7 +271,7 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::HeterComm(
   storage_.resize(device_num_);
   multi_mf_dim_ = resource->multi_mf();
   gpu_accessor_ = gpu_accessor;
-  load_factor_ = FLAGS_gpugraph_hbm_table_load_factor;
+  load_factor_ = FLAGS_gpugraph_hbm_table_train_load_factor;
   multi_node_ = resource_->multi_node();
 #if defined(PADDLE_WITH_CUDA)
   rdma_checker_ = GpuRDMAChecker::get(device_num_);
@@ -2256,7 +2256,6 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_async(
 	                                 gpu_accessor_);
 	}
 
-	cache.init_shard(len, node_size_);
 	auto &res = cache.shard_res;
 
 	size_t *h_local_part_sizes = res.h_local_part_sizes.data();
@@ -2278,7 +2277,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_async(
 	CHECK_EQ(len, h_local_part_offsets[node_size_]);
 
 	heter_comm_kernel_->gather_vals(
-	     reinterpret_cast<float *>(cache.d_merged_vals), // out
+	     reinterpret_cast<float *>(cache.d_merged_push_vals), // out
 	     reinterpret_cast<const float *>(d_grads),  // in
 	     res.d_local_idx_parted,
 		 len,
@@ -2290,7 +2289,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_async(
     auto* allocator = dynamic_cast<AsyncComAllocator*>(_async_request[gpu_id]->get_allocator());
 
 	for (int i = 0; i < node_size_; ++i) {
-	  auto* mem_value_context = allocator->ToMemoryContext(cache.d_merged_vals + h_local_part_offsets[i] * grad_type_size_, h_local_part_sizes[i] * grad_type_size_,
+	  auto* mem_value_context = allocator->ToMemoryContext(cache.d_merged_push_vals + h_local_part_offsets[i] * grad_type_size_, h_local_part_sizes[i] * grad_type_size_,
 					   DT_UINT8);
 	  auto* request = _async_request[gpu_id]->MakePushRequest(mem_value_context, i, gpu_id);
 	  auto* async_com = paddle::framework::AsyncContext::GetInstance()->get_async_com(gpu_id);
@@ -2340,7 +2339,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_async_one(
 	CHECK_EQ(len, h_local_part_offsets[shard_num]);
 
 	heter_comm_kernel_->gather_vals(
-	     reinterpret_cast<float *>(cache.d_merged_vals), // out
+	     reinterpret_cast<float *>(cache.d_merged_push_vals), // out
 	     reinterpret_cast<const float *>(d_grads),  // in
 	     res.d_local_idx_parted,
 		 len,
@@ -2365,7 +2364,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse_async_one(
 	  if (h_local_part_sizes[request_node] == 0) {
 		  continue;
 	  }
-	  auto* mem_value_context = allocator->ToMemoryContext(cache.d_merged_vals + h_local_part_offsets[request_node] * grad_type_size_, h_local_part_sizes[request_node] * grad_type_size_,
+	  auto* mem_value_context = allocator->ToMemoryContext(cache.d_merged_push_vals + h_local_part_offsets[request_node] * grad_type_size_, h_local_part_sizes[request_node] * grad_type_size_,
 					   DT_UINT8);
 	  auto* request = _async_request[gpu_id]->MakePushRequest(mem_value_context, request_node);
       request_handles[request_node].request_ = request;
@@ -2784,7 +2783,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_async(
 	auto &cache = storage_[gpu_id];
 	// get from local table
 	auto stream = resource_->local_stream(gpu_id, 0);
-	cache.alloc(fea_num, max_type_size_);
+	cache.alloc_async(fea_num, max_type_size_);
 	//loc.node_span_.Resume();
 	cache.init_shard(fea_num, node_size_);
 	auto &res = cache.shard_res;
@@ -2857,7 +2856,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_sparse_async_one(
 	cache.train_time_.Resume();;
 	// get from local table
     auto stream = resource_->local_stream(gpu_id, 0);
-	cache.alloc(fea_num, max_type_size_);
+	cache.alloc_async(fea_num, max_type_size_);
 	int shard_num = node_size_ * device_num_;
 	cache.init_shard(fea_num, shard_num);
 	auto &res = cache.shard_res;

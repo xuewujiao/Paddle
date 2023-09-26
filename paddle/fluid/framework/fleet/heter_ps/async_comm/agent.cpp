@@ -15,8 +15,12 @@
 #include "log_macros.h"
 #include "partitioner.h"
 #include "sideband_communicator.h"
+#include "paddle/phi/core/flags.h"
 
 #include "meta.h"
+DECLARE_bool(async_use_gpu_driect_rdma);
+DECLARE_uint64(async_buffer_size);
+DECLARE_uint64(async_buffer_count);
 
 Agent::Agent(Partitioner *partitioner, Config *config) :
     partitioner_(partitioner), config_(config) {
@@ -41,9 +45,9 @@ static bool SupportGPUDirectRDMA(struct ibv_pd *pd) {
     DeRegIbMr(ib_mr);
   } else {
     void* cpu_ptr = malloc(buf_size);
-    ib_mr = TryRegisterIbMr(pd, cuda_ptr, buf_size);
+    ib_mr = TryRegisterIbMr(pd, cpu_ptr, buf_size);
     if (ib_mr == nullptr) {
-      LOG_FATAL("CPU RDMA is also not supported!");
+      LOG_INFO("CPU RDMA is also not supported!");
     } else {
       DeRegIbMr(ib_mr);
     }
@@ -65,9 +69,10 @@ void Agent::CreateResources() {
   auto *cq = ib_local_context_.default_cq;
 
   use_gpu_direct_rdma_ = SupportGPUDirectRDMA(ib_local_context_.pd);
+  use_gpu_direct_rdma_ = use_gpu_direct_rdma_ && FLAGS_async_use_gpu_driect_rdma;
 
   // allocate register memory
-  size_t all_reg_mem_size = kRegBufferSize * kRegBufferCount * partitioner_->GetNodeCount();
+  size_t all_reg_mem_size = FLAGS_async_buffer_size * FLAGS_async_buffer_count * partitioner_->GetNodeCount();
   int old_dev_id;
   CUDA_CHECK(cudaGetDevice(&old_dev_id));
   CUDA_CHECK(cudaSetDevice(config_->agent_local_rank[partitioner_->GetLocalRank()]));
@@ -81,7 +86,7 @@ void Agent::CreateResources() {
   }
   CUDA_CHECK(cudaSetDevice(old_dev_id));
   credit_reg_mem_ = (char *) malloc(kCreditRegMemSize);
-  size_t all_imm_size = 2 * kRegBufferCount * partitioner_->GetNodeCount() * sizeof(int64_t);
+  size_t all_imm_size = 2 * FLAGS_async_buffer_count * partitioner_->GetNodeCount() * sizeof(int64_t);
   imm_mem_ = (int64_t*) malloc(all_imm_size);
   // reg memory regions.
   send_mr_ = RegisterIbMr(pd, send_reg_mem_, all_reg_mem_size);
@@ -198,10 +203,10 @@ void Agent::WaitStopped() {
 int Agent::GetBufferIndex(char *ptr, bool is_recv) {
   char *reg_buffer = is_recv ? recv_reg_mem_ : send_reg_mem_;
   int64_t ptr_diff = ptr - reg_buffer;
-  BOOL_CHECK(ptr_diff >= 0 && 0 < partitioner_->GetNodeCount() * kRegBufferSize * kRegBufferCount - ptr_diff);
-  // BOOL_CHECK(ptr_diff >= 0 && ptr_diff < partitioner_->GetNodeCount() * kRegBufferSize * kRegBufferCount);
-  BOOL_CHECK(ptr_diff % kRegBufferSize == 0);
-  return ptr_diff / kRegBufferSize;
+  BOOL_CHECK(ptr_diff >= 0 && 0 < partitioner_->GetNodeCount() * FLAGS_async_buffer_size * FLAGS_async_buffer_count - ptr_diff);
+  // BOOL_CHECK(ptr_diff >= 0 && ptr_diff < partitioner_->GetNodeCount() * FLAGS_async_buffer_size * FLAGS_async_buffer_count);
+  BOOL_CHECK(ptr_diff % FLAGS_async_buffer_size == 0);
+  return ptr_diff / FLAGS_async_buffer_size;
 }
 int Agent::GetNodeIdFromQpn(uint32_t qpn, bool is_recv) {
   auto& qpn_to_node_id_map = is_recv ? recv_qpn_to_node_id_ : send_qpn_to_node_id_;
@@ -223,7 +228,7 @@ void Agent::AddInterNodeSendData(AgentCopyMessage agent_copy_message) {
     BOOL_CHECK(partitioner_->GetLocalRank() == send_data.imm_data.src_local_rank);
     send_data.data_size = agent_copy_message.data_size;
     int buffer_idx = GetBufferIndex(send_data.data_pointer, false);
-    target_node_id = buffer_idx / kRegBufferCount;
+    target_node_id = buffer_idx / FLAGS_async_buffer_count;
     send_data.imm_data.buffer_idx = -1; // buffer_idx should be set according to recv buffer idx, not here
     std::unique_lock<std::mutex> mlock(send_mutex_);
     pending_sends_.fetch_add(1);
@@ -241,7 +246,7 @@ void Agent::AddInterNodeSendData(AgentCopyMessage agent_copy_message) {
     send_data.imm_data.dst_local_rank = partitioner_->GetGlobalRank();
     int buffer_idx = GetBufferIndex(send_data.data_pointer, true);
     send_data.imm_data.buffer_idx = buffer_idx;
-    target_node_id = buffer_idx / kRegBufferCount;
+    target_node_id = buffer_idx / FLAGS_async_buffer_count;
     BOOL_CHECK(target_node_id == partitioner_->GetNodeIDFromGlobalRank(agent_copy_message.src_global_rank));
     std::unique_lock<std::mutex> mlock(send_mutex_);
     pending_sends_.fetch_add(1);
@@ -268,23 +273,23 @@ void Agent::ReadFifoThreadFunc() {
 void Agent::PollCQThreadFunc() {
   for (int n = 0; n < partitioner_->GetNodeCount(); n++) {
     if (n == partitioner_->GetNodeID()) continue;
-    for (int i = 0; i < 2 * kRegBufferCount; i++) {
-      uint64_t wr_id = n * 2 * kRegBufferCount + i;
+    for (int i = 0; i < 2 *(int)FLAGS_async_buffer_count; i++) {
+      uint64_t wr_id = n * 2 * FLAGS_async_buffer_count + i;
       IbRecv(imm_mem_ + wr_id, sizeof(int64_t), recv_qps_[n], imm_mr_, wr_id);
     }
-    for (int i = 0; i < kRegBufferCount; i++) {
+    for (int i = 0; i < (int)FLAGS_async_buffer_count; i++) {
       AgentCopyMessage agent_copy_message;
-      int buffer_idx = n * kRegBufferCount + i;
-      char* ptr = send_reg_mem_ + kRegBufferSize * buffer_idx;
+      int buffer_idx = n * FLAGS_async_buffer_count + i;
+      char* ptr = send_reg_mem_ + FLAGS_async_buffer_size * buffer_idx;
       int target_global_rank = partitioner_->MakeGlobalRank(n, partitioner_->GetLocalRank());
-      agent_copy_message.MakeMsg(ptr, kRegBufferSize, partitioner_->GetGlobalRank(), target_global_rank, 0, false);
+      agent_copy_message.MakeMsg(ptr, FLAGS_async_buffer_size, partitioner_->GetGlobalRank(), target_global_rank, 0, false);
       // send to copy the released credit
       SingleFifoWrite(send_to_rail_fifo_fd_, &agent_copy_message, sizeof(AgentCopyMessage));
     }
   }
   const int max_wc_count = 16;
   ibv_wc wcs[max_wc_count];
-  int full_credit_count = kRegBufferCount * (partitioner_->GetNodeCount() - 1);
+  int full_credit_count = FLAGS_async_buffer_count * (partitioner_->GetNodeCount() - 1);
   while (!sender_exited_.load() || uncompleted_data_sends_.load() > 0
       || total_credit_count_.load() < full_credit_count) {
     // Poll the completion queue
@@ -317,11 +322,11 @@ void Agent::PollCQThreadFunc() {
         if (imm_data.has_data != 0) {
           BOOL_CHECK(partitioner_->GetLocalRank() == imm_data.src_local_rank);
           BOOL_CHECK(
-              wr_id.send_buffer_idx >= 0 && wr_id.send_buffer_idx < kRegBufferCount * partitioner_->GetNodeCount());
-          void *ptr = send_reg_mem_ + wr_id.send_buffer_idx * kRegBufferSize;
-          int target_node_rank = wr_id.send_buffer_idx / kRegBufferCount;
+              wr_id.send_buffer_idx >= 0 && wr_id.send_buffer_idx < (int)FLAGS_async_buffer_count * partitioner_->GetNodeCount());
+          void *ptr = send_reg_mem_ + wr_id.send_buffer_idx * FLAGS_async_buffer_size;
+          int target_node_rank = wr_id.send_buffer_idx / FLAGS_async_buffer_count;
           int target_global_rank = partitioner_->MakeGlobalRank(target_node_rank, imm_data.dst_local_rank);
-          agent_copy_message.MakeMsg(ptr, kRegBufferSize, partitioner_->GetGlobalRank(), target_global_rank, 0, false);
+          agent_copy_message.MakeMsg(ptr, FLAGS_async_buffer_size, partitioner_->GetGlobalRank(), target_global_rank, 0, false);
           // send to CopyThread the released send credit
           SingleFifoWrite(send_to_rail_fifo_fd_, &agent_copy_message, sizeof(AgentCopyMessage));
           uncompleted_data_sends_.fetch_add(-1);
@@ -334,11 +339,11 @@ void Agent::PollCQThreadFunc() {
         if (imm_data.has_data) {
           // 2. completion of data received from remote (IBV_WR_RDMA_WRITE_WITH_IMM)
           int buffer_idx = imm_data.buffer_idx;
-          BOOL_CHECK(buffer_idx >= 0 && buffer_idx < kRegBufferCount * partitioner_->GetNodeCount());
-          int remote_node_id = buffer_idx / kRegBufferCount;
+          BOOL_CHECK(buffer_idx >= 0 && buffer_idx < (int)FLAGS_async_buffer_count * partitioner_->GetNodeCount());
+          int remote_node_id = buffer_idx / FLAGS_async_buffer_count;
           int src_global_rank = partitioner_->MakeGlobalRank(remote_node_id, partitioner_->GetLocalRank());
           int dst_global_rank = partitioner_->MakeGlobalRank(partitioner_->GetNodeID(), imm_data.dst_local_rank);
-          char* ptr = recv_reg_mem_ + kRegBufferSize * buffer_idx;
+          char* ptr = recv_reg_mem_ + FLAGS_async_buffer_size * buffer_idx;
           AgentCopyMessage agent_copy_message;
           int temp = (int) imm_data.is_stop_signal;
           agent_copy_message.MakeMsg(ptr,
@@ -364,7 +369,7 @@ void Agent::PollCQThreadFunc() {
           }
         }
         int node_id = GetNodeIdFromQpn(wc.qp_num, true);
-        BOOL_CHECK((uint64_t)node_id == wc.wr_id / (2 * kRegBufferCount));
+        BOOL_CHECK((uint64_t)node_id == wc.wr_id / (2 * FLAGS_async_buffer_count));
         // post recv again
         IbRecv(imm_mem_ + wc.wr_id, sizeof(int64_t), recv_qps_[node_id], imm_mr_, wc.wr_id);
       }
@@ -381,8 +386,8 @@ void Agent::SendToRemoteThreadFunc() {
     imm_data.has_data = 0;
     imm_data.is_stop_signal = 0;
     imm_data.src_local_rank = imm_data.dst_local_rank = partitioner_->GetLocalRank();
-    for (int i = 0; i < kRegBufferCount; i++) {
-      imm_data.buffer_idx = n * kRegBufferCount + i;
+    for (int i = 0; i < (int)FLAGS_async_buffer_count; i++) {
+      imm_data.buffer_idx = n * FLAGS_async_buffer_count + i;
       WrId wr_id{};
       wr_id.send_buffer_idx = imm_data.buffer_idx;
       wr_id.imm_data.imm_u32 = imm_data.imm_u32;
@@ -410,7 +415,7 @@ void Agent::SendToRemoteThreadFunc() {
     return false;
   };
   std::vector<int> to_send_nodes;
-  to_send_nodes.reserve(partitioner_->GetNodeCount() * kRegBufferCount * 2);
+  to_send_nodes.reserve(partitioner_->GetNodeCount() * FLAGS_async_buffer_count * 2);
   auto get_send_data = [this, &to_send_nodes]() {
     to_send_nodes.clear();
     for (int i = 0; i < partitioner_->GetNodeCount(); i++) {
@@ -460,7 +465,7 @@ void Agent::SendToRemoteThreadFunc() {
         BOOL_CHECK(send_data.imm_data.buffer_idx == -1);
         send_data.imm_data.buffer_idx = credit.buffer_idx;
         IbMemInfo remote_mem_info = remote_node_infos_[to_send_node].recv_mem_info;
-        remote_mem_info.addr += credit.buffer_idx * kRegBufferSize;
+        remote_mem_info.addr += credit.buffer_idx * FLAGS_async_buffer_size;
         remote_mem_info.length = send_data.data_size;
         WrId wr_id{};
         wr_id.send_buffer_idx = GetBufferIndex(send_data.data_pointer, false);

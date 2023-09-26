@@ -3,7 +3,6 @@
 #include <string>
 
 #include "meta.h"
-
 // Copy and Agent messages
 // Send path:
 // 1. Agent->Copy: Add Buffer Credit.
@@ -19,10 +18,6 @@ struct IntraNodeCredit {
 struct Header {
   Meta meta;
 };
-
-constexpr size_t kRegBufferSize = 1 << 22;
-constexpr int kRegBufferCount = 8;
-constexpr size_t kDataSizePerBuffer = kRegBufferSize - sizeof(Header);
 
 struct AgentCopyMessage {
   AgentCopyMessage() {

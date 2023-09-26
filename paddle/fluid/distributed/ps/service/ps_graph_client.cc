@@ -286,7 +286,7 @@ void PsGraphClient::Barrier(uint32_t table_id) {
                phi::errors::PreconditionNotMet(
                    "barrier id %d should less than %d ", table_id, simple::max_barrier_table_num));
   simple::global_rpc_server().send_request_consumer(
-    _rank_num - 1,
+    (table_id % _rank_num),
     _rank_id,
     _barrier_service,
 	ar,

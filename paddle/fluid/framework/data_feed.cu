@@ -2313,6 +2313,11 @@ uint64_t CopyUniqueNodes(
     uint64_t h_uniq_node_num = 0;
     uint64_t *d_uniq_node_num =
         reinterpret_cast<uint64_t *>(d_uniq_node_num_ptr->ptr());
+    if (d_uniq_node_num_ptr->size() == 0) {
+      VLOG(0) << "d_uniq_node_num size is 0 return ";
+      CUDA_CHECK(cudaStreamSynchronize(stream));
+      return 0; 
+    }     
     cudaMemcpyAsync(&h_uniq_node_num,
                     d_uniq_node_num,
                     sizeof(uint64_t),
@@ -2395,13 +2400,18 @@ int InsertTable(int gpu_id,
   uint64_t h_uniq_node_num = 0;
   uint64_t *d_uniq_node_num_ptr =
       reinterpret_cast<uint64_t *>((*d_uniq_node_num)->ptr());
+  if ((*d_uniq_node_num)->size() == 0) {
+     VLOG(0) << "d_uniq_node_num size is 0 return ";
+     CUDA_CHECK(cudaStreamSynchronize(stream));     
+     return 0; 
+  }
+
   cudaMemcpyAsync(&h_uniq_node_num,
                   d_uniq_node_num_ptr,
                   sizeof(uint64_t),
                   cudaMemcpyDeviceToHost,
                   stream);
-  CUDA_CHECK(cudaStreamSynchronize(stream));
-
+  CUDA_CHECK(cudaStreamSynchronize(stream)); 
   if (conf.gpu_graph_training) {
     VLOG(2) << "table capacity: " << conf.train_table_cap << ", "
             << h_uniq_node_num << " used";

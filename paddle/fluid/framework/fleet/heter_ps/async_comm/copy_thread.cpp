@@ -15,9 +15,13 @@
 #include "log_macros.h"
 #include "partitioner.h"
 #include "memory_allocator.h"
-
+//#include "gflags/gflags.h"
 #include "async_communicator.h"
 #include "meta.h"
+#include "paddle/phi/core/flags.h"
+DECLARE_uint64(async_buffer_size);
+DECLARE_uint64(async_buffer_count);
+
 
 CopyThread::CopyThread(Partitioner *partitioner, MemoryAllocatorBase *allocator) :
     partitioner_(partitioner), allocator_(allocator) {
@@ -99,6 +103,7 @@ struct CopyToBufferState {
     for (int i = 0; i < req_res->meta.valid_data_count; i++) {
       total_data_size += req_res->meta.data_sizes[i];
     }
+    size_t kDataSizePerBuffer = FLAGS_async_buffer_size - sizeof(Header);
     total_package_needed = (total_data_size + kDataSizePerBuffer - 1) / kDataSizePerBuffer;
     if (total_package_needed == 0) {
       // Header need at least 1 package.
@@ -107,6 +112,7 @@ struct CopyToBufferState {
   }
   size_t CopyToBuffer(IntraNodeCredit credit, cudaStream_t stream) {
     char *buffer_ptr = (char *) credit.pointer;
+    size_t kDataSizePerBuffer = FLAGS_async_buffer_size - sizeof(Header);
     size_t data_offset = current_package_id * kDataSizePerBuffer;
     MemcpyUnique(buffer_ptr, &req_res->meta, sizeof(Meta), stream);
     static_assert(sizeof(Header) == sizeof(Meta), "Header size not equal with Meta, should add addition copy.");
@@ -127,7 +133,7 @@ struct CopyToBufferState {
     }
     current_package_id++;
     CUDA_CHECK(cudaStreamSynchronize(stream));
-    return kRegBufferSize - buffer_left;
+    return FLAGS_async_buffer_size - buffer_left;
   }
   bool Finished() const {
     return current_package_id == total_package_needed;
@@ -251,6 +257,7 @@ struct CopyFromBufferState {
     for (int i = 0; i < req_res->meta.valid_data_count; i++) {
       total_data_size += req_res->meta.data_sizes[i];
     }
+    size_t kDataSizePerBuffer = FLAGS_async_buffer_size - sizeof(Header);
     total_package_count = (total_data_size + kDataSizePerBuffer - 1) / kDataSizePerBuffer;
     if (total_package_count == 0) {
       // Header need at least 1 package.
@@ -261,9 +268,10 @@ struct CopyFromBufferState {
   void AddData(Header *header, void *data_ptr, size_t data_size, cudaStream_t stream) {
     BOOL_CHECK(SameMeta(&header->meta, &req_res->meta));
     if (current_package_id != total_package_count - 1) {
-      BOOL_CHECK(data_size == kRegBufferSize);
+      BOOL_CHECK(data_size == (size_t)FLAGS_async_buffer_size);
     }
     char *buffer_ptr = (char *) data_ptr;
+    size_t kDataSizePerBuffer = FLAGS_async_buffer_size - sizeof(Header);
     size_t data_offset = current_package_id * kDataSizePerBuffer;
     buffer_ptr = buffer_ptr + sizeof(Header);
     size_t buffer_left = data_size - sizeof(Header);
@@ -294,7 +302,7 @@ void CopyThread::RecvThreadFunc() {
   cudaStream_t recv_copy_stream = CreateHighPriorityStream(cudaStreamNonBlocking);
   std::vector<CopyFromBufferState> copy_states(partitioner_->GetGlobalSize());
   Header header{};
-  int full_credit_count = kRegBufferCount * (partitioner_->GetNodeCount() - 1);
+  int full_credit_count = FLAGS_async_buffer_count * (partitioner_->GetNodeCount() - 1);
   // Sender exit depends on stop signal, which means no request / response will come here.
   // Just make sure we collected all credits, then it will be OK to exit.
   while (!sender_exited_.load() || total_credit_count_.load() != full_credit_count) {
@@ -352,7 +360,7 @@ void CopyThread::RecvThreadFunc() {
       int node_rank = partitioner_->GetNodeIDFromGlobalRank(agent_copy_message.dst_global_rank);
       BOOL_CHECK(node_rank >= 0 && node_rank < partitioner_->GetNodeCount());
       BOOL_CHECK(node_rank != partitioner_->GetNodeID());
-      BOOL_CHECK(agent_copy_message.data_size == kRegBufferSize);
+      BOOL_CHECK(agent_copy_message.data_size == (size_t)FLAGS_async_buffer_size);
       BOOL_CHECK(agent_copy_message.is_stop_signal == 0);
       IntraNodeCredit credit{};
       credit.pointer = agent_copy_message.buffer_ptr;

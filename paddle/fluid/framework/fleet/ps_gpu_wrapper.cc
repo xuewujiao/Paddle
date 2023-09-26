@@ -1943,8 +1943,9 @@ void PSGPUWrapper::LoadIntoMemory(bool is_shuffle) {
           << "]";
   gpu_graph_mode_ = dataset_->GetGpuGraphMode();
   int64_t total_ins_num_max = total_ins_num;
-
   if (node_size_ > 1) {
+	platform::Timer wait_timer;
+	wait_timer.Start();
 	auto gloo_wrapper = paddle::framework::GlooWrapper::GetInstance();
 	std::vector<int64_t> send_buf;
 	int64_t is_local_end = 0;
@@ -1969,10 +1970,13 @@ void PSGPUWrapper::LoadIntoMemory(bool is_shuffle) {
       local_end_ = is_local_end;
 	  global_end_ = is_global_end;
     }
+    wait_timer.Pause();
     VLOG(0) << "pass " <<  dataset_->GetPassID() << " is_local_end is " << is_local_end
         <<  " is_global_end is " << is_global_end << " local_end_ is "
 		<< local_end_ << " global_end_ is " << global_end_
-		<< " total_ins_num is " << total_ins_num << " total_ins_num_max is " << total_ins_num_max;
+		<< " total_ins_num is " << total_ins_num << " total_ins_num_max is " << total_ins_num_max
+		<< " LoadIntoMemory cost: " << timer.ElapsedSec() << " s "
+		<< " barrier cost time: " << wait_timer.ElapsedSec() << " s " ;
   }
 
   if (total_ins_num_max == 0) {
