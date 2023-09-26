@@ -16,6 +16,6 @@ if(WITH_GPU)
          ib_utils.cpp intranode_communicator.cpp internode_communicator.cpp log_macros.cpp memory_allocator.cpp
          meta.cpp net_utils.cpp partitioner.cpp runner.cpp sideband_communicator.cpp async_communicator.cpp
          batched_queued_runner.cpp merged_handler.cpp
-    DEPS glog ${IBVERBS_LIB}
+    DEPS glog flags ${IBVERBS_LIB}
    )
 endif()

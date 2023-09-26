@@ -367,6 +367,16 @@ class HeterComm {
       d_merged_vals = all_grads;
       d_merged_push_vals = local_grads;
     }
+    void alloc_async(const size_t& len,
+                     const size_t& value_bytes = sizeof(GradType),
+                     const int copy_mode = 0) {
+      local_keys =
+            alloc_cache<KeyType>(len, local_keys_mem, (copy_mode & COPY_KEY));
+      local_grads = alloc_cache<char>(
+            len * value_bytes, local_grads_mem, (copy_mode & COPY_VAL));
+      d_merged_push_keys = local_keys;
+      d_merged_push_vals = local_grads;
+    }
     void check(const size_t& len,
                const size_t& value_bytes = sizeof(GradType)) {
       CHECK_GE(all_keys_mem->size(), len);

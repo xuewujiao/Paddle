@@ -1080,6 +1080,9 @@ PADDLE_DEFINE_EXPORTED_bool(
 PADDLE_DEFINE_EXPORTED_double(gpugraph_hbm_table_load_factor,
                               0.75,
                               "the load factor of hbm table, default 0.75");
+PADDLE_DEFINE_EXPORTED_double(gpugraph_hbm_table_train_load_factor,
+                              0.75,
+                              "the load factor of hbm table for train, default 0.75");
 PADDLE_DEFINE_EXPORTED_bool(
     gpugraph_enable_gpu_direct_access,
     false,
@@ -1126,6 +1129,15 @@ PADDLE_DEFINE_EXPORTED_bool(enable_async_comm,
 PADDLE_DEFINE_EXPORTED_bool(enable_split_task_to_card,
                             false,
                             "enable split task to card, default false");
+PADDLE_DEFINE_EXPORTED_uint64(async_buffer_size,
+                             1<<22,
+                             "async_buffer_size, default 1<<22 ");
+PADDLE_DEFINE_EXPORTED_uint64(async_buffer_count,
+                              8,
+                              "async_buffer_count, default 8");
+PADDLE_DEFINE_EXPORTED_bool(async_use_gpu_driect_rdma,
+                            true,
+                            "async_buffer_count, default true");
 PADDLE_DEFINE_EXPORTED_bool(gpugraph_debug_gpu_memory,
                             false,
                             "enable debug gpu memory, default false");
