@@ -3779,10 +3779,11 @@ std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree_async(
   CHECK_EQ(len, h_local_part_offsets[shard_num]);
 
   VLOG(2) << "Begin asynchronous degree get request";   
-  auto tmp_node_degree =
-      memory::AllocShared(place,
-                          len * sizeof(int),
-                          phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+
+  auto tmp_node_degree = memory::AllocShared(place,
+                                          len * sizeof(int),
+                                          phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+
   int* tmp_node_degree_ptr = reinterpret_cast<int*>(tmp_node_degree->ptr());
 
   auto* allocator = dynamic_cast<AsyncComAllocator*>(_async_request[degree_runner_index_*gpu_num + gpu_id]->get_allocator());
@@ -3792,12 +3793,12 @@ std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree_async(
       continue;
     }
     auto* val_context = allocator->ToMemoryContext(
-      tmp_node_degree_ptr + h_local_part_offsets[i], h_local_part_sizes[i] , DT_UINT64);
+      tmp_node_degree_ptr + h_local_part_offsets[i], h_local_part_sizes[i] * sizeof(int) , DT_UINT8);
     request_handles[i].response_ = CreateAsyncReqRes();
     request_handles[i].response_->memory_contexts[0] = val_context;
   }
 
-  int64_t int_para[2] = {edge_idx, len};
+  int64_t int_para[1] = {edge_idx};
   auto* async_com = paddle::framework::AsyncContext::GetInstance()->get_async_com(gpu_id); 
   for (int i = 0; i < shard_num; ++i) {
     if (h_local_part_sizes[i] == 0) {
@@ -3805,7 +3806,7 @@ std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree_async(
     }
     auto* node_key_context = allocator->ToMemoryContext(
       d_merged_push_keys_ptr + h_local_part_offsets[i], h_local_part_sizes[i], DT_UINT64);
-    auto* para_int_context = allocator->ToMemoryContext(int_para, 2, DT_INT64, ML_HOST);
+    auto* para_int_context = allocator->ToMemoryContext(int_para, 1, DT_INT64, ML_HOST);
 
     auto* request = _async_request[degree_runner_index_*gpu_num + gpu_id]->MakeDegreeGetRequest(node_key_context, para_int_context, i);
     request_handles[i].request_ = request;
@@ -3825,7 +3826,7 @@ std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree_async(
       memory::AllocShared(place,
                           len * sizeof(int),
                           phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
-  int* node_degree_ptr = reinterpret_cast<int*>(d_merged_push_keys->ptr());
+  int* node_degree_ptr = reinterpret_cast<int*>(node_degree->ptr());
 
 	heter_comm_kernel_->scatter_vals(
       reinterpret_cast<const int*>(tmp_node_degree_ptr),     // in
@@ -3834,13 +3835,13 @@ std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree_async(
       len,
       sizeof(int),
       stream);
-  CUDA_CHECK(cudaStreamSynchronize(stream));    
+  CUDA_CHECK(cudaStreamSynchronize(stream));
   for (int i = 0; i < shard_num; ++i) {
     if (h_local_part_sizes[i] == 0) {
       continue;
     }
-	allocator->FreeReqRes(request_handles[i].response_);
-	request_handles[i].response_ = nullptr;
+    allocator->FreeReqRes(request_handles[i].response_);
+    request_handles[i].response_ = nullptr;
   }
   return node_degree;
 }
@@ -3881,11 +3882,12 @@ std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree_all2all(
   return node_degree;
 }
 
-std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree_signle_one_table(
+void GpuPsGraphTable::get_node_degree_signle_one_table(
     int gpu_id, 
     int edge_idx, 
     uint64_t* key, 
     int len, 
+    int* node_degree_ptr,
     cudaStream_t calc_stream,
     cudaStream_t mem_stream) {
 
@@ -3894,32 +3896,22 @@ std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree_signle_one_tab
 
   auto node_info =
       memory::AllocShared(place,
-                          len * sizeof(uint64_t),
-                          phi::Stream(reinterpret_cast<phi::StreamId>(mem_stream)));
-  uint64_t* node_info_ptr = reinterpret_cast<uint64_t*>(node_info->ptr());
+                    len * sizeof(uint64_t),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(mem_stream)));
+  GpuPsNodeInfo* node_info_ptr = reinterpret_cast<GpuPsNodeInfo*>(node_info->ptr());
   CUDA_CHECK(cudaMemsetAsync(
         node_info_ptr, 0, len * sizeof(uint64_t), calc_stream));
 
   int table_offset =
       get_table_offset(gpu_id, GraphTableType::EDGE_TABLE, edge_idx);
-  tables_[table_offset]->get(reinterpret_cast<uint64_t*>(key),
+  tables_[table_offset]->get(key,
                              reinterpret_cast<uint64_t*>(node_info_ptr),
                              static_cast<size_t>(len),
                              calc_stream);
-  
-  GpuPsNodeInfo* node_info_list =
-      reinterpret_cast<GpuPsNodeInfo*>(node_info_ptr);
-  auto node_degree =
-      memory::AllocShared(place,
-                          len * sizeof(int),
-                          phi::Stream(reinterpret_cast<phi::StreamId>(mem_stream)));
-  int* node_degree_ptr = reinterpret_cast<int*>(node_degree->ptr());
-
   int grid_size_ = (len - 1) / block_size_ + 1;
   get_node_degree_kernel<<<grid_size_, block_size_, 0, calc_stream>>>(
-      node_info_list, node_degree_ptr, len);
-
-  return node_degree;
+      node_info_ptr, node_degree_ptr, len);
+  CUDA_CHECK(cudaStreamSynchronize(calc_stream));
 }
 
 std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree_single(
@@ -4351,9 +4343,6 @@ int GpuPsGraphTable::get_feature_info_of_nodes_async(
         res.d_local_idx_parted + h_local_part_offsets[i],
         h_local_part_sizes[i]);
   }
-
-  VLOG(2) << "end all2all get slot info, node_num: " << node_num
-          << ", fea num: " << fea_num;
   CUDA_CHECK(cudaStreamSynchronize(stream));
   for (int i = 0; i < shard_num; ++i) {
     if (h_local_part_sizes[i] == 0) {
@@ -5653,11 +5642,9 @@ void DegreeGetRunner::NodeDegreeGet(struct AsyncReqRes *request, struct AsyncReq
   int64_t * int_para = static_cast<int64_t*> (request->memory_contexts[1]->GetPointer());
   int64_t edge_idx = int_para[0];
 
-  auto result = graph_table_->get_node_degree_signle_one_table(gpu_id, edge_idx, input_idx_ptr, len, calc_stream, mem_stream); 
-  MemoryContextBase* val_context = allocator->ToMemoryContext(result, len, DT_INT64);
-
+  int *node_degree_ptr = static_cast<int*> (allocator_->AllocateOrUseExistContextPointer(response, 0, ML_DEVICE, DT_UINT8, len * sizeof(int)));
+  graph_table_->get_node_degree_signle_one_table(gpu_id, edge_idx, input_idx_ptr, len, node_degree_ptr,calc_stream, mem_stream); 
   response->meta.valid_data_count = 1;
-  response->memory_contexts[0] = val_context;
   response->FillMetaByMemoryContext();
 }
 
