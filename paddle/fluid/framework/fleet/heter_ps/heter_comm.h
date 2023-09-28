@@ -485,6 +485,27 @@ class HeterComm {
     platform::Timer wait_async_sample_;
     platform::Timer async_sample_;
     platform::Timer scatter_and_compress_;
+    //async sage sample
+    platform::Timer all_sage_sample_time_;
+    platform::Timer local_sage_sample_;
+    platform::Timer total_async_sage_sample_;
+    platform::Timer wait_async_sage_sample_;
+    platform::Timer async_sage_sample_;
+    platform::Timer sage_result_merge_time_;
+    //async degree get
+    platform::Timer all_degree_time_;
+    platform::Timer local_degree_;
+    platform::Timer total_async_degree_;
+    platform::Timer wait_async_degree_;
+    platform::Timer async_degree_;
+    platform::Timer degree_scatter_;
+    //async feature pull
+    platform::Timer all_feature_pull_time_;
+    platform::Timer local_feature_pull_;
+    platform::Timer total_async_feature_pull_;
+    platform::Timer wait_async_feature_pull_;
+    platform::Timer async_feature_pull_;
+    platform::Timer feature_pull_scatter_;
 
     size_t total_keys_ = 0;
     size_t local_keys_ = 0;
