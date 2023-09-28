@@ -484,7 +484,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::print_debug_time(
     return;
   }
   auto &cc = storage_[gpu_id];
-  char buffer[600];
+  char buffer[2000];
   if(multi_mf_dim_ == 1) {
   if (!FLAGS_enable_async_comm) {
       sprintf(buffer,
@@ -534,20 +534,41 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::print_debug_time(
       "gpu id=%d, v3_count=%ld, "
       "total_async_sample_keys: %lu, local_sampe_times %lu, remote_sample_times  %lu, "
       "sample_v3_time: %lf, local_sameple_time: %lf, total_async_sameple_time: %lf, partition_time: %lf, set_async_time: %lf, wait_async_sample_time:%lf async_sample_time:%lf, scatter_and_compress_time:%lf "
+      "all_sage_sample_time_: %lf, local_sage_sample_: %lf, total_async_sage_sample_: %lf, wait_async_sage_sample_:%lf async_sage_sample_:%lf, sage_result_merge_time_:%lf "
+      "all_degree_time_: %lf, local_degree_: %lf, total_async_degree_: %lf, wait_async_degree_:%lf async_degree_:%lf, degree_scatter_:%lf "
+      "all_feature_pull_time_: %lf, local_feature_pull_: %lf, total_async_feature_pull_: %lf, wait_async_feature_pull_:%lf async_sage_sample_:%lf, feature_pull_scatter_:%lf "
       "\n",
       gpu_id,
       count_,
       cc.total_keys_,
-	  cc.local_keys_,
-	  cc.remote_keys_,
-	  cc.all_sample_time_.ElapsedSec(),
-	  cc.local_sameple_.ElapsedSec(),
-	  cc.total_async_sameple_.ElapsedSec(),
+      cc.local_keys_,
+      cc.remote_keys_,
+      cc.all_sample_time_.ElapsedSec(),
+      cc.local_sameple_.ElapsedSec(),
+      cc.total_async_sameple_.ElapsedSec(),
       cc.partition_.ElapsedSec(),
       cc.set_async_.ElapsedSec(),
       cc.wait_async_sample_.ElapsedSec(),
-	  cc.async_sample_.ElapsedSec(),
-      cc.scatter_and_compress_.ElapsedSec());
+      cc.async_sample_.ElapsedSec(),
+      cc.scatter_and_compress_.ElapsedSec(),
+      cc.all_sage_sample_time_.ElapsedSec(),
+      cc.local_sage_sample_.ElapsedSec(),
+      cc.total_async_sage_sample_.ElapsedSec(),
+      cc.wait_async_sage_sample_.ElapsedSec(),
+      cc.async_sage_sample_.ElapsedSec(),
+      cc.sage_result_merge_time_.ElapsedSec(),
+      cc.all_degree_time_.ElapsedSec(),
+      cc.local_degree_.ElapsedSec(),
+      cc.total_async_degree_.ElapsedSec(),
+      cc.wait_async_degree_.ElapsedSec(),
+      cc.async_degree_.ElapsedSec(),
+      cc.degree_scatter_.ElapsedSec(),
+      cc.all_feature_pull_time_.ElapsedSec(),
+      cc.local_feature_pull_.ElapsedSec(),
+      cc.total_async_feature_pull_.ElapsedSec(),
+      cc.wait_async_feature_pull_.ElapsedSec(),
+      cc.async_feature_pull_.ElapsedSec(),
+      cc.feature_pull_scatter_.ElapsedSec());
   }
   VLOG(0) << buffer;
   printf(buffer);
