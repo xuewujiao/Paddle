@@ -48,6 +48,7 @@ class CtrDymfAccessor : public ValueAccessor {
     /* V2: support pass_id
       uint16_t pass_id;
       uint16_t unseen_days;
+      float delta_score;
       float show;
       float click;
       float embed_w;
@@ -230,8 +231,9 @@ class CtrDymfAccessor : public ValueAccessor {
   virtual int32_t Update(float** values,
                          const float** update_values,
                          size_t num);
-
-  std::string ParseToString(const float* value, int param) override;
+  std::string ParseToString(const float* value,
+                            int param,
+                            bool only_save_embedx_w = false) override;
   int32_t ParseFromString(const std::string& str, float* v) override;
   virtual bool CreateValue(int type, const float* value);
 
