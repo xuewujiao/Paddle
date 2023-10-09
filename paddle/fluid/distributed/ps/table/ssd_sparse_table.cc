@@ -515,7 +515,6 @@ int32_t SSDSparseTable::Shrink(const std::string& param) {
   for (int i = 0; i < _real_local_shard_num; ++i) {
     uint64_t mem_count = 0;
     uint64_t ssd_count = 0;
-
     LOG(INFO) << "SSDSparseTable begin shrink shard:" << i;
     auto& shard = _local_shards[i];
     for (auto it = shard.begin(); it != shard.end();) {
@@ -1287,10 +1286,11 @@ int32_t SSDSparseTable::SaveWithStringMultiOutput_v2(const std::string& path,
         float* value = reinterpret_cast<float*>(cursor);
         int dim = len / sizeof(float);
 
-        std::string format_value = _value_accesor->ParseToString(value, dim);
+        std::string format_value =
+            _value_accesor->ParseToString(value, dim, true);
         if (0 != write_channel_for_slot_feature->write_line(
                      paddle::string::format_string(
-                         "%lu %s", k, format_value.c_str()))) {
+                         "%lu\t%s", k, format_value.c_str()))) {
           VLOG(0) << "SSDSparseTable save feature failed, retry it! path:"
                   << channel_config_for_slot_feature.path;
         }
@@ -2093,10 +2093,11 @@ int32_t SSDSparseTable::SaveWithBinary_v2(const std::string& path,
           float* value = reinterpret_cast<float*>(cursor);
           int dim = len / sizeof(float);
 
-          std::string format_value = _value_accesor->ParseToString(value, dim);
+          std::string format_value =
+              _value_accesor->ParseToString(value, dim, true);
           if (0 != write_channel_for_slot_feature->write_line(
                        paddle::string::format_string(
-                           "%lu %s", k, format_value.c_str()))) {
+                           "%lu\t%s", k, format_value.c_str()))) {
             LOG(FATAL) << "SSDSparseTable save feature failed, retry it! path:"
                        << channel_config_for_slot_feature.path;
           }
