@@ -149,29 +149,14 @@ class PSClient {
     return fut;
   }
 
-  virtual ::std::future<int32_t> PullSparsePtr(
-      int shard_id,
-      char **select_values,
-      size_t table_id,
-      const uint64_t *keys,
-      size_t num,
-      uint16_t pass_id,
-      const std::vector<std::unordered_map<uint64_t, uint32_t>> &keys2rank_vec,
-      const uint16_t &dim_id = 0) {
-    VLOG(0) << "Did not implement";
-    std::promise<int32_t> promise;
-    std::future<int> fut = promise.get_future();
-    promise.set_value(-1);
-    return fut;
-  }
-  virtual ::std::future<int32_t> PullSparseKey(
-      int shard_id,
-      size_t table_id,
-      const uint64_t *keys,
-      size_t num,
-      uint16_t pass_id,
-      const std::vector<std::unordered_map<uint64_t, uint32_t>> &keys2rank_vec,
-      const uint16_t &dim_id = 0) {
+  virtual ::std::future<int32_t> PullSparsePtr(int shard_id,
+                                               char **select_values,
+                                               size_t table_id,
+                                               const uint64_t *keys,
+                                               size_t num,
+                                               uint16_t pass_id,
+                                               const std::vector<std::unordered_map<uint64_t, uint32_t>> & keys2rank_vec,
+                                               const uint16_t &dim_id = 0) {
     VLOG(0) << "Did not implement";
     std::promise<int32_t> promise;
     std::future<int> fut = promise.get_future();

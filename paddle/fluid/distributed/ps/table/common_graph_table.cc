@@ -20,7 +20,6 @@
 #include <chrono>
 #include <set>
 #include <sstream>
-#include <tuple>
 
 #include "gflags/gflags.h"
 #include "paddle/fluid/distributed/common/utils.h"
@@ -1353,7 +1352,7 @@ void GraphTable::dbh_graph_edge_partition() {
               dest_edge_ids.push_back(k);
             }
           }
-          int src_fea_idx = node_type_str_to_node_types_idx[node_type[0]];
+          int src_fea_idx = feature_to_id[node_type[0]];
           std::vector<std::future<int>> shard_tasks;
           for (size_t part_id = 0; part_id < shard_num; ++part_id) {
             shard_tasks.push_back(
@@ -1461,13 +1460,13 @@ void GraphTable::dbh_graph_edge_partition() {
 void GraphTable::dbh_graph_feature_partition() {
   VLOG(0) << "start to process dbh feature shard";
   std::vector<std::future<int>> tasks;
-  for (auto &it : this->node_type_str_to_node_types_idx) {
-    auto node_types_idx = it.second;
+  for (auto &it : this->feature_to_id) {
+    auto node_idx = it.second;
     for (size_t i = 0; i < shard_num_per_server; i++) {
       tasks.push_back(
-          load_node_edge_task_pool->enqueue([&, node_types_idx, i, this]() -> int {
+          load_node_edge_task_pool->enqueue([&, node_idx, i, this]() -> int {
             std::vector<uint64_t> remove_keys;
-            auto &shards = feature_shards[node_types_idx][i]->get_bucket();
+            auto &shards = feature_shards[node_idx][i]->get_bucket();
             for (auto node : shards) {
               uint64_t id = node->get_id();
               // 在边表里的key以及hash对应的key保留，其余删除
@@ -1478,7 +1477,7 @@ void GraphTable::dbh_graph_feature_partition() {
               }
             }
             for (auto &key : remove_keys) {
-              feature_shards[node_types_idx][i]->delete_node(key);
+              feature_shards[node_idx][i]->delete_node(key);
             }
             return 0;
           }));
@@ -2027,11 +2026,11 @@ void GraphTable::fix_feature_node_shards(bool load_slot) {
   auto &shards = (load_slot) ? feature_shards: node_shards;
   VLOG(0) << "begin fix " << ((load_slot) ? "feature ": "")
       << "node type count=" << shards.size() << ", edge count=" << edge_shards.size();
-  std::vector<std::future<std::tuple<size_t, size_t, size_t>>> tasks;
+  std::vector<std::future<std::pair<size_t, size_t>>> tasks;
   for (size_t idx = 0; idx < shards.size(); ++idx) {
     for (size_t j = 0; j < shards[idx].size(); ++j) {
       tasks.push_back(load_node_edge_task_pool->enqueue(
-          [this, idx, j, load_slot]() -> std::tuple<size_t, size_t, size_t> {
+          [this, idx, j, load_slot]() -> std::pair<size_t, size_t> {
         size_t cnt = 0;
         size_t edge_node_cnt = 0;
         auto &features = (load_slot) ? feature_shards[idx][j] : node_shards[idx][j];
@@ -2055,32 +2054,20 @@ void GraphTable::fix_feature_node_shards(bool load_slot) {
         size_t total = features->get_size();
         VLOG(5) << "fix total edge node count=" << edge_node_cnt
             << ", total feature node count=" << total
-            << ", node_types_idx=" << idx << ", shard id=" << j << ", add_count=" << cnt;
-        return std::make_tuple(total, cnt, idx);
+            << ", node idx=" << idx << ", shard id=" << j << ", count=" << cnt;
+        return {total, cnt};
       }));
     }
   }
   size_t total = 0;
   size_t add_cnt = 0;
-  std::vector<size_t> add_cnt_vec;
-  std::vector<size_t> total_vec;
-  add_cnt_vec.assign(shards.size(), 0);
-  total_vec.assign(shards.size(), 0);
   for (auto &t : tasks) {
     auto pair = t.get();
-    total += std::get<0>(pair);
-    add_cnt += std::get<1>(pair);
-    int node_types_idx = std::get<2>(pair);
-    total_vec[node_types_idx] += std::get<0>(pair);
-    add_cnt_vec[node_types_idx] += std::get<1>(pair);
+    total += pair.first;
+    add_cnt += pair.second;
   }
   VLOG(0) << "fix node count=" << total
       << ", add count=" << add_cnt << ", with slot=" << load_slot;
-  for (size_t i = 0; i < shards.size(); ++i) {
-    VLOG(1) << "node_type[" << node_types_[i] << "] node_type_idx[" << i
-        << "] orig[" << total_vec[i] - add_cnt_vec[i] << "] add_cnt["
-        << add_cnt_vec[i] << "] total[" << total_vec[i] << "]";
-  }
 }
 int32_t GraphTable::load_node_and_edge_file(
     std::string etype2files,
@@ -2315,9 +2302,8 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
     int slot_fea_num = 0;
     if (feat_name.size() > 0) slot_fea_num = feat_name[idx].size();
     int float_fea_num = 0;
-    if (float_feat_id_map.size() > 0) {
+    if (float_feat_id_map.size() > 0)
       float_fea_num = float_feat_id_map[idx].size();
-    }
     if (load_slot) {
       auto node = feature_shards[idx][index]->add_feature_node(
           id, false, float_fea_num);
@@ -2344,7 +2330,7 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
   return {local_count, local_valid_count};
 }
 
-std::pair<uint64_t, uint64_t> GraphTable::parse_node_file_parallel(
+std::pair<uint64_t, uint64_t> GraphTable::parse_node_file(
     const std::string &path, bool load_slot) {
   std::ifstream file(path);
   std::string line;
@@ -2357,7 +2343,6 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file_parallel(
 
   int num = 0;
   std::vector<paddle::string::str_ptr> vals;
-  size_t last_shard_id = 0;
 
   while (std::getline(file, line)) {
     vals.clear();
@@ -2367,10 +2352,9 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file_parallel(
       continue;
     }
     std::string parse_node_type = vals[0].to_string();
-    auto it = node_type_str_to_node_types_idx.find(parse_node_type);
-    if (it == node_type_str_to_node_types_idx.end()) {
-      VLOG(1) << parse_node_type << "type error, please check, line["
-          << line << "] file[" << path << "]";
+    auto it = feature_to_id.find(parse_node_type);
+    if (it == feature_to_id.end()) {
+      VLOG(1) << parse_node_type << "type error, please check";
       continue;
     }
     idx = it->second;
@@ -2381,14 +2365,6 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file_parallel(
               << ", please check id distribution";
       continue;
     }
-    if (shard_id != last_shard_id && last_shard_id != 0) {
-      VLOG(0) << "Maybe node file hasn't been sharded, file[" << path << "] shard_id["
-          << shard_id << "] last_shard_id[" << last_shard_id << "], exit";
-      VLOG(0) << "auto_shard in config should be set as True";
-      is_parse_node_fail_ = true;
-      return {0, 0};
-    }
-
     local_count++;
     if (FLAGS_graph_edges_split_mode == "hard" ||
         FLAGS_graph_edges_split_mode == "HARD") {
@@ -2400,9 +2376,8 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file_parallel(
     }
     size_t index = shard_id - shard_start;
     int float_fea_num = 0;
-    if (float_feat_id_map.size() > 0) {
+    if (float_feat_id_map.size() > 0)
       float_fea_num = float_feat_id_map[idx].size();
-    }
     if (load_slot) {
       auto node = feature_shards[idx][index]->add_feature_node(
           id, false, float_fea_num);
@@ -2411,8 +2386,7 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file_parallel(
           auto &v = vals[i];
           int ret = parse_feature(idx, v.ptr, v.len, node);
           if (ret != 0) {
-            VLOG(0) << "Fail to parse feature, node_id[" << id
-                << "] shard_idx[" << index << "] fea_type_id[" << idx << "]";
+            VLOG(0) << "Fail to parse feature, node_id[" << id << "]";
             is_parse_node_fail_ = true;
             return {0, 0};
           }
@@ -2422,7 +2396,6 @@ std::pair<uint64_t, uint64_t> GraphTable::parse_node_file_parallel(
       node_shards[idx][index]->add_feature_node(id, false, float_fea_num);
     }
     local_valid_count++;
-    last_shard_id = shard_id;
   }
   VLOG(2) << local_valid_count << "/" << local_count << " nodes from filepath->"
           << path;
@@ -2445,7 +2418,7 @@ int32_t GraphTable::load_nodes(const std::string &path,
     for (size_t i = 0; i < paths.size(); i++) {
       tasks.push_back(load_node_edge_task_pool->enqueue(
           [&, i, this]() -> std::pair<uint64_t, uint64_t> {
-            return parse_node_file_parallel(paths[i], load_slot);
+            return parse_node_file(paths[i], load_slot);
           }));
     }
     for (size_t i = 0; i < tasks.size(); i++) {
@@ -2459,13 +2432,12 @@ int32_t GraphTable::load_nodes(const std::string &path,
       VLOG(0) << "node_type not specified, loading edges to "
               << id_to_feature[0] << " part";
     } else {
-      if (node_type_str_to_node_types_idx.find(node_type)
-              == node_type_str_to_node_types_idx.end()) {
+      if (feature_to_id.find(node_type) == feature_to_id.end()) {
         VLOG(0) << "node_type " << node_type
                 << " is not defined, nothing will be loaded";
         return 0;
       }
-      idx = node_type_str_to_node_types_idx[node_type];
+      idx = feature_to_id[node_type];
     }
     for (auto path : paths) {
       VLOG(2) << "Begin GraphTable::load_nodes(), path[" << path << "]";
@@ -2480,7 +2452,7 @@ int32_t GraphTable::load_nodes(const std::string &path,
     return -1;
   }
 
-  VLOG(0) << valid_count << "/" << count << " nodes in node_type[" << node_type
+  VLOG(0) << valid_count << "/" << count << " nodes in node_type[ " << node_type
           << "] are loaded successfully!";
   return 0;
 }
@@ -3008,8 +2980,7 @@ int GraphTable::parse_feature(int idx,
       int ret = FeatureNode::parse_value_to_bytes<uint64_t>(
           fea_fields.begin(), fea_fields.end(), fea_ptr);
       if (ret != 0) {
-        VLOG(0) << "Fail to parse value, fea_type_id[" << idx << "] fea_str["
-            << feat_str << "] len[" << len << "]";
+        VLOG(0) << "Fail to parse value";
         return -1;
       }
       return 0;
@@ -3342,15 +3313,6 @@ int32_t GraphTable::Initialize(const TableParameter &config,
   return Initialize(graph);
 }
 
-std::string GraphTable::node_types_idx_to_node_type_str(int node_types_idx) {
-  return node_types_[node_types_idx];
-}
-
-std::string GraphTable::index_to_node_type_str(int index) {
-  int node_types_idx = index_to_type_[index]; 
-  return node_types_idx_to_node_type_str(node_types_idx);
-}
-
 void GraphTable::load_node_weight(int type_id, int idx, std::string path) {
   auto paths = paddle::string::split_string<std::string>(path, ";");
   int64_t count = 0;
@@ -3409,7 +3371,6 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
 
   auto graph_feature = graph.graph_feature();
   auto node_types = graph.node_types();
-  node_types_.assign(node_types.begin(), node_types.end());
   auto edge_types = graph.edge_types();
 
 #if defined(PADDLE_WITH_HETERPS) && defined(PADDLE_WITH_GLOO)
@@ -3438,7 +3399,7 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
   feat_dtype.resize(node_types.size());
   VLOG(0) << "got " << node_types.size() << " node types in total";
   for (int k = 0; k < node_types.size(); k++) {
-    node_type_str_to_node_types_idx[node_types[k]] = k;
+    feature_to_id[node_types[k]] = k;
     auto node_type = node_types[k];
     auto feature = graph_feature[k];
     id_to_feature.push_back(node_type);
@@ -3472,13 +3433,13 @@ int32_t GraphTable::Initialize(const GraphParameter &graph) {
               << " shape:" << f_shape << " dtype:" << f_dtype;
     }
   }
-  nodeid_to_edgeids_.resize(node_type_str_to_node_types_idx.size());
+  nodeid_to_edgeids_.resize(feature_to_id.size());
   for (auto &obj : edge_to_id) {
     size_t pos = obj.first.find("2");
     CHECK(pos != std::string::npos);
     std::string nodetype = obj.first.substr(0, pos);
-    auto it = node_type_str_to_node_types_idx.find(nodetype);
-    CHECK(it != node_type_str_to_node_types_idx.end());
+    auto it = feature_to_id.find(nodetype);
+    CHECK(it != feature_to_id.end());
     nodeid_to_edgeids_[it->second].push_back(obj.second);
     VLOG(0) << "add edge [" <<  obj.first
         << "=" << obj.second << "] to ["
@@ -3619,35 +3580,30 @@ void GraphTable::calc_edge_type_limit() {
 
 void GraphTable::build_graph_type_keys() {
   VLOG(0) << "begin build_graph_type_keys, feature size="
-          << this->node_type_str_to_node_types_idx.size();
+          << this->feature_to_id.size();
   graph_type_keys_.clear();
-  graph_type_keys_.resize(this->node_type_str_to_node_types_idx.size());
+  graph_type_keys_.resize(this->feature_to_id.size());
 
   int cnt = 0;
   uint64_t total_key = 0;
-  for (auto &it : this->node_type_str_to_node_types_idx) {
-    auto node_types_idx = it.second;
+  for (auto &it : this->feature_to_id) {
+    auto node_idx = it.second;
     std::vector<std::vector<uint64_t>> keys;
-    this->get_all_id(GraphTableType::FEATURE_TABLE, node_types_idx, 1, &keys);
-    type_to_index_[node_types_idx] = cnt;
-    index_to_type_[cnt] = node_types_idx;
+    this->get_all_id(GraphTableType::FEATURE_TABLE, node_idx, 1, &keys);
+    type_to_index_[node_idx] = cnt;
     total_key += keys[0].size();
-    VLOG(1) << "node_type[" << node_types_[node_types_idx] << "] node_types_idx["
-        << node_types_idx << "] index[" << type_to_index_[node_types_idx]
-        << "] graph_type_keys_[" << cnt << "]_size=" << keys[0].size()
-        << " total_key[" << total_key << "]";
     graph_type_keys_[cnt++] = std::move(keys[0]);
   }
   VLOG(0) << "finish build_graph_type_keys, total type keys=" << total_key;
 
   VLOG(0) << "begin insert feature into graph_total_keys, feature size="
-          << this->node_type_str_to_node_types_idx.size();
+          << this->feature_to_id.size();
   // build feature embedding id
-  for (auto &it : this->node_type_str_to_node_types_idx) {
-    auto node_types_idx = it.second;
+  for (auto &it : this->feature_to_id) {
+    auto node_idx = it.second;
     std::vector<std::vector<uint64_t>> keys;
     this->get_all_feature_ids(
-        GraphTableType::FEATURE_TABLE, node_types_idx, 1, &keys);
+        GraphTableType::FEATURE_TABLE, node_idx, 1, &keys);
     graph_total_keys_.insert(
         graph_total_keys_.end(), keys[0].begin(), keys[0].end());
   }
@@ -3659,17 +3615,14 @@ void GraphTable::build_graph_type_keys() {
 void GraphTable::build_node_iter_type_keys() {
   VLOG(0) << "enter build_node_iter_type_keys";
   graph_type_keys_.clear();
-  graph_type_keys_.resize(this->node_type_str_to_node_types_idx.size());
+  graph_type_keys_.resize(this->feature_to_id.size());
 
   int cnt = 0;
-  for (auto &it : this->node_type_str_to_node_types_idx) {
-    auto node_types_idx = it.second;
+  for (auto &it : this->feature_to_id) {
+    auto node_idx = it.second;
     std::vector<std::vector<uint64_t>> keys;
-    this->get_all_id(GraphTableType::NODE_TABLE, node_types_idx, 1, &keys);
+    this->get_all_id(GraphTableType::NODE_TABLE, node_idx, 1, &keys);
     graph_type_keys_[cnt++] = std::move(keys[0]);
-    VLOG(1) << "node_type[" << node_types_[node_types_idx] << "] node_types_idx["
-        << node_types_idx << "] index[" << type_to_index_[node_types_idx]
-        << "] graph_type_keys_num[" << keys[0].size() << "]";
   }
   VLOG(0) << "finish build_node_iter_type_keys";
 }

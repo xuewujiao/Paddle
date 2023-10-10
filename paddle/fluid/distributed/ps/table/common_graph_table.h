@@ -122,9 +122,7 @@ class GraphShard {
   }
   GraphNode *add_graph_node(uint64_t id);
   GraphNode *add_graph_node(Node *node);
-  FeatureNode *add_feature_node(uint64_t id,
-                                bool is_overlap = true,
-                                int float_fea_num = 0);
+  FeatureNode *add_feature_node(uint64_t id, bool is_overlap = true, int float_fea_num = 0);
   Node *find_node(uint64_t id);
   void delete_node(uint64_t id);
   void clear();
@@ -443,7 +441,7 @@ class ScaledLRU {
 enum GraphTableType { EDGE_TABLE, FEATURE_TABLE, NODE_TABLE };
 class GraphTable : public Table {
   class GraphNodeRank {
-   public:
+  public:
     GraphNodeRank() {}
     ~GraphNodeRank() {}
     void init(const int node_num, const int shard_num) {
@@ -465,8 +463,12 @@ class GraphTable : public Table {
         rank_nodes_[i][shard_id].rehash(per_count);
       }
     }
-    bool empty(void) { return rank_nodes_.empty(); }
-    const size_t &nodes_num(const int &rank) { return rank_sizes_[rank]; }
+    bool empty(void) {
+      return rank_nodes_.empty();
+    }
+    const size_t& nodes_num(const int &rank) {
+      return rank_sizes_[rank];
+    }
     bool add(const uint64_t &key, const int &rank) {
       auto &hash = rank_nodes_[rank][key % shard_num_];
       auto it = hash.find(key);
@@ -493,18 +495,15 @@ class GraphTable : public Table {
       }
       return -1;
     }
-    std::vector<std::vector<robin_hood::unordered_set<uint64_t>>>
-    get_rank_nodes() {
+    std::vector<std::vector<robin_hood::unordered_set<uint64_t>>> get_rank_nodes() {
       return rank_nodes_;
     }
-
-   private:
+  private:
     int node_num_ = -1;
     int shard_num_ = -1;
     std::vector<std::vector<robin_hood::unordered_set<uint64_t>>> rank_nodes_;
     std::vector<size_t> rank_sizes_;
   };
-
  public:
   GraphTable() {
     use_cache = false;
@@ -626,7 +625,7 @@ class GraphTable : public Table {
                                                 const std::string &node_type,
                                                 int idx,
                                                 bool load_slot = true);
-  std::pair<uint64_t, uint64_t> parse_node_file_parallel(const std::string &path,
+  std::pair<uint64_t, uint64_t> parse_node_file(const std::string &path,
                                                 bool load_slot = true);
   int32_t add_graph_node(int idx,
                          std::vector<uint64_t> &id_list,      // NOLINT
@@ -638,9 +637,7 @@ class GraphTable : public Table {
   Node *find_node(GraphTableType table_type, int idx, uint64_t id);
   Node *find_node(GraphTableType table_type, uint64_t id);
   // query all ids rank
-  void query_all_ids_rank(const size_t &total,
-                          const uint64_t *ids,
-                          uint32_t *ranks);
+  void query_all_ids_rank(const size_t &total, const uint64_t *ids, uint32_t *ranks);
 
   virtual int32_t Pull(TableContext &context) { return 0; }  // NOLINT
   virtual int32_t Push(TableContext &context) { return 0; }  // NOLINT
@@ -653,12 +650,6 @@ class GraphTable : public Table {
   virtual int32_t Save(const std::string &path, const std::string &converter) {
     return 0;
   }
-#ifdef PADDLE_WITH_GPU_GRAPH
-  virtual int32_t Save_v2(const std::string &path,
-                          const std::string &converter) {
-    return 0;
-  }
-#endif
   virtual int32_t InitializeShard() { return 0; }
   virtual int32_t SetShard(size_t shard_idx, size_t server_num) {
     _shard_idx = shard_idx;
@@ -671,7 +662,6 @@ class GraphTable : public Table {
     this->server_num = server_num;
     return 0;
   }
-
   virtual uint32_t get_thread_pool_index_by_shard_index(uint64_t shard_index);
   virtual uint32_t get_thread_pool_index(uint64_t node_id);
   virtual int parse_feature(int idx,
@@ -730,9 +720,7 @@ class GraphTable : public Table {
   virtual paddle::framework::GpuPsCommGraphFea make_gpu_ps_graph_fea(
       int gpu_id, std::vector<uint64_t> &node_ids, int slot_num);  // NOLINT
   virtual paddle::framework::GpuPsCommGraphFloatFea make_gpu_ps_graph_float_fea(
-      int gpu_id,
-      std::vector<uint64_t> &node_ids,
-      int float_slot_num);  // NOLINT
+      int gpu_id, std::vector<uint64_t> &node_ids, int float_slot_num);  // NOLINT
   virtual paddle::framework::GpuPsCommRankFea make_gpu_ps_rank_fea(int gpu_id);
   int32_t Load_to_ssd(const std::string &path, const std::string &param);
   int64_t load_graph_to_memory_from_ssd(int idx,
@@ -768,7 +756,7 @@ class GraphTable : public Table {
   void calc_edge_type_limit();
   void build_node_iter_type_keys();
   bool is_key_for_self_rank(const uint64_t &id);
-  int partition_key_for_rank(const uint64_t &key);
+  int  partition_key_for_rank(const uint64_t &key);
   void graph_partition(bool is_edge);
   void dbh_graph_edge_partition();
   void dbh_graph_feature_partition();
@@ -777,17 +765,13 @@ class GraphTable : public Table {
   void fennel_graph_feature_partition();
   void fix_feature_node_shards(bool load_slot);
   void stat_graph_edge_info(int type);
-  std::string node_types_idx_to_node_type_str(int node_types_idx);
-  std::string index_to_node_type_str(int index);
 
   std::vector<uint64_t> graph_total_keys_;
   std::vector<std::vector<uint64_t>> graph_type_keys_;
   std::unordered_map<int, int> type_to_index_;
-  std::unordered_map<int, int> index_to_type_;
-  std::vector<std::string> node_types_;
   robin_hood::unordered_set<uint64_t> unique_all_edge_keys_;
   // node 2 rank
-  GraphNodeRank egde_node_rank_;
+  GraphNodeRank  egde_node_rank_;
   std::unordered_map<int, int> type_to_neighbor_limit_;
 
   std::vector<std::vector<GraphShard *>> edge_shards, feature_shards,
@@ -810,7 +794,7 @@ class GraphTable : public Table {
   // int float_fea_num_{-1};
   std::vector<std::unordered_map<std::string, int32_t>> feat_id_map;
   std::vector<std::unordered_map<std::string, int32_t>> float_feat_id_map;
-  std::unordered_map<std::string, int> node_type_str_to_node_types_idx, edge_to_id;
+  std::unordered_map<std::string, int> feature_to_id, edge_to_id;
   std::vector<std::string> id_to_feature, id_to_edge;
   std::string table_name;
   std::string table_type;

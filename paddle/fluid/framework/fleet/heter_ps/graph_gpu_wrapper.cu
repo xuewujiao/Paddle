@@ -61,6 +61,7 @@ void GraphGpuWrapper::init_conf(const std::string &first_node_type_str,
     }
     tensor_pair_num_ = first_node_type_vec.size();
     first_node_type_.resize(tensor_pair_num_);
+    all_node_type_.resize(tensor_pair_num_);
     for (int tensor_pair_idx = 0; tensor_pair_idx < tensor_pair_num_;
          ++tensor_pair_idx) {
       auto &first_node_type = first_node_type_vec[tensor_pair_idx];
@@ -75,7 +76,7 @@ void GraphGpuWrapper::init_conf(const std::string &first_node_type_str,
                               "(%s) is not found in node_to_id.", type));
         VLOG(2) << "node_to_id[" << type << "] = " << iter->second;
         first_node_type_[tensor_pair_idx].push_back(iter->second);
-        all_node_type_.push_back(iter->second);
+        all_node_type_[tensor_pair_idx].push_back(iter->second);
       }  // end for (auto &type : node_types)
     }  // end for (int tensor_pair_idx = 0; tensor_pair_idx < tensor_pair_num_;
 
@@ -115,11 +116,8 @@ void GraphGpuWrapper::init_conf(const std::string &first_node_type_str,
             uint64_t src_node_id = node_to_id.find(nodes[0])->second;
             uint64_t dst_node_id = node_to_id.find(nodes[1])->second;
             edge_to_node_map_[iter->second] = src_node_id << 32 | dst_node_id;
-            all_node_type_.push_back(src_node_id);
-            all_node_type_.push_back(dst_node_id);
-            VLOG(1) << "add all_node_type[" << tensor_pair_idx << "] "
-                << node_types_idx_to_node_type_str(src_node_id) << ", "
-                << node_types_idx_to_node_type_str(dst_node_id);
+            all_node_type_[tensor_pair_idx].push_back(src_node_id);
+            all_node_type_[tensor_pair_idx].push_back(dst_node_id);
           }
         }  // end for (auto &edge : edges) {
       }    // end for (size_t i = 0; i < meta_paths.size(); i++) {
@@ -190,20 +188,19 @@ void GraphGpuWrapper::init_conf(const std::string &first_node_type_str,
 
     finish_node_type_.resize(tensor_pair_num_);
     node_type_start_.resize(tensor_pair_num_);
-    global_infer_node_type_start_.resize(tensor_pair_num_);
+    global_infer_node_type_start_.resize(max_dev_id + 1);
     infer_cursor_.resize(tensor_pair_num_);
     for (int tensor_pair_idx = 0; tensor_pair_idx < tensor_pair_num_;
          ++tensor_pair_idx) {
       finish_node_type_[tensor_pair_idx].resize(max_dev_id + 1);
       node_type_start_[tensor_pair_idx].resize(max_dev_id + 1);
-      global_infer_node_type_start_[tensor_pair_idx].resize(max_dev_id + 1);
       auto &first_node_type = first_node_type_vec[tensor_pair_idx];
       auto node_types =
           paddle::string::split_string<std::string>(first_node_type, ";");
       for (size_t i = 0; i < device_id_mapping.size(); i++) {
         int dev_id = device_id_mapping[i];
         auto &node_type_start = node_type_start_[tensor_pair_idx][i];
-        auto &infer_node_type_start = global_infer_node_type_start_[tensor_pair_idx][i];
+        auto &infer_node_type_start = global_infer_node_type_start_[i];
         auto &finish_node_type = finish_node_type_[tensor_pair_idx][i];
         finish_node_type.clear();
 
@@ -250,18 +247,17 @@ void GraphGpuWrapper::init_type_keys(
     }
     keys[f_idx].resize(thread_num);
     auto &type_total_key = graph_all_type_total_keys[f_idx];
-    VLOG(1) << "node_type[" << index_to_node_type_str(f_idx) << "] index["
-        << type_to_index[f_idx] << "] graph_all_type_total_keys[" << f_idx
-        << "]=" << graph_all_type_total_keys[f_idx].size();
+    VLOG(0) << "graph_all_type_total_keys[" << f_idx
+            << "] = " << graph_all_type_total_keys[f_idx].size();
     for (size_t j = 0; j < type_total_key.size(); j++) {
       uint64_t shard = type_total_key[j] % thread_num;
       tmp_keys[shard].push_back(type_total_key[j]);
     }
     for (size_t j = 0; j < thread_num; j++) {
       lens[f_idx].push_back(tmp_keys[j].size());
-      VLOG(1) << "node_type[" << index_to_node_type_str(f_idx)
-          << "] index[" << type_to_index[f_idx] << "] gpu_graph_device_keys["
-          << f_idx << "]=" << tmp_keys[j].size();
+      VLOG(0) << "node type: " << type_to_index[f_idx]
+              << ", gpu_graph_device_keys[" << j
+              << "] = " << tmp_keys[j].size();
     }
     for (size_t j = 0; j < thread_num; j++) {
       auto stream = get_local_stream(j);
@@ -419,16 +415,6 @@ int GraphGpuWrapper::get_all_neighbor_id(
     std::vector<std::vector<uint64_t>> *output) {
   return reinterpret_cast<GpuPsGraphTable *>(graph_table)
       ->cpu_graph_table_->get_all_neighbor_id(table_type, slice_num, output);
-}
-
-std::string GraphGpuWrapper::node_types_idx_to_node_type_str(int node_types_idx) {
-  return reinterpret_cast<GpuPsGraphTable *>(graph_table)
-      ->cpu_graph_table_->node_types_idx_to_node_type_str(node_types_idx);
-}
-
-std::string GraphGpuWrapper::index_to_node_type_str(int index) {
-  return reinterpret_cast<GpuPsGraphTable *>(graph_table)
-      ->cpu_graph_table_->index_to_node_type_str(index);
 }
 
 int GraphGpuWrapper::get_all_id(int table_type,
@@ -631,8 +617,7 @@ void GraphGpuWrapper::shuffle_start_nodes_for_training() {
   int shuffle_seed = 0;
   std::random_device rd;
   std::mt19937 rng{rd()};
-  std::uniform_int_distribution<int> dice_distribution(
-      0, std::numeric_limits<int>::max());
+  std::uniform_int_distribution<int> dice_distribution(0, std::numeric_limits<int>::max());
 
   for (size_t i = 0; i < d_node_iter_graph_all_type_keys_.size(); i++) {
     for (size_t j = 0; j < d_node_iter_graph_all_type_keys_[i].size(); j++) {
@@ -644,15 +629,13 @@ void GraphGpuWrapper::shuffle_start_nodes_for_training() {
       const auto &exec_policy = thrust::cuda::par(allocator).on(stream);
       shuffle_seed = dice_distribution(rng);
       thrust::random::default_random_engine engine(shuffle_seed);
-      uint64_t *cur_node_iter_ptr = reinterpret_cast<uint64_t *>(
-          d_node_iter_graph_all_type_keys_[i][j]->ptr());
-      VLOG(2) << "node type: " << i << ", card num: " << j
-              << ", len: " << h_node_iter_graph_all_type_keys_len_[i][j];
+      uint64_t *cur_node_iter_ptr =
+          reinterpret_cast<uint64_t *>(d_node_iter_graph_all_type_keys_[i][j]->ptr());
+      VLOG(2) << "node type: " << i << ", card num: " << j << ", len: " << h_node_iter_graph_all_type_keys_len_[i][j];
 
       thrust::shuffle(exec_policy,
                       thrust::device_pointer_cast(cur_node_iter_ptr),
-                      thrust::device_pointer_cast(cur_node_iter_ptr) +
-                          h_node_iter_graph_all_type_keys_len_[i][j],
+                      thrust::device_pointer_cast(cur_node_iter_ptr) + h_node_iter_graph_all_type_keys_len_[i][j],
                       engine);
     }
   }
@@ -754,7 +737,7 @@ void GraphGpuWrapper::load_node_and_edge(
 
 void GraphGpuWrapper::calc_edge_type_limit() {
   reinterpret_cast<GpuPsGraphTable *>(graph_table)
-      ->cpu_graph_table_->calc_edge_type_limit();
+    ->cpu_graph_table_->calc_edge_type_limit();
 }
 
 void GraphGpuWrapper::add_table_feat_conf(std::string table_name,
@@ -1038,52 +1021,54 @@ void GraphGpuWrapper::build_gpu_graph_float_fea(
 }
 
 void GraphGpuWrapper::seek_keys_rank(int gpu_id,
-                                     const uint64_t *d_in_keys,
-                                     int len,
-                                     uint32_t *d_out_ranks) {
+                      const uint64_t* d_in_keys,
+                      int len,
+                      uint32_t* d_out_ranks) {
   platform::CUDADeviceGuard guard(gpu_id);
   platform::CUDAPlace place = platform::CUDAPlace(gpu_id);
   auto stream = get_local_stream(gpu_id);
 
-  if (FLAGS_graph_edges_split_mode == "fennel") {
+
+  if (FLAGS_graph_edges_split_mode == "fennel" ) {
     if (FLAGS_multi_node_sample_use_gpu_table) {
       // fennel下，FLAGS_multi_node_sample_use_gpu_table为True
       GpuPsGraphTable *g = reinterpret_cast<GpuPsGraphTable *>(graph_table);
       g->get_rank_info_of_nodes(gpu_id, d_in_keys, d_out_ranks, len);
       return;
     }
-  }
-
+  } 
+  
   std::vector<uint64_t> h_keys(len);
   std::vector<uint32_t> h_ranks(len);
-  CUDA_CHECK(cudaMemcpyAsync(h_keys.data(),
-                             d_in_keys,
-                             sizeof(uint64_t) * len,
-                             cudaMemcpyDeviceToHost,
-                             stream));
+  CUDA_CHECK(cudaMemcpyAsync(
+              h_keys.data(),
+              d_in_keys,
+              sizeof(uint64_t) * len,
+              cudaMemcpyDeviceToHost,
+              stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
 
   if (FLAGS_graph_edges_split_mode == "fennel") {
     // fennel下，但 FLAGS_multi_node_sample_use_gpu_table为False
     reinterpret_cast<GpuPsGraphTable *>(graph_table)
-        ->cpu_graph_table_->query_all_ids_rank(
-            len, h_keys.data(), h_ranks.data());
+        ->cpu_graph_table_->query_all_ids_rank(len, h_keys.data(), h_ranks.data());
   } else {
     // 硬拆下，cpu上进行取余得到
-    auto gpu_num =
-        reinterpret_cast<GpuPsGraphTable *>(graph_table)->get_device_num();
+    auto gpu_num = reinterpret_cast<GpuPsGraphTable *>(graph_table)
+        ->get_device_num();
     for (size_t i = 0; i < len; ++i) {
       bool hit = false;
-      auto &k = h_keys[i];
+      auto & k = h_keys[i];
       h_ranks[i] = (k / gpu_num) % node_size_;
     }
   }
 
-  CUDA_CHECK(cudaMemcpyAsync(d_out_ranks,
-                             h_ranks.data(),
-                             sizeof(uint32_t) * len,
-                             cudaMemcpyHostToDevice,
-                             stream));
+  CUDA_CHECK(cudaMemcpyAsync(
+              d_out_ranks,
+              h_ranks.data(),
+              sizeof(uint32_t) * len,
+              cudaMemcpyHostToDevice,
+              stream));
   CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
@@ -1096,7 +1081,7 @@ NeighborSampleResult GraphGpuWrapper::graph_neighbor_sample_v3(
 NeighborSampleResultV2 GraphGpuWrapper::graph_neighbor_sample_sage(
     int gpu_id,
     int edge_type_len,
-    const uint64_t *d_keys,
+    const uint64_t* d_keys,
     int sample_size,
     int len,
     std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,
@@ -1119,10 +1104,11 @@ GraphGpuWrapper::get_edge_type_graph(int gpu_id, int edge_type_len) {
       ->get_edge_type_graph(gpu_id, edge_type_len);
 }
 
-std::shared_ptr<phi::Allocation> GraphGpuWrapper::get_node_degree(int gpu_id,
-                                                                  int edge_idx,
-                                                                  uint64_t *key,
-                                                                  int len) {
+std::shared_ptr<phi::Allocation> GraphGpuWrapper::get_node_degree(
+    int gpu_id,
+    int edge_idx,
+    uint64_t *key,
+    int len) {
   return (reinterpret_cast<GpuPsGraphTable *>(graph_table))
       ->get_node_degree(gpu_id, edge_idx, key, len);
 }
@@ -1160,11 +1146,10 @@ int GraphGpuWrapper::get_float_feature_info_of_nodes(
     int gpu_id,
     uint64_t *d_nodes,
     int node_num,
-    std::shared_ptr<phi::Allocation> &size_list,
-    std::shared_ptr<phi::Allocation> &size_list_prefix_sum,
+    uint32_t *size_list,
+    uint32_t *size_list_prefix_sum,
     std::shared_ptr<phi::Allocation> &feature_list,
-    std::shared_ptr<phi::Allocation> &slot_list,
-    bool sage_mode) {
+    std::shared_ptr<phi::Allocation> &slot_list) {
   platform::CUDADeviceGuard guard(gpu_id);
   PADDLE_ENFORCE_NOT_NULL(graph_table,
                           paddle::platform::errors::InvalidArgument(
@@ -1176,8 +1161,7 @@ int GraphGpuWrapper::get_float_feature_info_of_nodes(
                                         size_list,
                                         size_list_prefix_sum,
                                         feature_list,
-                                        slot_list,
-                                        sage_mode);
+                                        slot_list);
 }
 
 int GraphGpuWrapper::get_feature_of_nodes(int gpu_id,
@@ -1209,8 +1193,7 @@ NeighborSampleResult GraphGpuWrapper::graph_neighbor_sample(
   VLOG(0) << "use edge type 0 set neighbor size limit";
   auto neighbor_sample_res =
       reinterpret_cast<GpuPsGraphTable *>(graph_table)
-          ->graph_neighbor_sample(
-              gpu_id, device_keys, walk_degree, len, neighbor_size_limit);
+          ->graph_neighbor_sample(gpu_id, device_keys, walk_degree, len, neighbor_size_limit);
 
   return neighbor_sample_res;
 }
@@ -1312,8 +1295,7 @@ void GraphGpuWrapper::release_graph_node() {
   reinterpret_cast<GpuPsGraphTable *>(graph_table)
       ->cpu_graph_table_->release_graph_node();
   // fennel 下 构造gpu表
-  if (strncasecmp(FLAGS_graph_edges_split_mode.c_str(), "fennel", 6) == 0 &&
-      FLAGS_multi_node_sample_use_gpu_table) {
+  if (strncasecmp(FLAGS_graph_edges_split_mode.c_str(), "fennel", 6) == 0 && FLAGS_multi_node_sample_use_gpu_table) {
     debug_gpu_memory_info("release_graph_node fennel gputable start");
     VLOG(0) << "begin build rank gpu table";
     GpuPsGraphTable *g = reinterpret_cast<GpuPsGraphTable *>(graph_table);
@@ -1346,7 +1328,7 @@ std::vector<std::vector<uint64_t>> &GraphGpuWrapper::get_graph_type_keys() {
 
 std::unordered_map<int, int> &GraphGpuWrapper::get_type_to_neighbor_limit() {
   return reinterpret_cast<GpuPsGraphTable *>(graph_table)
-      ->cpu_graph_table_->type_to_neighbor_limit_;
+    ->cpu_graph_table_->type_to_neighbor_limit_;
 }
 
 std::unordered_map<int, int> &GraphGpuWrapper::get_graph_type_to_index() {
@@ -1354,10 +1336,9 @@ std::unordered_map<int, int> &GraphGpuWrapper::get_graph_type_to_index() {
       ->cpu_graph_table_->type_to_index_;
 }
 
-void GraphGpuWrapper::set_keys2rank(
-    int gpu_id, std::shared_ptr<HashTable<uint64_t, uint32_t>> keys2rank) {
-  reinterpret_cast<GpuPsGraphTable *>(graph_table)
-      ->set_keys2rank(gpu_id, keys2rank);
+void GraphGpuWrapper::set_keys2rank(int gpu_id,
+        std::shared_ptr<HashTable<uint64_t, uint32_t>> keys2rank) {
+  reinterpret_cast<GpuPsGraphTable *>(graph_table)->set_keys2rank(gpu_id, keys2rank);
 }
 
 std::string &GraphGpuWrapper::get_node_type_size(std::string first_node_type) {

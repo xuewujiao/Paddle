@@ -49,13 +49,6 @@ int CtrDymfAccessor::Initialize() {
     VLOG(0) << "CtrDymfAccessor::Initialize() load filter slot:"
             << _config.ctr_accessor_param().load_filter_slots(i);
   }
-  for (int i = 0; i < _config.ctr_accessor_param().save_filter_slots_size();
-       i++) {
-    _save_filtered_slots.insert(
-        _config.ctr_accessor_param().save_filter_slots(i));
-    VLOG(0) << "CtrDymfAccessor::Initialize() save filter slot:"
-            << _config.ctr_accessor_param().save_filter_slots(i);
-  }
   VLOG(0) << " INTO CtrDymfAccessor::Initialize(); embed_sgd_dim:"
           << common_feature_value.embed_sgd_dim
           << " embedx_dim:" << common_feature_value.embedx_dim
@@ -96,6 +89,7 @@ bool CtrDymfAccessor::Shrink(float* value) {
   }
   return false;
 }
+
 bool CtrDymfAccessor::SaveCache(float* value,
                                 int param,
                                 double global_cache_threshold) {
@@ -123,15 +117,6 @@ bool CtrDymfAccessor::FilterSlot(float* value) {
     return true;
   }
   return false;
-}
-
-bool CtrDymfAccessor::SaveFilterSlot(float* value) {
-  // 热启时过滤掉_filtered_slots中的feasign
-  if (_save_filtered_slots.find(common_feature_value.Slot(value)) !=
-      _save_filtered_slots.end()) {
-    return false;
-  }
-  return true;
 }
 
 bool CtrDymfAccessor::Save(float* value, int param) {
@@ -307,9 +292,7 @@ float CtrDymfAccessor::ShowClickScore(float show, float click) {
   return (show - click) * nonclk_coeff + click * click_coeff;
 }
 
-std::string CtrDymfAccessor::ParseToString(const float* v,
-                                           int param,
-                                           bool only_save_embedx_w) {
+std::string CtrDymfAccessor::ParseToString(const float* v, int param) {
   /*
       float unseen_days;
       float delta_score;
@@ -325,15 +308,13 @@ std::string CtrDymfAccessor::ParseToString(const float* v,
   thread_local std::ostringstream os;
   os.clear();
   os.str("");
-  if (!only_save_embedx_w) {
-    os << common_feature_value.UnseenDays(const_cast<float*>(v)) << " " << v[1]
-       << " " << v[2] << " " << v[3] << " " << v[4];
-    //    << v[5] << " " << v[6];
-    for (int i = common_feature_value.EmbedG2SumIndex();
-         i < common_feature_value.EmbedxG2SumIndex();
-         i++) {
-      os << " " << v[i];
-    }
+  os << common_feature_value.UnseenDays(const_cast<float*>(v)) << " " << v[1]
+     << " " << v[2] << " " << v[3] << " " << v[4];
+  //    << v[5] << " " << v[6];
+  for (int i = common_feature_value.EmbedG2SumIndex();
+       i < common_feature_value.EmbedxG2SumIndex();
+       i++) {
+    os << " " << v[i];
   }
   auto show = common_feature_value.Show(const_cast<float*>(v));
   auto click = common_feature_value.Click(const_cast<float*>(v));
@@ -342,21 +323,10 @@ std::string CtrDymfAccessor::ParseToString(const float* v,
       static_cast<int>(common_feature_value.MfDim(const_cast<float*>(v)));
   if (score >= _config.embedx_threshold() &&
       param > common_feature_value.EmbedxG2SumIndex()) {
-    if (!only_save_embedx_w) {
-      for (auto i = common_feature_value.EmbedxG2SumIndex();
-           i < common_feature_value.Dim(mf_dim);
-           ++i) {
-        os << " " << v[i];
-      }
-    } else {
-      for (auto i = common_feature_value.EmbedxWIndex();
-           i < common_feature_value.Dim(mf_dim);
-           ++i) {
-        if (i == common_feature_value.EmbedxWIndex())
-          os << v[i];
-        else
-          os << " " << v[i];
-      }
+    for (auto i = common_feature_value.EmbedxG2SumIndex();
+         i < common_feature_value.Dim(mf_dim);
+         ++i) {
+      os << " " << v[i];
     }
   }
   return os.str();

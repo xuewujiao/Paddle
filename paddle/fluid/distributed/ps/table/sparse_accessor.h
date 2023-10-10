@@ -141,7 +141,6 @@ class SparseAccessor : public ValueAccessor {
   bool SaveCache(float* value, int param, double global_cache_threshold) {
     return false;
   }
-
   bool SaveSSD(float* value) { return false; }
   // update delta_score and unseen_days after save
   void UpdateStatAfterSave(float* value, int param) override;
@@ -163,9 +162,7 @@ class SparseAccessor : public ValueAccessor {
                          const float** update_values,
                          size_t num);
 
-  std::string ParseToString(const float* value,
-                            int param,
-                            bool only_save_embedx_w = false) override;
+  std::string ParseToString(const float* value, int param) override;
   int32_t ParseFromString(const std::string& str, float* v) override;
   virtual bool CreateValue(int type, const float* value);
 

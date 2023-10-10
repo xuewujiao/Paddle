@@ -168,6 +168,7 @@ void CtrCommonAccessor::UpdateStatAfterSave(float* value, int param) {
       return;
   }
 }
+
 int32_t CtrCommonAccessor::Create(float** values, size_t num) {
   for (size_t value_item = 0; value_item < num; ++value_item) {
     float* value = values[value_item];
@@ -308,41 +309,26 @@ float CtrCommonAccessor::ShowClickScore(float show, float click) {
   return (show - click) * nonclk_coeff + click * click_coeff;
 }
 
-std::string CtrCommonAccessor::ParseToString(const float* v,
-                                             int param,
-                                             bool only_save_embedx_w) {
+std::string CtrCommonAccessor::ParseToString(const float* v, int param) {
   thread_local std::ostringstream os;
   os.clear();
   os.str("");
-  if (!only_save_embedx_w) {
-    os << v[0] << " " << v[1] << " " << v[2] << " " << v[3] << " " << v[4]
-       << " " << v[5];
-    for (int i = common_feature_value.EmbedG2SumIndex();
-         i < common_feature_value.EmbedxWIndex();
-         i++) {
-      os << " " << v[i];
-    }
+  os << v[0] << " " << v[1] << " " << v[2] << " " << v[3] << " " << v[4] << " "
+     << v[5];
+  for (int i = common_feature_value.EmbedG2SumIndex();
+       i < common_feature_value.EmbedxWIndex();
+       i++) {
+    os << " " << v[i];
   }
   auto show = common_feature_value.Show(const_cast<float*>(v));
   auto click = common_feature_value.Click(const_cast<float*>(v));
   auto score = ShowClickScore(show, click);
   if (score >= _config.embedx_threshold() &&
       param > common_feature_value.EmbedxWIndex()) {
-    if (!only_save_embedx_w) {
-      for (auto i = common_feature_value.EmbedxWIndex();
-           i < common_feature_value.Dim();
-           ++i) {
-        os << " " << v[i];
-      }
-    } else {
-      for (auto i = common_feature_value.EmbedxWIndex();
-           i < common_feature_value.EmbedxG2SumIndex();
-           ++i) {
-        if (i == common_feature_value.EmbedxWIndex())
-          os << v[i];
-        else
-          os << " " << v[i];
-      }
+    for (auto i = common_feature_value.EmbedxWIndex();
+         i < common_feature_value.Dim();
+         ++i) {
+      os << " " << v[i];
     }
   }
   return os.str();

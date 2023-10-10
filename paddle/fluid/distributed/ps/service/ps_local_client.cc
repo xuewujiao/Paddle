@@ -66,11 +66,7 @@ int32_t PsLocalClient::Initialize() {
                                            const std::string& mode) {
   auto* table_ptr = GetTable(table_id);
   table_ptr->Flush();
-#ifdef PADDLE_WITH_GPU_GRAPH
-  table_ptr->Save_v2(epoch, mode);
-#else
   table_ptr->Save(epoch, mode);
-#endif
   return done();
 }
 
@@ -236,7 +232,7 @@ int32_t PsLocalClient::Initialize() {
     const uint64_t* keys,
     size_t num,
     uint16_t pass_id,
-    const std::vector<std::unordered_map<uint64_t, uint32_t>>& keys2rank_vec,
+    const std::vector<std::unordered_map<uint64_t, uint32_t>> & keys2rank_vec,
     const uint16_t& /**dim_id*/) {
   // FIXME
   // auto timer =
