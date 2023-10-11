@@ -188,6 +188,7 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::HeterComm(
   resource_ = resource;
   device_num_ = resource_->total_device();
   storage_.resize(device_num_);
+  storage_feature_.resize(device_num_);
   multi_mf_dim_ = resource->multi_mf();
   load_factor_ = FLAGS_gpugraph_hbm_table_train_load_factor;
   multi_node_ = resource_->multi_node();
@@ -250,6 +251,9 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::HeterComm(
       storage_[i].init(device_num_,
                        resource_->dev_id(i),
                        phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+      storage_feature_[i].init(device_num_,
+                       resource_->dev_id(i),
+                       phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
     }
   }
   barrier_.reset(device_num_);
@@ -269,6 +273,7 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::HeterComm(
   resource_ = resource;
   device_num_ = resource_->total_device();
   storage_.resize(device_num_);
+  storage_feature_.resize(device_num_);
   multi_mf_dim_ = resource->multi_mf();
   gpu_accessor_ = gpu_accessor;
   load_factor_ = FLAGS_gpugraph_hbm_table_train_load_factor;
@@ -329,6 +334,9 @@ HeterComm<KeyType, ValType, GradType, GPUAccessor>::HeterComm(
     }
     if (multi_node_) {
       storage_[i].init(device_num_,
+                       resource_->dev_id(i),
+                       phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+      storage_feature_[i].init(device_num_,
                        resource_->dev_id(i),
                        phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
     }
@@ -536,7 +544,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::print_debug_time(
       "sample_v3_time: %lf, local_sameple_time: %lf, total_async_sameple_time: %lf, partition_time: %lf, set_async_time: %lf, wait_async_sample_time:%lf async_sample_time:%lf, scatter_and_compress_time:%lf "
       "all_sage_sample_time_: %lf, local_sage_sample_: %lf, total_async_sage_sample_: %lf, wait_async_sage_sample_:%lf async_sage_sample_:%lf, sage_result_merge_time_:%lf "
       "all_degree_time_: %lf, local_degree_: %lf, total_async_degree_: %lf, wait_async_degree_:%lf async_degree_:%lf, degree_scatter_:%lf "
-      "all_feature_pull_time_: %lf, local_feature_pull_: %lf, total_async_feature_pull_: %lf, wait_async_feature_pull_:%lf async_sage_sample_:%lf, feature_pull_scatter_:%lf "
+      "all_feature_pull_time_: %lf, local_feature_pull_: %lf, total_async_feature_pull_: %lf, wait_async_feature_pull_:%lf async_feature_pull_:%lf, feature_pull_scatter_:%lf "
       "\n",
       gpu_id,
       count_,
