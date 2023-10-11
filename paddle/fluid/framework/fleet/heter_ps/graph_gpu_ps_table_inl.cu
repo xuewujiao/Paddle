@@ -4208,8 +4208,9 @@ int GpuPsGraphTable::get_feature_info_of_nodes_async(
   platform::CUDAPlace place = platform::CUDAPlace(gpu_id);
   auto stream = resource_->local_stream(gpu_id, 0);
 
-  auto &loc = storage_[gpu_id];
-	loc.partition_.Resume();
+  auto &loc = storage_feature_[gpu_id];
+  auto &cache = storage_[gpu_id];
+	cache.partition_.Resume();
   auto &res = loc.shard_res;
   int shard_num = node_size_ * device_num_;  
   loc.init_shard(node_num, shard_num);
@@ -4239,8 +4240,8 @@ int GpuPsGraphTable::get_feature_info_of_nodes_async(
     // VLOG(0) << "h_local_part_offsets["<<i<<"] = "<< h_local_part_sizes[i];
   }
   CHECK_EQ(node_num, h_local_part_offsets[shard_num]);
-	loc.partition_.Pause();
-  loc.set_async_.Resume();
+	cache.partition_.Pause();
+  cache.set_async_.Resume();
 
   VLOG(2) << "Begin asynchronous feature pull request";  
   auto d_tmp_feature_size_list = memory::Alloc(place,
@@ -4294,8 +4295,8 @@ int GpuPsGraphTable::get_feature_info_of_nodes_async(
     async_com->PutRequestAsync(&request_handles[i]);
 
 	}
-  loc.set_async_.Pause();
-  loc.wait_async_feature_pull_.Resume(); 
+  cache.set_async_.Pause();
+  cache.wait_async_feature_pull_.Resume(); 
 	//等待异步执行结束
 	for(int i = 0; i < shard_num; ++i) {
     if (h_local_part_sizes[i] == 0) {
@@ -4304,8 +4305,8 @@ int GpuPsGraphTable::get_feature_info_of_nodes_async(
 		request_handles[i].Wait();
 	}
   VLOG(2) << "all feature pull request finish"; 
-  loc.wait_async_feature_pull_.Pause();
-  loc.feature_pull_scatter_.Resume();
+  cache.wait_async_feature_pull_.Pause();
+  cache.feature_pull_scatter_.Resume();
 
   
   d_feature_size_list = memory::Alloc(place,
@@ -4388,7 +4389,7 @@ int GpuPsGraphTable::get_feature_info_of_nodes_async(
         h_local_part_sizes[i]);
   }
   CUDA_CHECK(cudaStreamSynchronize(stream));
-  loc.feature_pull_scatter_.Pause();
+  cache.feature_pull_scatter_.Pause();
   for (int i = 0; i < shard_num; ++i) {
     if (h_local_part_sizes[i] == 0) {
       continue;
@@ -4663,7 +4664,6 @@ int GpuPsGraphTable::get_feature_info_of_nodes_normal_one_table(
                               static_cast<size_t>(node_num),
                               calc_stream);
 
-    VLOG(2) << "start get feature size";
     CUDA_CHECK(cudaMemsetAsync(d_feature_size_ptr,
                                0,
                                node_num * sizeof(uint32_t),
@@ -4681,9 +4681,7 @@ int GpuPsGraphTable::get_feature_info_of_nodes_normal_one_table(
                                sizeof(uint32_t),
                                calc_stream));
 
-    VLOG(2) << "end get feature size";
 
-    VLOG(2) << "start calc prefix sum";
     size_t temp_storage_bytes = 0;
     CUDA_CHECK(cub::DeviceScan::InclusiveSum(
         NULL,
@@ -4706,9 +4704,7 @@ int GpuPsGraphTable::get_feature_info_of_nodes_normal_one_table(
         d_feature_size_prefix_sum_ptr + 1,
         node_num,
         calc_stream));
-    // CUDA_CHECK(cudaStreamSynchronize(calc_stream));
 
-    VLOG(2) << "end calc prefix sum";
     uint32_t fea_num = 0;
     CUDA_CHECK(cudaMemcpyAsync(
         &fea_num,
@@ -4727,7 +4723,6 @@ int GpuPsGraphTable::get_feature_info_of_nodes_normal_one_table(
                               phi::Stream(reinterpret_cast<phi::StreamId>(mem_stream))); 
     uint8_t* d_slot_list_ptr = reinterpret_cast<uint8_t *>(d_slot_list->ptr());
 
-    VLOG(2) << "start get feature"<< "fea num: "<< fea_num;
     if (is_float_feature) {
       int offset = get_graph_float_fea_list_offset(gpu_id);
       auto& graph = gpu_graph_float_fea_list_[offset];
@@ -4748,7 +4743,6 @@ int GpuPsGraphTable::get_feature_info_of_nodes_normal_one_table(
                                                       node_num);
     }
     CUDA_CHECK(cudaStreamSynchronize(calc_stream));
-    VLOG(2) << "end get feature";
   return fea_num;
 }
 

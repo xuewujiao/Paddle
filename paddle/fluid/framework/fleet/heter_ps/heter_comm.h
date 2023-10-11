@@ -868,6 +868,7 @@ class HeterComm {
   GPUAccessor gpu_accessor_;
 public:
   std::vector<LocalStorage> storage_;
+  std::vector<LocalStorage> storage_feature_;
 
  protected:
   int topo_aware_{0};
