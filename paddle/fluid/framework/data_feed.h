@@ -1056,6 +1056,7 @@ class GraphDataGenerator {
   std::vector<std::shared_ptr<phi::Allocation>> inverse_vec_;
   std::vector<std::shared_ptr<phi::Allocation>> final_sage_nodes_vec_;
   std::vector<std::shared_ptr<phi::Allocation>> node_degree_vec_;
+  std::vector<int*> node_degree_ptr_;
   std::vector<int> uniq_instance_vec_;
   std::vector<int> total_instance_vec_;
   std::vector<std::vector<std::shared_ptr<phi::Allocation>>> graph_edges_vec_;
