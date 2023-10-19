@@ -274,14 +274,18 @@ class GpuPsGraphTable
 
   std::vector<std::shared_ptr<phi::Allocation>> get_edge_type_graph(
       int gpu_id, int edge_type_len);
-  std::shared_ptr<phi::Allocation> get_node_degree(int gpu_id,
-                                                   int edge_idx,
-                                                   uint64_t *key,
-                                                   int len);
-  std::shared_ptr<phi::Allocation> get_node_degree_async(int gpu_id, 
-                                                         int edge_idx, 
-                                                         uint64_t* d_keys, 
-                                                         int len);
+
+  void get_node_degree(int gpu_id,
+                       uint64_t* key,
+                       int len,
+                       int* node_degree_ptr,
+                       const std::unordered_map<std::string, int>& edge_to_id);
+
+  void get_node_degree_async(int gpu_id,
+                             uint64_t* d_keys,
+                             int len,
+                             int* node_degree_ptr,
+                             const std::unordered_map<std::string, int>& edge_to_id);
   std::shared_ptr<phi::Allocation> get_node_degree_all2all(int gpu_id,
                                                            int edge_idx,
                                                            uint64_t *key,
