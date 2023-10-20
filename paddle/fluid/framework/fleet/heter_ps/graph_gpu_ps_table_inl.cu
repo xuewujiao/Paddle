@@ -3733,10 +3733,11 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
   return result;
 }
 
-std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree(int gpu_id,
-                                                                  int edge_idx,
-                                                                  uint64_t* key,
-                                                                  int len) {
+void GpuPsGraphTable::get_node_degree(int gpu_id,
+                                      uint64_t* key,
+                                      int len,
+                                      int* node_degree_ptr,
+                                      const std::unordered_map<std::string, int>& edge_to_id) {
   print_debug_time(global_device_map[gpu_id]);
   auto &cache = storage_[gpu_id];
 	cache.all_degree_time_.Resume();
@@ -3745,26 +3746,53 @@ std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree(int gpu_id,
 
     if (FLAGS_enable_async_comm) {
       cache.total_async_degree_.Resume();
-      auto node_degree = get_node_degree_async(gpu_id, edge_idx, key, len);
+
+      get_node_degree_async(gpu_id, key, len, node_degree_ptr, edge_to_id);
       cache.total_async_degree_.Pause();
       cache.all_degree_time_.Pause();
-      return node_degree;
+      return ;
     }else{
-      auto node_degree = get_node_degree_all2all(gpu_id, edge_idx, key, len);
+      for (auto &iter : edge_to_id) {
+        int edge_idx = iter.second;       
+        auto sub_node_degree = get_node_degree_all2all(gpu_id, edge_idx, key, len);
+        int *sub_node_degree_ptr = reinterpret_cast<int *>(sub_node_degree->ptr());
+        
+        auto stream = resource_->local_stream(gpu_id, 0);
+        CUDA_CHECK(cudaMemcpyAsync(node_degree_ptr + edge_idx * len,
+                                   sub_node_degree_ptr,
+                                   sizeof(int) * len,
+                                   cudaMemcpyDeviceToDevice,
+                                   stream));
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+      }
+      return ;
       cache.all_degree_time_.Pause();
-      return node_degree;
     }
   } else {
-    auto node_degree = get_node_degree_single(gpu_id, edge_idx, key, len);
-    return node_degree;
+    for (auto &iter : edge_to_id) {
+      int edge_idx = iter.second;       
+      auto sub_node_degree = get_node_degree_single(gpu_id, edge_idx, key, len);
+      int *sub_node_degree_ptr = reinterpret_cast<int *>(sub_node_degree->ptr());
+      
+      auto stream = resource_->local_stream(gpu_id, 0);
+      CUDA_CHECK(cudaMemcpyAsync(node_degree_ptr + edge_idx * len,
+                                 sub_node_degree_ptr,
+                                 sizeof(int) * len,
+                                 cudaMemcpyDeviceToDevice,
+                                 stream));
+      CUDA_CHECK(cudaStreamSynchronize(stream));
+    }
+    return ;
   }
 }
 
-std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree_async(
-    int gpu_id, 
-    int edge_idx, 
-    uint64_t* d_keys, 
-    int len) {
+void GpuPsGraphTable::get_node_degree_async(int gpu_id,
+                                            uint64_t* d_keys,
+                                            int len,
+                                            int* node_degree_ptr,
+                                            const std::unordered_map<std::string, int>& edge_to_id) {
+
+
   platform::CUDADeviceGuard guard(gpu_id);
   platform::CUDAPlace place = platform::CUDAPlace(gpu_id);
   auto stream = resource_->local_stream(gpu_id, 0);
@@ -3803,76 +3831,111 @@ std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree_async(
   VLOG(2) << "Begin asynchronous degree get request";
 	loc.partition_.Pause();
   loc.set_async_.Resume();   
+  int edge_len = edge_to_id.size();
 
   auto tmp_node_degree = memory::AllocShared(place,
-                                          len * sizeof(int),
-                                          phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
+                                             edge_len * len * sizeof(int),
+                                             phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
 
   int* tmp_node_degree_ptr = reinterpret_cast<int*>(tmp_node_degree->ptr());
 
   auto* allocator = dynamic_cast<AsyncComAllocator*>(_async_request[degree_runner_index_*gpu_num + gpu_id]->get_allocator());
-	std::vector<RequestHandle> request_handles(shard_num);
-  for (int i = 0; i < shard_num; ++i) {
-    if (h_local_part_sizes[i] == 0) {
-      continue;
-    }
-    auto* val_context = allocator->ToMemoryContext(
-      tmp_node_degree_ptr + h_local_part_offsets[i], h_local_part_sizes[i] * sizeof(int) , DT_UINT8);
-    request_handles[i].response_ = CreateAsyncReqRes();
-    request_handles[i].response_->memory_contexts[0] = val_context;
+  std::vector<std::vector<RequestHandle>> request_handles;
+  request_handles.reserve(edge_len); // 预分配外部向量的空间
+
+  for (int i = 0; i < edge_len; ++i) {
+      std::vector<RequestHandle> temp(shard_num);
+      request_handles.push_back(std::move(temp)); // 使用移动语义来避免拷贝
   }
 
-  int64_t int_para[1] = {edge_idx};
-  auto* async_com = paddle::framework::AsyncContext::GetInstance()->get_async_com(gpu_id); 
-  for (int i = 0; i < shard_num; ++i) {
-    if (h_local_part_sizes[i] == 0) {
-      continue;
-    }
-    auto* node_key_context = allocator->ToMemoryContext(
-      d_merged_push_keys_ptr + h_local_part_offsets[i], h_local_part_sizes[i], DT_UINT64);
-    auto* para_int_context = allocator->ToMemoryContext(int_para, 1, DT_INT64, ML_HOST);
-
-    auto* request = _async_request[degree_runner_index_*gpu_num + gpu_id]->MakeDegreeGetRequest(node_key_context, para_int_context, i);
-    request_handles[i].request_ = request;
-    
-    async_com->PutRequestAsync(&request_handles[i]);
+  size_t edge_count = 0;
+  std::vector<int64_t> int_para;
+  for (auto &iter : edge_to_id) {
+      int edge_idx = iter.second; 
+      int_para.push_back(edge_idx);
   }
+
+  // std::random_device rd;
+  // std::mt19937 gen(rd());
+  // std::uniform_int_distribution<> dis(0, shard_num-1);
+  // int randomforwait = dis(gen);
+
+  for (auto &iter : edge_to_id) {
+    int edge_idx = iter.second; 
+    for (int i = 0; i < shard_num; ++i) {
+      if (h_local_part_sizes[i] == 0) {
+        continue;
+      }
+      auto* val_context = allocator->ToMemoryContext(
+        tmp_node_degree_ptr + h_local_part_offsets[i] + edge_count*len, h_local_part_sizes[i] * sizeof(int) , DT_UINT8);
+      request_handles[edge_count][i].response_ = CreateAsyncReqRes();
+      request_handles[edge_count][i].response_->memory_contexts[0] = val_context;
+    }
+
+    auto* async_com = paddle::framework::AsyncContext::GetInstance()->get_async_com(gpu_id); 
+    for (int i = 0; i < shard_num; ++i) {
+      if (h_local_part_sizes[i] == 0) {
+        continue;
+      }
+      auto* node_key_context = allocator->ToMemoryContext(
+        d_merged_push_keys_ptr + h_local_part_offsets[i], h_local_part_sizes[i], DT_UINT64);
+      auto* para_int_context = allocator->ToMemoryContext(&int_para[edge_count], 1, DT_INT64, ML_HOST);
+
+      auto* request = _async_request[degree_runner_index_*gpu_num + gpu_id]->MakeDegreeGetRequest(node_key_context, para_int_context, i);
+      request_handles[edge_count][i].request_ = request;
+      
+      async_com->PutRequestAsync(&request_handles[edge_count][i]);
+    }
+    loc.set_async_.Pause();
+    loc.wait_async_degree_.Resume();
+    for(int i = 0; i < shard_num; ++i) {
+      // if (h_local_part_sizes[i] == 0 || (i != randomforwait)) {
+      if (h_local_part_sizes[i] == 0 ) {
+        continue;
+      }
+      request_handles[edge_count][i].Wait();
+    }
+    loc.wait_async_degree_.Pause();	
+    loc.set_async_.Resume();  
+    edge_count++;
+  }
+
   loc.set_async_.Pause();
-  loc.wait_async_degree_.Resume();
+  // loc.wait_async_degree_.Resume();
   //等待异步执行结束
-  for(int i = 0; i < shard_num; ++i) {
-    if (h_local_part_sizes[i] == 0) {
-      continue;
-    }
-    request_handles[i].Wait();
-  }
+  // for (size_t j = 0; j < edge_len; ++j) {
+  //   for(int i = 0; i < shard_num; ++i) {
+  //     if (h_local_part_sizes[i] == 0 ) {
+  //     if (h_local_part_sizes[i] == 0 || (i == randomforwait)) {
+  //       continue;
+  //     }
+  //     request_handles[j][i].Wait();
+  //   }
+  // }
   VLOG(2) << "all degree get request finish"; 
-  loc.wait_async_degree_.Pause();	
+  // loc.wait_async_degree_.Pause();	
   loc.degree_scatter_.Resume();
 
-  auto node_degree =
-      memory::AllocShared(place,
-                          len * sizeof(int),
-                          phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
-  int* node_degree_ptr = reinterpret_cast<int*>(node_degree->ptr());
-
-	heter_comm_kernel_->scatter_vals(
-      reinterpret_cast<const int*>(tmp_node_degree_ptr),     // in
-      reinterpret_cast<int*>(node_degree_ptr),               // out
-      res.d_local_idx_parted,
-      len,
-      sizeof(int),
-      stream);
+  for (size_t i = 0; i < edge_len; ++i) {
+    heter_comm_kernel_->scatter_vals(
+        reinterpret_cast<const int*>(tmp_node_degree_ptr + i * len),     // in
+        reinterpret_cast<int*>(node_degree_ptr + i * len),               // out
+        res.d_local_idx_parted,
+        len,
+        sizeof(int),
+        stream);
+  }
   CUDA_CHECK(cudaStreamSynchronize(stream));
   loc.degree_scatter_.Pause();
-  for (int i = 0; i < shard_num; ++i) {
-    if (h_local_part_sizes[i] == 0) {
-      continue;
+  for (size_t j = 0; j < edge_to_id.size(); ++j) {
+    for (int i = 0; i < shard_num; ++i) {
+      if (h_local_part_sizes[i] == 0) {
+        continue;
+      }
+      allocator->FreeReqRes(request_handles[j][i].response_);
+      request_handles[j][i].response_ = nullptr;
     }
-    allocator->FreeReqRes(request_handles[i].response_);
-    request_handles[i].response_ = nullptr;
   }
-  return node_degree;
 }
 
 std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree_all2all(

@@ -1163,12 +1163,13 @@ GraphGpuWrapper::get_edge_type_graph(int gpu_id, int edge_type_len) {
       ->get_edge_type_graph(gpu_id, edge_type_len);
 }
 
-std::shared_ptr<phi::Allocation> GraphGpuWrapper::get_node_degree(int gpu_id,
-                                                                  int edge_idx,
-                                                                  uint64_t *key,
-                                                                  int len) {
-  return (reinterpret_cast<GpuPsGraphTable *>(graph_table))
-      ->get_node_degree(gpu_id, edge_idx, key, len);
+void GraphGpuWrapper::get_node_degree(int gpu_id,
+                                      uint64_t* key,
+                                      int len,
+                                      int* node_degree_ptr,
+                                      const std::unordered_map<std::string, int>& edge_to_id) {
+  reinterpret_cast<GpuPsGraphTable *>(graph_table)
+      ->get_node_degree(gpu_id, key, len, node_degree_ptr, edge_to_id);;
 }
 void GraphGpuWrapper::set_infer_mode(bool infer_mode) {
   if (graph_table != nullptr) {
