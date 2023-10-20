@@ -178,10 +178,11 @@ class GraphGpuWrapper {
       std::vector<std::shared_ptr<phi::Allocation>> edge_type_graphs,
       bool weighted,
       bool return_weight);
-  std::shared_ptr<phi::Allocation> get_node_degree(int gpu_id,
-                                                   int edge_idx,
-                                                   uint64_t* key,
-                                                   int len);
+  void get_node_degree(int gpu_id,
+                       uint64_t* key,
+                       int len,
+                       int* node_degree_ptr,
+                       const std::unordered_map<std::string, int>& edge_to_id);
   gpuStream_t get_local_stream(int gpuid);
   std::vector<uint64_t> graph_neighbor_sample(
       int gpu_id,
