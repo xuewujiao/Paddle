@@ -709,6 +709,23 @@ int GraphDataGenerator::FillIdShowClkTensor(int total_instance,
   return 0;
 }
 
+__global__ void rearange_degree_result_kernel(int* node_degree_vec, 
+                                              size_t merge_len, 
+                                              int edge_len, 
+                                              int len, 
+                                              int* degree_tensor_ptr) {
+    int global_id = blockIdx.x * blockDim.x + threadIdx.x;
+    if (global_id < len * edge_len) {
+        int i = global_id / edge_len;
+        int j = global_id % edge_len;
+
+        int src_idx = i + j * merge_len;
+        int dest_idx = i + j * len;
+
+        degree_tensor_ptr[dest_idx] = node_degree_vec[src_idx];
+    }
+}
+
 int GraphDataGenerator::FillGraphIdShowClkTensor(int uniq_instance,
                                                  int total_instance,
                                                  int index) {
@@ -831,13 +848,29 @@ int GraphDataGenerator::FillGraphIdShowClkTensor(int uniq_instance,
                     train_stream_);
 
     if (conf_.get_degree) {
-      degree_tensor_ptr_ = feed_vec_[feed_vec_idx++]->mutable_data<int>(
-          {uniq_instance * conf_.edge_to_id_len}, this->place_);
-      cudaMemcpyAsync(degree_tensor_ptr_,
-                      node_degree_vec_[index]->ptr(),
-                      sizeof(int) * uniq_instance * conf_.edge_to_id_len,
-                      cudaMemcpyDeviceToDevice,
-                      train_stream_);
+      if (!conf_.is_multi_node || FLAGS_enable_async_comm) {
+        degree_tensor_ptr_ = feed_vec_[feed_vec_idx++]->mutable_data<int>(
+            {uniq_instance * conf_.edge_to_id_len}, this->place_);
+
+        int threadsPerBlock = 256;
+        dim3 blocks((uniq_instance * conf_.edge_to_id_len + threadsPerBlock - 1) / threadsPerBlock);
+        dim3 threads(threadsPerBlock);
+        rearange_degree_result_kernel<<<blocks, threads, 0, train_stream_>>>(
+                                        node_degree_ptr_[index], 
+                                        node_degree_merge_len_[index], 
+                                        conf_.edge_to_id_len, 
+                                        uniq_instance, 
+                                        degree_tensor_ptr_);
+      }else{
+        degree_tensor_ptr_ = feed_vec_[feed_vec_idx++]->mutable_data<int>(
+            {uniq_instance * conf_.edge_to_id_len}, this->place_);
+        CUDA_CHECK(cudaMemcpyAsync(degree_tensor_ptr_,
+                                   node_degree_vec_[index]->ptr(),
+                                   sizeof(int) * uniq_instance * conf_.edge_to_id_len,
+                                   cudaMemcpyDeviceToDevice,
+                                   train_stream_));
+                }
+      CUDA_CHECK(cudaStreamSynchronize(train_stream_));
     }
   }  // end for (int tensor_pair_idx = 0; tensor_pair_idx <
      // conf_.tensor_pair_num;
@@ -2944,30 +2977,16 @@ std::shared_ptr<phi::Allocation> GenerateSampleGraph(
   return final_nodes_vec[len_samples - 1];
 }
 
-std::shared_ptr<phi::Allocation> GetNodeDegree(
+void GetNodeDegree(
     uint64_t *node_ids,
+    int *node_degree_ptr,
     int len,
     const GraphDataGeneratorConfig &conf,
     const paddle::platform::Place &place,
     cudaStream_t stream) {
-  auto node_degree =
-      memory::AllocShared(place,
-                          len * conf.edge_to_id_len * sizeof(int),
-                          phi::Stream(reinterpret_cast<phi::StreamId>(stream)));
   auto gpu_graph_ptr = GraphGpuWrapper::GetInstance();
-  auto edge_to_id = gpu_graph_ptr->edge_to_id;
-  int *node_degree_ptr = reinterpret_cast<int *>(node_degree->ptr());
-  for (auto &iter : edge_to_id) {
-    int edge_idx = iter.second;
-    auto sub_node_degree =
-        gpu_graph_ptr->get_node_degree(conf.gpuid, edge_idx, node_ids, len);
-    int *sub_node_degree_ptr = reinterpret_cast<int *>(sub_node_degree->ptr());
-    cudaMemcpy(node_degree_ptr + edge_idx * len,
-               sub_node_degree_ptr,
-               sizeof(int) * len,
-               cudaMemcpyDeviceToDevice);
-  }
-  return node_degree;
+  gpu_graph_ptr->get_node_degree(conf.gpuid, node_ids, len, node_degree_ptr, gpu_graph_ptr->edge_to_id);
+
 }
 
 int multi_node_sync_sample(int flag,
@@ -3931,6 +3950,96 @@ bool GraphDataGenerator::DoWalkForTrain() {
   return train_flag;
 }
 
+void GraphDataGenerator::BatchDegreeGet() {
+  size_t total_uniq_instance = 0;
+  for (int i = 0; i < sage_batch_num_; ++i) {
+      total_uniq_instance += uniq_instance_vec_[i];
+  }
+  auto all_nodes =
+    memory::AllocShared(place_,
+                  total_uniq_instance * sizeof(uint64_t),
+                  phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+  uint64_t* all_nodes_ptr = reinterpret_cast<uint64_t*>(all_nodes->ptr());
+  
+  auto node_degrees =
+    memory::AllocShared(place_,
+                  total_uniq_instance * conf_.edge_to_id_len * sizeof(int),
+                  phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+  int* node_degrees_ptr = reinterpret_cast<int*>(node_degrees->ptr());
+
+  std::vector<size_t> h_part_offsets;
+  h_part_offsets.push_back(0);  // 初始化第一个offset为0
+  for (int i = 0; i < sage_batch_num_; ++i) {        
+      CUDA_CHECK(cudaMemcpyAsync(all_nodes_ptr + h_part_offsets.back(),
+                                final_sage_nodes_vec_[i]->ptr(),
+                                uniq_instance_vec_[i] * sizeof(uint64_t),
+                                cudaMemcpyDeviceToDevice,
+                                sample_stream_));
+
+      size_t new_offset = h_part_offsets.back() + uniq_instance_vec_[i];
+      h_part_offsets.push_back(new_offset);  // 计算并记录新的offset值
+  }
+  CUDA_CHECK(cudaStreamSynchronize(sample_stream_));
+
+  size_t offset = 0;
+  size_t max_size = 10000000;  // 每次处理的实例的数量
+  size_t chunk_size = 0; 
+  VLOG(2) << "total_uniq_instance: "<< total_uniq_instance;
+
+  std::vector<size_t> h_base_offset(sage_batch_num_+1);
+  h_base_offset[0] = 0;
+  size_t part_count = 0;
+
+  for (int i = 0; i < sage_batch_num_; ++i) {  
+    if(h_part_offsets[i+1] - offset < max_size){
+      part_count++;
+      h_base_offset[i+1] = h_base_offset[i] + uniq_instance_vec_[i];
+      continue;
+    }else{
+      chunk_size = h_part_offsets[i] - offset;
+      node_degree_merge_len_.insert(node_degree_merge_len_.end(), part_count, chunk_size);
+      h_base_offset[i] = h_part_offsets[i] * conf_.edge_to_id_len;
+      h_base_offset[i+1] = h_base_offset[i] + uniq_instance_vec_[i];
+      part_count = 1;
+    }
+
+    VLOG(2) << "start GetNodeDegree chunk_size: "<< chunk_size;
+    GetNodeDegree(all_nodes_ptr + offset,
+                  node_degrees_ptr + offset * conf_.edge_to_id_len,
+                  chunk_size,
+                  conf_,
+                  place_,
+                  sample_stream_); 
+    offset += chunk_size;               
+    CUDA_CHECK(cudaStreamSynchronize(sample_stream_));
+  }
+
+  // 处理剩余的部分
+  if (total_uniq_instance - offset > 0) {
+    chunk_size = total_uniq_instance - offset;
+    node_degree_merge_len_.insert(node_degree_merge_len_.end(), part_count, chunk_size);
+    // h_base_offset[sage_batch_num_] = h_base_offset[sage_batch_num_-1] + uniq_instance_vec_[sage_batch_num_-1];
+
+    VLOG(2) << "start GetNodeDegree final chunk_size: " << chunk_size;
+    GetNodeDegree(all_nodes_ptr + offset,
+                  node_degrees_ptr + offset * conf_.edge_to_id_len,
+                  chunk_size,
+                  conf_,
+                  place_,
+                  sample_stream_); 
+    CUDA_CHECK(cudaStreamSynchronize(sample_stream_));
+  }
+  
+  size_t base_offset = 0;
+  for (int i = 0; i < sage_batch_num_; ++i) {
+    size_t batch_size = uniq_instance_vec_[i];
+    node_degree_vec_.emplace_back(node_degrees); 
+    node_degree_ptr_.emplace_back(static_cast<int*>(node_degrees->ptr()) + h_base_offset[i]);
+    offset += batch_size;
+  }
+  CUDA_CHECK(cudaStreamSynchronize(sample_stream_));    
+}
+
 void GraphDataGenerator::DoSageForTrain() {
   int total_instance = 0, uniq_instance = 0;
   bool is_sage_pass_continue = true;
@@ -4082,14 +4191,20 @@ void GraphDataGenerator::DoSageForTrain() {
         total_instance_vec_.emplace_back(total_instance - mini_batch_size);
       }
 
-      if (conf_.get_degree) {  // accumulate do not consider about degree
-                               // currently.
+      if (conf_.get_degree && (conf_.is_multi_node && !FLAGS_enable_async_comm)) {  // accumulate do not consider about degree
+                                                           // currently.
         auto node_degrees =
-            GetNodeDegree(reinterpret_cast<uint64_t *>(final_sage_nodes->ptr()),
-                          uniq_instance,
-                          conf_,
-                          place_,
-                          sample_stream_);
+          memory::AllocShared(place_,
+                        uniq_instance * conf_.edge_to_id_len * sizeof(int),
+                        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+        int* node_degrees_ptr = reinterpret_cast<int*>(node_degrees->ptr());
+
+        GetNodeDegree(reinterpret_cast<uint64_t *>(final_sage_nodes->ptr()),
+                      reinterpret_cast<int *>(node_degrees_ptr),
+                      uniq_instance,
+                      conf_,
+                      place_,
+                      sample_stream_); 
         node_degree_vec_.emplace_back(node_degrees);
       }
 
@@ -4120,8 +4235,14 @@ void GraphDataGenerator::DoSageForTrain() {
       sage_batch_num_ += 1;
     }
   }  // end while (is_sage_pass_continue)
+
+  if (conf_.get_degree && (!conf_.is_multi_node || FLAGS_enable_async_comm)) {
+    BatchDegreeGet();
+  }
+
   VLOG(1) << "gpuid: " << conf_.gpuid
           << " train_sage_batch_num: " << sage_batch_num_;
+  CUDA_CHECK(cudaStreamSynchronize(sample_stream_));
 }
 
 void GraphDataGenerator::DoSageForInfer() {
@@ -4194,15 +4315,23 @@ void GraphDataGenerator::DoSageForInfer() {
       uniq_instance_vec_.emplace_back(uniq_instance);
       total_instance_vec_.emplace_back(total_instance);
 
-      if (conf_.get_degree) {
+      if (conf_.get_degree && (conf_.is_multi_node && !FLAGS_enable_async_comm)) {  // accumulate do not consider about degree
+                                                           // currently.
         auto node_degrees =
-            GetNodeDegree(reinterpret_cast<uint64_t *>(final_sage_nodes->ptr()),
-                          uniq_instance,
-                          conf_,
-                          place_,
-                          sample_stream_);
+          memory::AllocShared(place_,
+                        uniq_instance * conf_.edge_to_id_len * sizeof(int),
+                        phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+        int* node_degrees_ptr = reinterpret_cast<int*>(node_degrees->ptr());
+
+        GetNodeDegree(reinterpret_cast<uint64_t *>(final_sage_nodes->ptr()),
+                      reinterpret_cast<int *>(node_degrees_ptr),
+                      uniq_instance,
+                      conf_,
+                      place_,
+                      sample_stream_); 
         node_degree_vec_.emplace_back(node_degrees);
       }
+
       CUDA_CHECK(cudaStreamSynchronize(sample_stream_));
 
       sage_batch_num_ += 1;
@@ -4218,9 +4347,14 @@ void GraphDataGenerator::DoSageForInfer() {
   }    // end for (int tensor_pair_idx = 0; tensor_pair_idx <
        // conf_.tensor_pair_num;
 
+  if (conf_.get_degree && (!conf_.is_multi_node || FLAGS_enable_async_comm)) {
+    BatchDegreeGet();
+  }
+
   sage_batch_num_ /= conf_.tensor_pair_num;
   VLOG(1) << "gpuid: " << conf_.gpuid
           << " infer_sage_batch_num: " << sage_batch_num_;
+  CUDA_CHECK(cudaStreamSynchronize(sample_stream_));
 }
 
 void GraphDataGenerator::clear_gpu_mem() {

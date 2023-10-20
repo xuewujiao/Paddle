@@ -981,6 +981,7 @@ class GraphDataGenerator {
   void ClearSampleState();
   void DumpWalkPath(std::string dump_path, size_t dump_rate);
   void DumpSampleNeighbors(std::string dump_path);
+  void BatchDegreeGet();
   void SetDeviceKeys(std::vector<uint64_t>* device_keys, int type) {
     // type_to_index_[type] = h_device_keys_.size();
     // h_device_keys_.push_back(device_keys);
@@ -1056,6 +1057,8 @@ class GraphDataGenerator {
   std::vector<std::shared_ptr<phi::Allocation>> inverse_vec_;
   std::vector<std::shared_ptr<phi::Allocation>> final_sage_nodes_vec_;
   std::vector<std::shared_ptr<phi::Allocation>> node_degree_vec_;
+  std::vector<int*> node_degree_ptr_;
+  std::vector<size_t> node_degree_merge_len_;
   std::vector<int> uniq_instance_vec_;
   std::vector<int> total_instance_vec_;
   std::vector<std::vector<std::shared_ptr<phi::Allocation>>> graph_edges_vec_;
