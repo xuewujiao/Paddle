@@ -304,10 +304,10 @@ void AccessorWrapper<GPUAccessor>::CopyForPullImpl(
                     ->stream();
   auto buf_value = memory::Alloc(place, values.size() * sizeof(float*));
   float** gpu_values = reinterpret_cast<float**>(buf_value->ptr());
-  cudaMemcpy(gpu_values,
+  CUDA_CHECK(cudaMemcpy(gpu_values,
              values.data(),
              values.size() * sizeof(float*),
-             cudaMemcpyHostToDevice);
+             cudaMemcpyHostToDevice));
   PullCopy<<<(total_length + 1024 - 1) / 1024, 1024, 0, stream>>>(
       gpu_values,
       total_values_gpu,
@@ -318,7 +318,7 @@ void AccessorWrapper<GPUAccessor>::CopyForPullImpl(
       feature_value_size,
       gpu_dim,
       gpu_accessor_);
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
 template <typename GPUAccessor>
@@ -350,22 +350,22 @@ void AccessorWrapper<GPUAccessor>::CopyForPushImpl(
   int64_t* gpu_len = reinterpret_cast<int64_t*>(buf_length->ptr());
   int* d_slot_vector = reinterpret_cast<int*>(buf_slot_vector->ptr());
   int* d_mf_dim_vector = reinterpret_cast<int*>(buf_mf_dim_vector->ptr());
-  cudaMemcpy(gpu_values,
+  CUDA_CHECK(cudaMemcpy(gpu_values,
              grad_values.data(),
              grad_values.size() * sizeof(float*),
-             cudaMemcpyHostToDevice);
-  cudaMemcpy(gpu_len,
+             cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(gpu_len,
              slot_lengths_lod.data(),
              slot_lengths.size() * sizeof(int64_t),
-             cudaMemcpyHostToDevice);
-  cudaMemcpy(d_slot_vector,
+             cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_slot_vector,
              slot_vector.data(),
              slot_lengths_lod.size() * sizeof(int),
-             cudaMemcpyHostToDevice);
-  cudaMemcpy(d_mf_dim_vector,
+             cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_mf_dim_vector,
              slot_mf_dim_vector.data(),
              slot_lengths_lod.size() * sizeof(int),
-             cudaMemcpyHostToDevice);
+             cudaMemcpyHostToDevice));
   PushCopyWithPool<<<(total_length + 1024 - 1) / 1024, 1024, 0, stream>>>(
       total_grad_values_gpu,
       gpu_values,
@@ -377,7 +377,7 @@ void AccessorWrapper<GPUAccessor>::CopyForPushImpl(
       d_mf_dim_vector,
       grad_value_size,
       gpu_accessor_);
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
 template <typename GPUAccessor>
@@ -408,7 +408,7 @@ void AccessorWrapper<GPUAccessor>::CopyForPullDedupImpl(
                                            key2slot,
                                            gpu_restore_idx,
                                            gpu_accessor_.common_pull_value);
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
 template <typename GPUAccessor>
@@ -430,8 +430,8 @@ void AccessorWrapper<GPUAccessor>::CopyForPushDedupImpl(
   auto stream = dynamic_cast<phi::GPUContext*>(
                     paddle::platform::DeviceContextPool::Instance().Get(place))
                     ->stream();
-  cudaMemsetAsync(
-      total_grad_values_gpu, 0, dedup_length * grad_value_size, stream);
+  CUDA_CHECK(cudaMemsetAsync(
+      total_grad_values_gpu, 0, dedup_length * grad_value_size, stream));
   size_t N = total_length * hidden_size;
   PushMergeCopyAtomic<<<CUDA_BLOCK(N), stream>>>(
       N,
@@ -448,7 +448,7 @@ void AccessorWrapper<GPUAccessor>::CopyForPushDedupImpl(
       grad_value_size,
       gpu_accessor_.common_push_value);
 
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
 template <typename GPUAccessor>
@@ -489,7 +489,7 @@ void AccessorWrapper<GPUAccessor>::CopyForPushDedupImpl(
                                            gpu_sort_lens,
                                            grad_value_size,
                                            gpu_accessor_.common_push_value);
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
 #ifdef PADDLE_WITH_PSCORE

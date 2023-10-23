@@ -2425,29 +2425,29 @@ void PSGPUWrapper::PullSparse(const paddle::platform::Place& place,
 
       int64_t* slot_lens = dev.slot_lens.mutable_data<int64_t>(
           (slot_num + 1) * sizeof(int64_t), place);
-      cudaMemcpyAsync(gpu_keys,
+      CUDA_CHECK(cudaMemcpyAsync(gpu_keys,
                       keys.data(),
                       keys.size() * sizeof(uint64_t*),
                       cudaMemcpyHostToDevice,
-                      stream);
-      cudaMemcpyAsync(slot_lens,
+                      stream));
+      CUDA_CHECK(cudaMemcpyAsync(slot_lens,
                       slot_lengths_lod.data(),
                       slot_lengths_lod.size() * sizeof(int64_t),
                       cudaMemcpyHostToDevice,
-                      stream);
+                      stream));
 
-      cudaMemcpyAsync(gpu_slot_dims,
+      CUDA_CHECK(cudaMemcpyAsync(gpu_slot_dims,
                       slot_dim.data(),
                       slot_dim.size() * sizeof(int),
                       cudaMemcpyHostToDevice,
-                      stream);
+                      stream));
       float** gpu_values = dev.values_ptr_tensor.mutable_data<float*>(
           values.size() * sizeof(float*), place);
-      cudaMemcpyAsync(gpu_values,
+      CUDA_CHECK(cudaMemcpyAsync(gpu_values,
                       values.data(),
                       values.size() * sizeof(float*),
                       cudaMemcpyHostToDevice,
-                      stream);
+                      stream));
 
       int* key2slot = dev.keys2slot.mutable_data<int>(
           (total_length * 5) * sizeof(int), place);
@@ -2534,21 +2534,21 @@ void PSGPUWrapper::PullSparse(const paddle::platform::Place& place,
           memory::Alloc(place, slot_lengths.size() * sizeof(int64_t));
       uint64_t** gpu_keys = reinterpret_cast<uint64_t**>(buf_key->ptr());
       int64_t* gpu_len = reinterpret_cast<int64_t*>(buf_length->ptr());
-      cudaMemcpy(gpu_keys,
+      CUDA_CHECK(cudaMemcpy(gpu_keys,
                  keys.data(),
                  keys.size() * sizeof(uint64_t*),
-                 cudaMemcpyHostToDevice);
-      cudaMemcpy(gpu_len,
+                 cudaMemcpyHostToDevice));
+      CUDA_CHECK(cudaMemcpy(gpu_len,
                  slot_lengths_lod.data(),
                  slot_lengths.size() * sizeof(int64_t),
-                 cudaMemcpyHostToDevice);
+                 cudaMemcpyHostToDevice));
 
       auto buf_dim = memory::Alloc(place, slot_dim.size() * sizeof(int));
       int* gpu_dim = reinterpret_cast<int*>(buf_dim->ptr());
-      cudaMemcpy(gpu_dim,
+      CUDA_CHECK(cudaMemcpy(gpu_dim,
                  slot_dim.data(),
                  slot_dim.size() * sizeof(int),
-                 cudaMemcpyHostToDevice);
+                 cudaMemcpyHostToDevice));
 
       this->CopyKeys(place,
                      gpu_keys,
@@ -2690,22 +2690,22 @@ void PSGPUWrapper::PushSparseGrad(const paddle::platform::Place& place,
       if (!dev.d_slot_vector.IsInitialized()) {
         int* buf_slot_vector =
             dev.d_slot_vector.mutable_data<int>(slot_num * sizeof(int), place);
-        cudaMemcpyAsync(buf_slot_vector,
+        CUDA_CHECK(cudaMemcpyAsync(buf_slot_vector,
                         slot_vector_.data(),
                         slot_num * sizeof(int),
                         cudaMemcpyHostToDevice,
-                        stream);
+                        stream));
       }
 
       const int64_t* slot_lens = dev.slot_lens.data<int64_t>();
       const int* d_slot_vector = dev.d_slot_vector.data<int>();
       const int* key2slot = dev.keys2slot.data<int>();
       float** gpu_values = dev.values_ptr_tensor.data<float*>();
-      cudaMemcpyAsync(gpu_values,
+      CUDA_CHECK(cudaMemcpyAsync(gpu_values,
                       grad_values.data(),
                       grad_values.size() * sizeof(float*),
                       cudaMemcpyHostToDevice,
-                      stream);
+                      stream));
 
       uint64_t* d_merged_keys = &total_keys[total_length];
 

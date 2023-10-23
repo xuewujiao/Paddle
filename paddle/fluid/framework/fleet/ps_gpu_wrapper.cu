@@ -95,7 +95,7 @@ void PSGPUWrapper::CopyKeys(const paddle::platform::Place& place,
                     ->stream();
   CopyKeysKernel<<<(total_len + 1024 - 1) / 1024, 1024, 0, stream>>>(
       origin_keys, total_keys, gpu_len, slot_num, total_len);
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
 __global__ void CopyKeysKernel2(const int total_len,
@@ -133,7 +133,7 @@ void PSGPUWrapper::CopyKeys(const paddle::platform::Place& place,
                     ->stream();
   CopyKeysKernel2<<<CUDA_BLOCK(total_len), stream>>>(
       total_len, origin_keys, total_keys, slot_num, slot_lens, key2slot);
-  cudaStreamSynchronize(stream);
+  CUDA_CHECK(cudaStreamSynchronize(stream));
 }
 
 void PSGPUWrapper::SetSparseSGD(float nonclk_coeff,
