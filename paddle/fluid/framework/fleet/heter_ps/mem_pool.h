@@ -104,17 +104,17 @@ class HBMMemoryPoolFix : public managed {
 
   ~HBMMemoryPoolFix() {
     VLOG(3) << "delete hbm memory pool";
-    cudaFree(mem_);
+    CUDA_CHECK(cudaFree(mem_));
   }
 
   size_t block_size() { return block_size_; }
 
-  void clear(void) { cudaMemset(mem_, 0, block_size_ * capacity_); }
+  void clear(void) { CUDA_CHECK(cudaMemset(mem_, 0, block_size_ * capacity_)); }
 
   void reset(size_t capacity, size_t block_size) {
-    if (max_byte_capacity_ < capacity * block_size) {
+    if (max_byte_capacity_ < (block_size * capacity / 8 + 1) * 8) {
       if (mem_ != NULL) {
-        cudaFree(mem_);
+    	CUDA_CHECK(cudaFree(mem_));
       }
       max_byte_capacity_ = (block_size * capacity / 8 + 1) * 8;
       CUDA_CHECK(cudaMalloc(&mem_, max_byte_capacity_));
