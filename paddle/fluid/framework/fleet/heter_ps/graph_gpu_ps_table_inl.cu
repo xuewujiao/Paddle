@@ -1758,7 +1758,7 @@ GpuPsGraphTable::get_edge_type_graph(int gpu_id, int edge_type_len) {
                                sizeof(GpuPsCommGraph) * edge_type_len,
                                cudaMemcpyHostToDevice,
                                stream));
-    cudaStreamSynchronize(stream);
+    CUDA_CHECK(cudaStreamSynchronize(stream));
     graphs_vec.emplace_back(d_commgraph_mem);
   }
 
@@ -2447,7 +2447,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
                NULL);
 
   for (int i = 0; i < total_gpu; ++i) {
-    if (h_left[i] == -1) {
+    if (h_left[i] == -1 || h_right[i] == -1) {
       continue;
     }
     int shard_len = h_left[i] == -1 ? 0 : h_right[i] - h_left[i] + 1;
@@ -2526,7 +2526,7 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_v2(
   }
 
   for (int i = 0; i < total_gpu; ++i) {
-    if (h_left[i] == -1) {
+    if (h_left[i] == -1 || h_right[i] == -1) {
       continue;
     }
     CUDA_CHECK(cudaStreamSynchronize(resource_->remote_stream(i, gpu_id)));
@@ -3528,7 +3528,7 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
                NULL);
 
   for (int i = 0; i < total_gpu; ++i) {
-    if (h_left[i] == -1) {
+    if (h_left[i] == -1 || h_right[i] == -1) {
       continue;
     }
     int shard_len = h_left[i] == -1 ? 0 : h_right[i] - h_left[i] + 1;
@@ -3665,7 +3665,7 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_all_edge_type(
   }
 
   for (int i = 0; i < total_gpu; ++i) {
-    if (h_left[i] == -1) {
+    if (h_left[i] == -1 || h_right[i] == -1) {
       continue;
     }
     CUDA_CHECK(cudaStreamSynchronize(resource_->remote_stream(i, gpu_id)));
@@ -4088,7 +4088,7 @@ std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree_single(
                reinterpret_cast<uint64_t*>(d_shard_keys_ptr),
                NULL);
   for (int i = 0; i < total_gpu; ++i) {
-    if (h_left[i] == -1) {
+    if (h_left[i] == -1 || h_right[i] == -1) {
       continue;
     }
     int shard_len = h_left[i] == -1 ? 0 : h_right[i] - h_left[i] + 1;
@@ -4112,7 +4112,7 @@ std::shared_ptr<phi::Allocation> GpuPsGraphTable::get_node_degree_single(
         node_info_list, node_degree_array, shard_len);
   }
   for (int i = 0; i < total_gpu; ++i) {
-    if (h_left[i] == -1) {
+    if (h_left[i] == -1 || h_right[i] == -1) {
       continue;
     }
     CUDA_CHECK(cudaStreamSynchronize(resource_->remote_stream(i, gpu_id)));
@@ -4269,7 +4269,7 @@ int GpuPsGraphTable::get_feature_info_of_nodes_async(
  
   platform::CUDADeviceGuard guard(gpu_id);
   platform::CUDAPlace place = platform::CUDAPlace(gpu_id);
-  auto stream = resource_->local_stream(gpu_id, 0);
+  auto stream = resource_->local_stream(gpu_id, 1);
 
   auto &loc = storage_feature_[gpu_id];
   auto &cache = storage_[gpu_id];
@@ -4829,7 +4829,7 @@ int GpuPsGraphTable::get_feature_info_of_nodes_normal(
   platform::CUDAPlace place = platform::CUDAPlace(resource_->dev_id(gpu_id));
   platform::CUDADeviceGuard guard(resource_->dev_id(gpu_id));
   int total_gpu = resource_->total_device();
-  auto stream = resource_->local_stream(gpu_id, 0);
+  auto stream = resource_->local_stream(gpu_id, 1);
 
   auto d_left =
       memory::Alloc(place,
@@ -4890,7 +4890,7 @@ int GpuPsGraphTable::get_feature_info_of_nodes_normal(
   for (int i = 0; i < total_gpu; ++i) {
     shard_len[i] = h_left[i] == -1 ? 0 : h_right[i] - h_left[i] + 1;
     d_temp_storage[i] = NULL;
-    if (h_left[i] == -1) {
+    if (h_left[i] == -1 || h_right[i] == -1) {
       continue;
     }
     create_storage(gpu_id, i, shard_len[i] * sizeof(uint64_t), 0);
@@ -4916,7 +4916,7 @@ int GpuPsGraphTable::get_feature_info_of_nodes_normal(
   }
 
   for (int i = 0; i < total_gpu; ++i) {
-    if (h_left[i] == -1) {
+    if (h_left[i] == -1 || h_right[i] == -1) {
       continue;
     }
     platform::CUDADeviceGuard guard(resource_->dev_id(i));
@@ -4933,7 +4933,7 @@ int GpuPsGraphTable::get_feature_info_of_nodes_normal(
 
   // no sync so 8 card can parallel execute
   for (int i = 0; i < total_gpu; ++i) {
-    if (h_left[i] == -1) {
+    if (h_left[i] == -1 || h_right[i] == -1) {
       continue;
     }
     platform::CUDADeviceGuard guard(resource_->dev_id(i));
@@ -4975,7 +4975,7 @@ int GpuPsGraphTable::get_feature_info_of_nodes_normal(
   // wait for fea_num_list
   for (int i = 0; i < total_gpu; ++i) {
     platform::CUDADeviceGuard guard(resource_->dev_id(i));
-    if (h_left[i] == -1) {
+    if (h_left[i] == -1 || h_right[i] == -1) {
       continue;
     }
     auto& node = path_[gpu_id][i].nodes_.back();
@@ -5047,7 +5047,7 @@ int GpuPsGraphTable::get_feature_info_of_nodes_normal(
   }
 
   for (int i = 0; i < total_gpu; ++i) {
-    if (h_left[i] == -1) {
+    if (h_left[i] == -1 || h_right[i] == -1) {
       continue;
     }
     CUDA_CHECK(cudaStreamSynchronize(resource_->remote_stream(i, gpu_id)));
@@ -5275,7 +5275,7 @@ int GpuPsGraphTable::get_rank_info_of_nodes(int gpu_id,
                NULL);
 
   for (int i = 0; i < total_gpu; ++i) {
-    if (h_left[i] == -1) {
+    if (h_left[i] == -1 || h_right[i] == -1) {
       continue;
     }
     int shard_len = h_left[i] == -1 ? 0 : h_right[i] - h_left[i] + 1;
@@ -5295,7 +5295,7 @@ int GpuPsGraphTable::get_rank_info_of_nodes(int gpu_id,
   }
 
   for (int i = 0; i < total_gpu; ++i) {
-    if (h_left[i] == -1) {
+    if (h_left[i] == -1 || h_right[i] == -1) {
       continue;
     }
     CUDA_CHECK(cudaStreamSynchronize(resource_->remote_stream(i, gpu_id)));
@@ -5481,7 +5481,7 @@ int GpuPsGraphTable::get_feature_of_nodes(int gpu_id,
                NULL);
 
   for (int i = 0; i < total_gpu; ++i) {
-    if (h_left[i] == -1) {
+    if (h_left[i] == -1 || h_right[i] == -1) {
       continue;
     }
     int shard_len = h_left[i] == -1 ? 0 : h_right[i] - h_left[i] + 1;
@@ -5519,7 +5519,7 @@ int GpuPsGraphTable::get_feature_of_nodes(int gpu_id,
   }
 
   for (int i = 0; i < total_gpu; ++i) {
-    if (h_left[i] == -1) {
+    if (h_left[i] == -1 || h_right[i] == -1) {
       continue;
     }
     CUDA_CHECK(cudaStreamSynchronize(resource_->remote_stream(i, gpu_id)));

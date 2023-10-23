@@ -1804,7 +1804,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_merge_sparse(
   }
 
   for (int i = 0; i < total_device; ++i) {
-    if (h_left[i] == -1) {
+    if (h_left[i] == -1 || h_right[i] == -1) {
       continue;
     }
     auto &node = path_[num][i].nodes_.back();
@@ -1828,7 +1828,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_merge_sparse(
 
   for (int i = 0; i < total_device; ++i) {
     sync_stream(resource_->remote_stream(i, num));
-    if (h_left[i] == -1) {
+    if (h_left[i] == -1 || h_right[i] == -1) {
       continue;
     }
     ptr_tables_[i]->rwlock_->UNLock();
@@ -1963,7 +1963,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_normal_sparse(
     walk_to_dest(num, total_device, h_left, h_right, d_shard_keys_ptr, NULL);
   }
   for (int i = 0; i < total_device; ++i) {
-    if (h_left[i] == -1) {
+    if (h_left[i] == -1 || h_right[i] == -1) {
       continue;
     }
     auto &node = path_[num][i].nodes_.back();
@@ -1987,7 +1987,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_normal_sparse(
 
   for (int i = 0; i < total_device; ++i) {
     sync_stream(resource_->remote_stream(i, num));
-    if (h_left[i] == -1) {
+    if (h_left[i] == -1 || h_right[i] == -1) {
       continue;
     }
     ptr_tables_[i]->rwlock_->UNLock();
@@ -2244,7 +2244,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_normal_sparse(
 
   for (int i = 0; i < total_device; ++i) {
     sync_stream(resource_->remote_stream(i, dev_num));
-    if (h_left[i] != -1) {
+    if (h_left[i] == -1 || h_right[i] == -1) {
       ptr_tables_[i]->rwlock_->UNLock();
     }
   }
@@ -2537,7 +2537,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse(
 
   for (int i = 0; i < total_device; ++i) {
     sync_stream(resource_->remote_stream(i, dev_num));
-    if (h_left[i] != -1) {
+    if (h_left[i] == -1 || h_right[i] == -1) {
       tables_[i]->rwlock_->UNLock();
     }
   }
@@ -2750,7 +2750,7 @@ int HeterComm<KeyType, ValType, GradType, GPUAccessor>::dedup_keys_and_fillidx(
       d_buf, temp_storage_bytes, d_merged_cnts, d_offset, merged_size, stream));
 
   if (filter_zero) {
-    cudaMemsetAsync(d_restore_idx, 0, total_fea_num * sizeof(uint32_t), stream);
+    PADDLE_ENFORCE_GPU_SUCCESS(cudaMemsetAsync(d_restore_idx, 0, total_fea_num * sizeof(uint32_t), stream));
   }
   // fill restore idx [1,3,5,2,4,6] = [1,2,1,3,2,1]
   heter_comm_kernel_->fill_restore_idx(filter_zero,
@@ -2779,12 +2779,12 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_one_table(
     const cudaStream_t &stream) {
   // tracker need zero
   if (FLAGS_enable_tracker_all2all) {
-    cudaMemsetAsync(d_vals, 0, len * pull_type_size_, stream);
+	 CUDA_CHECK(cudaMemsetAsync(d_vals, 0, len * pull_type_size_, stream));
   }
 
   ptr_tables_[gpu_id]->rwlock_->RDLock();
   ptr_tables_[gpu_id]->get(
-      d_keys, reinterpret_cast<char *>(d_vals), len, stream, gpu_accessor_);
+       d_keys, reinterpret_cast<char *>(d_vals), len, stream, gpu_accessor_);
   ptr_tables_[gpu_id]->rwlock_->UNLock();
 
   // tracker
@@ -3422,11 +3422,11 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::partition_shard_keys(
 
   thread_local std::vector<uint32_t> h_offsets;
   h_offsets.resize(shard_num * 2);
-  cudaMemcpyAsync(&h_offsets[0],
+  PADDLE_ENFORCE_GPU_SUCCESS(cudaMemcpyAsync(&h_offsets[0],
                   d_left,
                   shard_num * 2 * sizeof(int),
                   cudaMemcpyDeviceToHost,
-                  stream);
+                  stream));
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
 
   for (int i = 0; i < shard_num; ++i) {
