@@ -1074,7 +1074,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::build_ps(
   d_key_bufs.resize(stream_num);
   d_val_bufs.resize(stream_num);
   for (int i = 0; i < stream_num; ++i) {
-    streams[i] = resource_->local_stream(dev_num, i);
+    streams[i] = resource_->local_stream(dev_num, device_num_ - 1 - i);
     d_key_bufs[i] = MemoryAlloc(place, chunk_size * sizeof(KeyType));
     d_val_bufs[i] = MemoryAlloc(place, chunk_size * sizeof(ValType));
   }
@@ -1156,7 +1156,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::build_ps(
   ppStream streams[stream_num];  // NOLINT
   d_key_bufs.resize(stream_num);
   for (int i = 0; i < stream_num; ++i) {
-    streams[i] = resource_->local_stream(num, i);
+    streams[i] = resource_->local_stream(num, device_num_ -1 - i);
     d_key_bufs[i] = MemoryAlloc(place, chunk_size * sizeof(KeyType));
   }
 
