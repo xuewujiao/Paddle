@@ -831,33 +831,26 @@ void GpuPsGraphTable::weighted_sample(GpuPsCommGraph& graph,
 
   int grid_size = (shard_len + 127) / 128;
   if (need_neighbor_count) {
+    // to be optimized
     get_actual_size_and_neighbor_count<true>
         <<<grid_size, 128, 0, calc_stream>>>(node_info_list,
                                             actual_size_array,
                                             neighbor_count_ptr,
                                             sample_size,
                                             shard_len);
-  } else {
-    get_actual_size_and_neighbor_count<false>
-        <<<grid_size, 128, 0, calc_stream>>>(
-            node_info_list, actual_size_array, nullptr, sample_size, shard_len);
-  }
-  CUDA_CHECK(cudaStreamSynchronize(calc_stream));
-
-  paddle::memory::ThrustAllocator<cudaStream_t> allocator(place, mem_stream);
-  if (sample_size > SAMPLE_SIZE_THRESHOLD) {
-    // to be optimized
+    CUDA_CHECK(cudaStreamSynchronize(calc_stream));
+    paddle::memory::ThrustAllocator<cudaStream_t> allocator(place, mem_stream);
     thrust::exclusive_scan(thrust::cuda::par(allocator).on(calc_stream),
                            neighbor_count_ptr,
                            neighbor_count_ptr + shard_len + 1,
                            neighbor_count_ptr);
     int* neighbor_offset = neighbor_count_ptr;
     int target_neighbor_counts = 0;
-    cudaMemcpyAsync(&target_neighbor_counts,
+    CUDA_CHECK(cudaMemcpyAsync(&target_neighbor_counts,
                     neighbor_offset + shard_len,
                     sizeof(int),
                     cudaMemcpyDeviceToHost,
-                    calc_stream);
+                    calc_stream));
     CUDA_CHECK(cudaStreamSynchronize(calc_stream));
 
     auto target_weights_key_buf =
@@ -879,6 +872,8 @@ void GpuPsGraphTable::weighted_sample(GpuPsCommGraph& graph,
                                                    return_weight);
     CUDA_CHECK(cudaStreamSynchronize(calc_stream));
   } else {
+    get_actual_size_and_neighbor_count<false><<<grid_size, 128, 0, calc_stream>>>(
+            node_info_list, actual_size_array, nullptr, sample_size, shard_len);
     using WeightedSampleFuncType = void (*)(GpuPsCommGraph,
                                             GpuPsNodeInfo*,
                                             uint64_t*,
@@ -921,7 +916,6 @@ void GpuPsGraphTable::weighted_sample(GpuPsCommGraph& graph,
         random_seed,
         weight_array,
         return_weight);
-    CUDA_CHECK(cudaStreamSynchronize(calc_stream));
   }
 }
 
@@ -3369,7 +3363,12 @@ void GpuPsGraphTable::graph_neighbor_sample_all_edge_type_one_table(
       neighbor_count_ptr = reinterpret_cast<int*>(neighbor_count->ptr());
     }
     for (int edge_idx = 0; edge_idx < edge_type_len; edge_idx++) {
-      auto stream = streams[edge_idx % stream_num];
+      cudaStream_t stream=0;
+      if (need_neighbor_count) {
+        stream = streams[0];
+      } else {
+        stream = streams[edge_idx % stream_num];
+      }
       GpuPsNodeInfo* node_info_list_ptr = node_info_ptr + edge_idx * len;
       int offset = get_graph_list_offset(gpu_id, edge_idx);
       auto graph = gpu_graph_list_[offset];
