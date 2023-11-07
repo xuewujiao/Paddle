@@ -3026,7 +3026,7 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_sage_async(
                         shard_num,
                         stream,
                         true);
-  VLOG(2) << "partition_shard_keys finish, tatol node num = "<< len;
+  VLOG(0) << "partition_shard_keys finish, tatol node num = "<< len;
   h_local_part_offsets[0] = 0;
   for (int i = 0; i < shard_num; ++i) {
     h_local_part_offsets[i + 1] =
@@ -3130,6 +3130,21 @@ NeighborSampleResultV2 GpuPsGraphTable::graph_neighbor_sample_sage_async(
                              (shard_num + 1) * sizeof(size_t),
                              cudaMemcpyHostToDevice,
                              stream));
+  if(false){
+    int tmp_len = edge_type_len * len;
+    int* h_actual_sample_size_ptr = new int[tmp_len];
+    CUDA_CHECK(cudaMemcpyAsync(h_actual_sample_size_ptr,
+                              reinterpret_cast<int *>(res_actual_sample_size_ptr),
+                              sizeof(int) * tmp_len,
+                              cudaMemcpyDeviceToHost,
+                              stream));
+
+    CUDA_CHECK(cudaStreamSynchronize(stream));
+    // VLOG(0) << "ins_cursor->ptr()"<< reinterpret_cast<int *>(ins_cursor);
+    for(int idx = 0; idx < std::min(tmp_len, tmp_len); ++idx) {
+      if(true || idx < 1000 || (idx%500 == 1))VLOG(0) << " h_actual_sample_size_ptr[" << idx << "] = " << h_actual_sample_size_ptr[idx];
+    } 
+  }
 
   VLOG(2) << "begin rearange sage sample result";
   int blockSize = block_size_;  

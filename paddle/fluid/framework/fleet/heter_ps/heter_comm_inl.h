@@ -488,7 +488,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::print_debug_time(
   }
   thread_local static int64_t count_ = 0;
   ++count_;
-  if ((count_ % 5000) != 0 && count_ !=1 && !force) {
+  if ((count_ % 1) != 0 && count_ !=1 && !force) {
     return;
   }
   auto &cc = storage_[gpu_id];
@@ -2781,7 +2781,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_one_table(
   if (FLAGS_enable_tracker_all2all) {
 	 CUDA_CHECK(cudaMemsetAsync(d_vals, 0, len * pull_type_size_, stream));
   }
-
+  VLOG(0) << "pull_one_table() len: "<<len;
   ptr_tables_[gpu_id]->rwlock_->RDLock();
   ptr_tables_[gpu_id]->get(
        d_keys, reinterpret_cast<char *>(d_vals), len, stream, gpu_accessor_);
