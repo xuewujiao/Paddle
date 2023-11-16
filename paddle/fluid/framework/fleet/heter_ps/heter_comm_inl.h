@@ -368,6 +368,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::init_path() {
         nodes[0].dev_num = j;
       }
     }
+    VLOG(0) << "end init path without topo aware";
   } else {
     VLOG(0) << "init path with topo aware";
     for (int i = 0; i < total_device; ++i) {
@@ -1354,11 +1355,11 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::dynamic_merge_grad(
                                          len,
                                          stream));
 
-  cudaMemcpyAsync(reinterpret_cast<void *>(&uniq_len),
+  CUDA_CHECK(cudaMemcpyAsync(reinterpret_cast<void *>(&uniq_len),
                   d_merged_size,
                   sizeof(int),
                   cudaMemcpyDeviceToHost,
-                  stream);
+                  stream));
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
 
   assert(d_merged_size > 0);
@@ -1714,8 +1715,8 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_merge_sparse(
   int *d_right_ptr = reinterpret_cast<int *>(d_right->ptr());
 
 #if defined(PADDLE_WITH_CUDA)
-  cudaMemsetAsync(d_left_ptr, -1, total_device * sizeof(int), stream);
-  cudaMemsetAsync(d_right_ptr, -1, total_device * sizeof(int), stream);
+  CUDA_CHECK(cudaMemsetAsync(d_left_ptr, -1, total_device * sizeof(int), stream));
+  CUDA_CHECK(cudaMemsetAsync(d_right_ptr, -1, total_device * sizeof(int), stream));
 
 #elif defined(PADDLE_WITH_XPU_KP)
   // get XPUDeviceContext according to xpu place
@@ -1804,7 +1805,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_merge_sparse(
   }
 
   for (int i = 0; i < total_device; ++i) {
-    if (h_left[i] == -1 || h_right[i] == -1) {
+    if (h_left[i] == -1) {
       continue;
     }
     auto &node = path_[num][i].nodes_.back();
@@ -1828,7 +1829,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_merge_sparse(
 
   for (int i = 0; i < total_device; ++i) {
     sync_stream(resource_->remote_stream(i, num));
-    if (h_left[i] == -1 || h_right[i] == -1) {
+    if (h_left[i] == -1 ) {
       continue;
     }
     ptr_tables_[i]->rwlock_->UNLock();
@@ -1892,8 +1893,8 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_normal_sparse(
   int *d_right_ptr = reinterpret_cast<int *>(d_right->ptr());
 
 #if defined(PADDLE_WITH_CUDA)
-  cudaMemsetAsync(d_left_ptr, -1, total_device * sizeof(int), stream);
-  cudaMemsetAsync(d_right_ptr, -1, total_device * sizeof(int), stream);
+  CUDA_CHECK(cudaMemsetAsync(d_left_ptr, -1, total_device * sizeof(int), stream));
+  CUDA_CHECK(cudaMemsetAsync(d_right_ptr, -1, total_device * sizeof(int), stream));
 
 #elif defined(PADDLE_WITH_XPU_KP)
   // get XPUDeviceContext according to xpu place
@@ -1963,7 +1964,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_normal_sparse(
     walk_to_dest(num, total_device, h_left, h_right, d_shard_keys_ptr, NULL);
   }
   for (int i = 0; i < total_device; ++i) {
-    if (h_left[i] == -1 || h_right[i] == -1) {
+    if (h_left[i] == -1) {
       continue;
     }
     auto &node = path_[num][i].nodes_.back();
@@ -1987,7 +1988,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::pull_normal_sparse(
 
   for (int i = 0; i < total_device; ++i) {
     sync_stream(resource_->remote_stream(i, num));
-    if (h_left[i] == -1 || h_right[i] == -1) {
+    if (h_left[i] == -1) {
       continue;
     }
     ptr_tables_[i]->rwlock_->UNLock();
@@ -2112,8 +2113,8 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_normal_sparse(
   int *d_right_ptr = reinterpret_cast<int *>(d_right->ptr());
 
 #if defined(PADDLE_WITH_CUDA)
-  cudaMemsetAsync(d_left_ptr, -1, total_device * sizeof(int), stream);
-  cudaMemsetAsync(d_right_ptr, -1, total_device * sizeof(int), stream);
+  CUDA_CHECK(cudaMemsetAsync(d_left_ptr, -1, total_device * sizeof(int), stream));
+  CUDA_CHECK(cudaMemsetAsync(d_right_ptr, -1, total_device * sizeof(int), stream));
 
 #elif defined(PADDLE_WITH_XPU_KP)
   // get XPUDeviceContext according to xpu place
@@ -2244,7 +2245,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_normal_sparse(
 
   for (int i = 0; i < total_device; ++i) {
     sync_stream(resource_->remote_stream(i, dev_num));
-    if (h_left[i] == -1 || h_right[i] == -1) {
+    if (h_left[i] != -1) {
       ptr_tables_[i]->rwlock_->UNLock();
     }
   }
@@ -2537,7 +2538,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::push_sparse(
 
   for (int i = 0; i < total_device; ++i) {
     sync_stream(resource_->remote_stream(i, dev_num));
-    if (h_left[i] == -1 || h_right[i] == -1) {
+    if (h_left[i] != -1) {
       tables_[i]->rwlock_->UNLock();
     }
   }
@@ -3152,7 +3153,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::shard_inner_keys(
   thread_local std::vector<uint32_t> h_offsets;
   h_offsets.resize(gpu_num * 2);  // NOLINT
   uint32_t *d_left_ptr = res->d_offset_ptr;
-  cudaMemsetAsync(d_left_ptr, -1, gpu_num * 2 * sizeof(int), stream);
+  CUDA_CHECK(cudaMemsetAsync(d_left_ptr, -1, gpu_num * 2 * sizeof(int), stream));
 
   uint32_t *d_right_ptr = &d_left_ptr[gpu_num];
   split_idx_to_shard<uint32_t, cudaStream_t>(const_cast<KeyType *>(d_keys),
@@ -3163,11 +3164,11 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::shard_inner_keys(
                                              gpu_id,
                                              stream);
 
-  cudaMemcpyAsync(&h_offsets[0],
+  CUDA_CHECK(cudaMemcpyAsync(&h_offsets[0],
                   d_left_ptr,
                   gpu_num * 2 * sizeof(uint32_t),
                   cudaMemcpyDeviceToHost,
-                  stream);
+                  stream));
   PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamSynchronize(stream));
 
   for (int i = 0; i < gpu_num; ++i) {
@@ -3364,7 +3365,7 @@ void HeterComm<KeyType, ValType, GradType, GPUAccessor>::partition_shard_keys(
   uint32_t *d_left = AllocCache<uint32_t>(
       &d_offset_tmp, place, (len * 3 + shard_num * 2) * sizeof(int));
   uint32_t *d_right = &d_left[shard_num];
-  cudaMemsetAsync(d_left, -1, shard_num * 2 * sizeof(int), stream);
+  CUDA_CHECK(cudaMemsetAsync(d_left, -1, shard_num * 2 * sizeof(int), stream));
 
   uint32_t *d_idx_tmp_ptr = reinterpret_cast<uint32_t *>(&d_right[shard_num]);
   uint32_t *d_shard_index_ptr = &d_idx_tmp_ptr[len];
