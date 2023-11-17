@@ -1154,6 +1154,14 @@ PADDLE_DEFINE_EXPORTED_bool(multi_node_sample_use_gpu_table,
                             true,
                             "Control whether to use gpu table in sample multi machine");
 
+PADDLE_DEFINE_EXPORTED_bool(enable_sage_merge_minibatch,
+                            true,
+                            "Control whether to use gpu table in sample multi machine");
+
+PADDLE_DEFINE_EXPORTED_uint64(sage_merge_max_size,
+                             500001,
+                             "async_sage_merge_max_size, default 500001");
+
 /**
  * ProcessGroupNCCL related FLAG
  * Name: nccl_blocking_wait
