@@ -1160,7 +1160,7 @@ PADDLE_DEFINE_EXPORTED_bool(enable_sage_merge_minibatch,
 
 PADDLE_DEFINE_EXPORTED_uint64(sage_merge_max_size,
                              500001,
-                             "async_sage_merge_max_size, default 500001");
+                             "sage_merge_max_size, default 500001");
 
 /**
  * ProcessGroupNCCL related FLAG

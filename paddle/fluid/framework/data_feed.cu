@@ -44,7 +44,7 @@ DECLARE_bool(query_dest_rank_by_multi_node);
 DECLARE_string(graph_edges_split_mode);
 DECLARE_bool(enable_async_comm);
 DECLARE_bool(enable_sage_merge_minibatch);
-DECLARE_uint64(async_sage_merge_max_size);
+DECLARE_uint64(sage_merge_max_size);
 
 namespace paddle {
 namespace framework {
@@ -4599,7 +4599,7 @@ void GraphDataGenerator::DoSageForTrain() {
   uint64_t *ins_buf, *ins_cursor;
   bool not_empty_batch = 1;
   
-  size_t max_merge_size = FLAGS_async_sage_merge_max_size;
+  size_t max_merge_size = FLAGS_sage_merge_max_size;
   size_t cumulative_rounds = 0;
   std::shared_ptr<phi::Allocation> tmp_ins_cursor;
   std::vector<int> h_part_offsets;
@@ -4915,7 +4915,7 @@ void GraphDataGenerator::DoSageForInfer() {
     conf_.batch_size = new_batch_size;
   }
 
-  size_t max_merge_size = FLAGS_async_sage_merge_max_size;
+  size_t max_merge_size = FLAGS_sage_merge_max_size;
   size_t cumulative_rounds = 0;
   std::shared_ptr<phi::Allocation> tmp_ins_cursor;
   std::vector<int> h_part_offsets;
