@@ -45,6 +45,7 @@ DECLARE_string(graph_edges_split_mode);
 DECLARE_bool(enable_async_comm);
 DECLARE_bool(enable_sage_merge_minibatch);
 DECLARE_uint64(sage_merge_max_size);
+DECLARE_uint64(degree_merge_max_size);
 
 namespace paddle {
 namespace framework {
@@ -965,15 +966,21 @@ int GraphDataGenerator::FillGraphIdShowClkTensor(int uniq_instance,
         degree_tensor_ptr_ = feed_vec_[feed_vec_idx++]->mutable_data<int>(
             {uniq_instance * conf_.edge_to_id_len}, this->place_);
         CUDA_CHECK(cudaMemcpyAsync(degree_tensor_ptr_,
-                                   node_degree_vec_[index]->ptr(),
+                                   node_degree_ptr_[index],
                                    sizeof(int) * uniq_instance * conf_.edge_to_id_len,
                                    cudaMemcpyDeviceToDevice,
                                    train_stream_));
-                }
-      CUDA_CHECK(cudaStreamSynchronize(train_stream_));
+      }
     }
   }  // end for (int tensor_pair_idx = 0; tensor_pair_idx <
      // conf_.tensor_pair_num;
+  CUDA_CHECK(cudaStreamSynchronize(train_stream_));
+  if (!graph_edges_vec_.empty()) {
+    graph_edges_vec_.erase(graph_edges_vec_.begin());
+  }
+  if (conf_.get_degree && !node_degree_vec_.empty()) {
+    node_degree_vec_.erase(node_degree_vec_.begin());
+  }
 
   return 0;
 }
@@ -3409,9 +3416,9 @@ std::vector<std::shared_ptr<phi::Allocation>> GenerateSampleGraphMutiPart(
         h_sample_size[part][edge_type -1] = h_cumsum_actual_sample_size_ptr[part_start + (edge_type) * cur_part_size] - h_cumsum_actual_sample_size_ptr[part_start+ (edge_type-1) * cur_part_size];
         h_sample_result_offset[part][edge_type] = h_cumsum_actual_sample_size_ptr[part_start + edge_type * cur_part_size] - h_cumsum_actual_sample_size_ptr[part_start];
       }
+      std::vector<std::shared_ptr<phi::Allocation>> edge_pair = {neighbors, reindex_dst, weights};
+      graph_edges_vec->emplace_back(edge_pair);
     }
-    std::vector<std::shared_ptr<phi::Allocation>> edge_pair = {neighbors, reindex_dst, weights};
-    graph_edges_vec->emplace_back(edge_pair);
     
     int reindex_center_len; 
     std::vector<int> h_tmp_offset;
@@ -3471,6 +3478,8 @@ std::vector<std::shared_ptr<phi::Allocation>> GenerateSampleGraphMutiPart(
                                   sizeof(int64_t) * final_nodes_len_vec_gather[j].back(),
                                   cudaMemcpyDeviceToDevice,
                                   stream));
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+        final_nodes_vec_gather[j].clear();
       }
 
     }
@@ -3520,8 +3529,8 @@ std::vector<std::shared_ptr<phi::Allocation>> GenerateSampleGraphMutiPart(
     graph_edges_vec_ptr->emplace_back(graph_edges_gather[j]);
     edges_split_num_vec_ptr->emplace_back(edges_split_num_for_graph_gather[j]);
     
-    result_nodes_vec.emplace_back(final_nodes_vec_gather[j][len_samples - 1]);
-    final_len->emplace_back(final_nodes_len_vec_gather[j][len_samples - 1]);
+    result_nodes_vec.emplace_back(final_nodes_vec_gather[j].back());
+    final_len->emplace_back(final_nodes_len_vec_gather[j].back());
   }
 
   CUDA_CHECK(cudaStreamSynchronize(stream));
@@ -4506,62 +4515,59 @@ void GraphDataGenerator::BatchDegreeGet() {
   for (int i = 0; i < sage_batch_num_; ++i) {
       total_uniq_instance += uniq_instance_vec_[i];
   }
-  auto all_nodes =
-    memory::AllocShared(place_,
-                  total_uniq_instance * sizeof(uint64_t),
-                  phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-  uint64_t* all_nodes_ptr = reinterpret_cast<uint64_t*>(all_nodes->ptr());
-  
-  auto node_degrees =
-    memory::AllocShared(place_,
-                  total_uniq_instance * conf_.edge_to_id_len * sizeof(int),
-                  phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
-  int* node_degrees_ptr = reinterpret_cast<int*>(node_degrees->ptr());
-
+  VLOG(2) << "start BatchDegreeGet total_uniq_instance: "<< total_uniq_instance;
   std::vector<size_t> h_part_offsets;
   h_part_offsets.push_back(0);  // 初始化第一个offset为0
   for (int i = 0; i < sage_batch_num_; ++i) {        
-      CUDA_CHECK(cudaMemcpyAsync(all_nodes_ptr + h_part_offsets.back(),
-                                final_sage_nodes_vec_[i]->ptr(),
-                                uniq_instance_vec_[i] * sizeof(uint64_t),
-                                cudaMemcpyDeviceToDevice,
-                                sample_stream_));
-
       size_t new_offset = h_part_offsets.back() + uniq_instance_vec_[i];
       h_part_offsets.push_back(new_offset);  // 计算并记录新的offset值
   }
-  CUDA_CHECK(cudaStreamSynchronize(sample_stream_));
-
   size_t offset = 0;
-  size_t max_size = 10000000;  // 每次处理的实例的数量
+  size_t max_size = FLAGS_degree_merge_max_size;  // 每次处理的实例的数量
   size_t chunk_size = 0; 
-  VLOG(2) << "total_uniq_instance: "<< total_uniq_instance;
-
-  std::vector<size_t> h_base_offset(sage_batch_num_+1);
-  h_base_offset[0] = 0;
   size_t part_count = 0;
-
   for (int i = 0; i < sage_batch_num_; ++i) {  
     if(h_part_offsets[i+1] - offset < max_size){
       part_count++;
-      h_base_offset[i+1] = h_base_offset[i] + uniq_instance_vec_[i];
       continue;
-    }else{
-      chunk_size = h_part_offsets[i] - offset;
-      node_degree_merge_len_.insert(node_degree_merge_len_.end(), part_count, chunk_size);
-      h_base_offset[i] = h_part_offsets[i] * conf_.edge_to_id_len;
-      h_base_offset[i+1] = h_base_offset[i] + uniq_instance_vec_[i];
-      part_count = 1;
+    }
+    chunk_size = h_part_offsets[i] - offset;
+    
+    auto all_nodes =
+      memory::Alloc(place_,
+                    chunk_size * sizeof(uint64_t),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+    uint64_t* all_nodes_ptr = reinterpret_cast<uint64_t*>(all_nodes->ptr());
+
+
+    auto node_degrees =
+      memory::AllocShared(place_,
+                    chunk_size * conf_.edge_to_id_len * sizeof(int),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+    int* node_degrees_ptr = reinterpret_cast<int*>(node_degrees->ptr());
+
+    size_t base_offset = 0;
+    for (int j = i - part_count; j < i; ++j) {     
+      base_offset = h_part_offsets[j] - h_part_offsets[i - part_count];
+      CUDA_CHECK(cudaMemcpyAsync(all_nodes_ptr + base_offset,
+                                  final_sage_nodes_vec_[j]->ptr(),
+                                  uniq_instance_vec_[j] * sizeof(uint64_t),
+                                  cudaMemcpyDeviceToDevice,
+                                  sample_stream_));
+      node_degree_vec_.emplace_back(node_degrees); 
+      node_degree_ptr_.emplace_back(static_cast<int*>(node_degrees->ptr()) + base_offset );
     }
 
     VLOG(2) << "start GetNodeDegree chunk_size: "<< chunk_size;
-    GetNodeDegree(all_nodes_ptr + offset,
-                  node_degrees_ptr + offset * conf_.edge_to_id_len,
+    GetNodeDegree(all_nodes_ptr,
+                  node_degrees_ptr,
                   chunk_size,
                   conf_,
                   place_,
                   sample_stream_); 
-    offset += chunk_size;               
+    offset += chunk_size;          
+    node_degree_merge_len_.insert(node_degree_merge_len_.end(), part_count, chunk_size);
+    part_count = 1;     
     CUDA_CHECK(cudaStreamSynchronize(sample_stream_));
   }
 
@@ -4569,24 +4575,40 @@ void GraphDataGenerator::BatchDegreeGet() {
   if (total_uniq_instance - offset > 0) {
     chunk_size = total_uniq_instance - offset;
     node_degree_merge_len_.insert(node_degree_merge_len_.end(), part_count, chunk_size);
-    // h_base_offset[sage_batch_num_] = h_base_offset[sage_batch_num_-1] + uniq_instance_vec_[sage_batch_num_-1];
+
+    int start_idx = sage_batch_num_ - part_count;    
+    auto all_nodes =
+      memory::Alloc(place_,
+                    chunk_size * sizeof(uint64_t),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+    uint64_t* all_nodes_ptr = reinterpret_cast<uint64_t*>(all_nodes->ptr());
+    auto node_degrees =
+      memory::AllocShared(place_,
+                    chunk_size * conf_.edge_to_id_len * sizeof(int),
+                    phi::Stream(reinterpret_cast<phi::StreamId>(sample_stream_)));
+    int* node_degrees_ptr = reinterpret_cast<int*>(node_degrees->ptr());
+
+    VLOG(2) <<"start_idx: "<<start_idx<< " part_count: " << part_count<<" sage_batch_num_: "<<sage_batch_num_;
+      
+    size_t base_offset = 0;
+    for (int j = start_idx; j < sage_batch_num_; ++j) {        
+      base_offset = h_part_offsets[j] - h_part_offsets[start_idx];
+      CUDA_CHECK(cudaMemcpyAsync(all_nodes_ptr + base_offset,
+                                  final_sage_nodes_vec_[j]->ptr(),
+                                  uniq_instance_vec_[j] * sizeof(uint64_t),
+                                  cudaMemcpyDeviceToDevice,
+                                  sample_stream_));
+      node_degree_vec_.emplace_back(node_degrees); 
+      node_degree_ptr_.emplace_back(static_cast<int*>(node_degrees->ptr()) + base_offset);
+    }
 
     VLOG(2) << "start GetNodeDegree final chunk_size: " << chunk_size;
-    GetNodeDegree(all_nodes_ptr + offset,
-                  node_degrees_ptr + offset * conf_.edge_to_id_len,
+    GetNodeDegree(all_nodes_ptr,
+                  node_degrees_ptr,
                   chunk_size,
                   conf_,
                   place_,
                   sample_stream_); 
-    CUDA_CHECK(cudaStreamSynchronize(sample_stream_));
-  }
-  
-  size_t base_offset = 0;
-  for (int i = 0; i < sage_batch_num_; ++i) {
-    size_t batch_size = uniq_instance_vec_[i];
-    node_degree_vec_.emplace_back(node_degrees); 
-    node_degree_ptr_.emplace_back(static_cast<int*>(node_degrees->ptr()) + h_base_offset[i]);
-    offset += batch_size;
   }
   CUDA_CHECK(cudaStreamSynchronize(sample_stream_));    
 }
@@ -4599,7 +4621,7 @@ void GraphDataGenerator::DoSageForTrain() {
   uint64_t *ins_buf, *ins_cursor;
   bool not_empty_batch = 1;
   
-  size_t max_merge_size = FLAGS_sage_merge_max_size;
+  size_t max_merge_size = FLAGS_sage_merge_max_size / conf_.samples.size();
   size_t cumulative_rounds = 0;
   std::shared_ptr<phi::Allocation> tmp_ins_cursor;
   std::vector<int> h_part_offsets;
@@ -4771,6 +4793,7 @@ void GraphDataGenerator::DoSageForTrain() {
                         place_,
                         sample_stream_); 
           node_degree_vec_.emplace_back(node_degrees);
+          node_degree_ptr_.emplace_back(node_degrees_ptr);
         }
       }else{
         tmp_ins_cursor =
@@ -4915,7 +4938,7 @@ void GraphDataGenerator::DoSageForInfer() {
     conf_.batch_size = new_batch_size;
   }
 
-  size_t max_merge_size = FLAGS_sage_merge_max_size;
+  size_t max_merge_size = FLAGS_sage_merge_max_size / conf_.samples.size();
   size_t cumulative_rounds = 0;
   std::shared_ptr<phi::Allocation> tmp_ins_cursor;
   std::vector<int> h_part_offsets;
