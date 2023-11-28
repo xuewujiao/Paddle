@@ -1153,14 +1153,15 @@ PADDLE_DEFINE_EXPORTED_bool(query_dest_rank_by_multi_node,
 PADDLE_DEFINE_EXPORTED_bool(multi_node_sample_use_gpu_table,
                             true,
                             "Control whether to use gpu table in sample multi machine");
-
 PADDLE_DEFINE_EXPORTED_bool(enable_sage_merge_minibatch,
                             true,
                             "Control whether to use gpu table in sample multi machine");
-
 PADDLE_DEFINE_EXPORTED_uint64(sage_merge_max_size,
                              500001,
                              "sage_merge_max_size, default 500001");
+PADDLE_DEFINE_EXPORTED_uint64(degree_merge_max_size,
+                             10000000,
+                             "degree_merge_max_size, default 10000000");
 
 /**
  * ProcessGroupNCCL related FLAG
