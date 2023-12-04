@@ -2172,48 +2172,84 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_async(
   std::vector<RequestHandle> request_handles(shard_num);
   auto* allocator = dynamic_cast<AsyncComAllocator*>(_async_request[deepwalk_runner_index_*gpu_num + gpu_id]->get_allocator());
   int start_pos = rank_id_ * device_num_ + gpu_id;
-  std::vector<int> request_order(shard_num);
-  for (int i = 0; i < shard_num; ++i) {
-    request_order[i] = i;
-  }
-  std::random_shuffle(request_order.begin(), request_order.end());
-  for (auto request_node : request_order) {
-    if (h_local_part_sizes[request_node] == 0) {
-      continue;
-    }
-    auto* val_context = allocator->ToMemoryContext(
-      res_val_ptr + h_local_part_offsets[request_node] * sample_size, h_local_part_sizes[request_node] * sample_size, DT_UINT64);
-    auto* actual_sample_size_context = allocator->ToMemoryContext(
-      res_actual_sample_size_ptr + h_local_part_offsets[request_node] * sizeof(int), h_local_part_sizes[request_node] * sizeof(int), DT_UINT8);
-    request_handles[request_node].response_ = CreateAsyncReqRes();
-    request_handles[request_node].response_->memory_contexts[0] = val_context;
-    request_handles[request_node].response_->memory_contexts[1] = actual_sample_size_context;
-  }
-
   int64_t packed = (cpu_query_switch << 2) | (0 << 1) | weighted;
   int64_t int_para[4] = {table_idx, sample_size, neighbor_size_limit, packed}; 
   auto* async_com = paddle::framework::AsyncContext::GetInstance()->get_async_com(gpu_id);
-  for (int i = 0; i < shard_num; ++i) {
-    if (h_local_part_sizes[i] == 0) {
+
+  //set merge headers info
+  std::vector<MergeHeader> merge_headers(node_size_);
+  for(int i = 0; i < node_size_; i++) {
+    if (h_local_part_offsets[(i+1) * device_num_] - h_local_part_offsets[i * device_num_] == 0){
       continue;
     }
-    auto* node_key_context = allocator->ToMemoryContext(
-      d_merged_push_keys_ptr + h_local_part_offsets[i], h_local_part_sizes[i], DT_UINT64);
-    auto* para_int_context = allocator->ToMemoryContext(int_para, 4, DT_INT64, ML_HOST);
+    merge_headers[i].response_data_count = 2;
+    int offset_base = h_local_part_offsets[i*device_num_];
+    for (int lr = 0; lr < device_num_; lr++) {
+      int target_rank = i*device_num_ + lr;
+      merge_headers[i].ranks_info[lr].request_offset[0] = (h_local_part_offsets[target_rank] - offset_base) * sizeof(uint64_t);
+      merge_headers[i].ranks_info[lr].request_size[0] = h_local_part_sizes[target_rank] * sizeof(uint64_t);
+      merge_headers[i].ranks_info[lr].request_offset[1] = 0;
+      merge_headers[i].ranks_info[lr].request_size[1] = 4 * sizeof(int64_t);
+      merge_headers[i].ranks_info[lr].response_offset[0] = (h_local_part_offsets[target_rank] - offset_base) * sample_size * sizeof(uint64_t);
+      merge_headers[i].ranks_info[lr].response_size[0] = h_local_part_sizes[target_rank] * sample_size * sizeof(uint64_t);
+      merge_headers[i].ranks_info[lr].response_offset[1] = (h_local_part_offsets[target_rank] - offset_base) * sizeof(int);
+      merge_headers[i].ranks_info[lr].response_size[1] = h_local_part_sizes[target_rank] * sizeof(int);
+    }
+    merge_headers[i].response_info[0].location = ML_DEVICE;
+    merge_headers[i].response_info[0].dtype = DT_UINT64;
+    merge_headers[i].response_info[0].data_size = (h_local_part_offsets[(i+1) * device_num_] - offset_base) * sample_size * sizeof(uint64_t);
 
-    auto* request = _async_request[deepwalk_runner_index_*gpu_num + gpu_id]->MakeDeepWalkRequest(node_key_context, para_int_context, i);
-    request_handles[i].request_ = request;
-    async_com->PutRequestAsync(&request_handles[i]);
-  }
+    merge_headers[i].response_info[1].location = ML_DEVICE;
+    merge_headers[i].response_info[1].dtype = DT_UINT8;
+    merge_headers[i].response_info[1].data_size = (h_local_part_offsets[(i+1) * device_num_] - offset_base) * sizeof(int);
+      
+    // set async resoruce and start to sample
+    int target_rank = i * device_num_ + gpu_id;
+    auto* node_key_context = allocator->ToMemoryContext(
+      d_merged_push_keys_ptr + h_local_part_offsets[i * device_num_], 
+      h_local_part_offsets[(i+1) * device_num_] - h_local_part_offsets[i * device_num_], 
+      DT_UINT64);
+
+    auto* para_int_context = allocator->ToMemoryContext(int_para, 4, DT_INT64, ML_HOST);
+    auto* request = _async_request[deepwalk_runner_index_*gpu_num + gpu_id]->MakeDeepWalkRequest(node_key_context, para_int_context, target_rank);
+    request_handles[target_rank].request_ = request;
+  
+    int header_idx = request_handles[target_rank].request_->meta.valid_data_count;
+    request_handles[target_rank].request_->memory_contexts[header_idx] = allocator->ToMemoryContext(&merge_headers[i], sizeof(MergeHeader), DT_INT8, ML_HOST);
+    request_handles[target_rank].request_->meta.data_sizes[header_idx] = sizeof(MergeHeader);
+    request_handles[target_rank].request_->meta.data_types[header_idx] = DT_INT8;
+    request_handles[target_rank].request_->meta.locations[header_idx] = ML_HOST;
+    request_handles[target_rank].request_->meta.valid_data_count++;
+    request_handles[target_rank].request_->meta.merged_flag = 1;
+
+    auto* val_context = allocator->ToMemoryContext(
+      res_val_ptr + h_local_part_offsets[i * device_num_] * sample_size, 
+      (h_local_part_offsets[(i+1) * device_num_] - h_local_part_offsets[i * device_num_]) * sample_size, 
+      DT_UINT64);
+
+    auto* actual_sample_size_context = allocator->ToMemoryContext(
+      res_actual_sample_size_ptr + h_local_part_offsets[i * device_num_] * sizeof(int), 
+      (h_local_part_offsets[(i+1) * device_num_] - h_local_part_offsets[i * device_num_]) * sizeof(int), 
+      DT_UINT8);
+
+    request_handles[target_rank].response_ = CreateAsyncReqRes();
+    request_handles[target_rank].response_->memory_contexts[0] = val_context;
+    request_handles[target_rank].response_->memory_contexts[1] = actual_sample_size_context;
+    async_com->PutRequestAsync(&request_handles[target_rank]);
+    
+  }  
+  
   loc.set_async_.Pause();
   loc.wait_async_sample_.Resume();
-	//等待异步执行结束
-  for(int i = 0; i < shard_num; ++i) {
-    if (h_local_part_sizes[i] == 0) {
+
+  for(int i = 0; i < node_size_; i++) {
+    if (h_local_part_offsets[(i+1) * device_num_] - h_local_part_offsets[i * device_num_] == 0){
       continue;
     }
-    request_handles[i].Wait();
+    int target_rank = i * device_num_ + gpu_id;
+    request_handles[target_rank].Wait();
   }
+
   loc.wait_async_sample_.Pause();	
   loc.scatter_and_compress_.Resume();
   NeighborSampleResult final;
@@ -2241,13 +2277,11 @@ NeighborSampleResult GpuPsGraphTable::graph_neighbor_sample_async(
   }
   CUDA_CHECK(cudaStreamSynchronize(stream));
   for (int i = 0; i < shard_num; ++i) {
-    if (h_local_part_sizes[i] == 0) {
-      continue;
+    if (request_handles[i].response_ != nullptr) {
+      allocator->FreeReqRes(request_handles[i].response_);
+	    request_handles[i].response_ = nullptr;
     }
-	allocator->FreeReqRes(request_handles[i].response_);
-	request_handles[i].response_ = nullptr;
   }
-  
   loc.scatter_and_compress_.Pause();
   return final;
 }

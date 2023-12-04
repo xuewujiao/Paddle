@@ -8,7 +8,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
-
+#include <errno.h>
+#include <iostream>
 #include <string>
 
 #include "check_macros.h"
@@ -38,8 +39,21 @@ int CreateServerListenFd(int port) {
   server_addr.sin_family = AF_INET;
   server_addr.sin_port = htons(port);
   server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-
-  CALL_CHECK(bind(server_sock, (sockaddr*)&server_addr, sizeof(server_addr)));
+  // int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+  if(setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) < 0){
+    std::cerr << "Error setting socket option." << std::endl;
+    abort();
+  };
+  // CALL_CHECK(bind(server_sock, (sockaddr*)&server_addr, sizeof(server_addr)));
+  if(bind(server_sock, (sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+    std::cerr << "Bind port failed, errno=" << strerror(errno) << std::endl;
+    // 打印 server_addr 的内容
+    std::cerr << "Server Address: "
+              << inet_ntoa(server_addr.sin_addr)   // 将 IP 地址转换为点分十进制格式
+              << ":" << ntohs(server_addr.sin_port) // 将网络字节顺序的端口号转换为主机字节顺序
+              << std::endl;
+    abort();
+  }
 
   return server_sock;
 }

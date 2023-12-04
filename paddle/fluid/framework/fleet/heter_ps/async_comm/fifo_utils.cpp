@@ -11,7 +11,7 @@
 
 #include "log_macros.h"
 
-static std::string s_fifo_name_prefix = "./async_copy_fifo_";
+static std::string s_fifo_name_prefix = "/tmp/async_copy_fifo_";
 
 void SetFifoNamePrefix(const std::string& prefix) {
   s_fifo_name_prefix = prefix;
