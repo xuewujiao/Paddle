@@ -31,6 +31,7 @@ limitations under the License. */
 #include "paddle/fluid/framework/fleet/heter_ps/async_comm/async_communicator.h"
 #include "paddle/fluid/framework/fleet/heter_ps/async_comm/config.h"
 #include "paddle/fluid/framework/fleet/heter_ps/async_comm/ib_utils.h"
+#include "paddle/fluid/framework/fleet/heter_ps/async_comm/batched_queued_runner.h"
 
 #ifdef PADDLE_WITH_HETERPS
 namespace paddle {
@@ -284,10 +285,10 @@ public:
 
 
 //runner 较轻量，只用于发送请求，对于采样等  可以在此类加虚函数，并继承此类
-class RequestRunner : public QueuedRunner {
+class RequestRunner : public BatchedQueuedRunner {
 public:
 	RequestRunner(Partitioner *partitioner, MemoryAllocatorBase *allocator)
-      : QueuedRunner(partitioner, allocator) {
+      : BatchedQueuedRunner(partitioner, allocator) {
 	}
   virtual ~RequestRunner() {};
   MemoryAllocatorBase* get_allocator() {

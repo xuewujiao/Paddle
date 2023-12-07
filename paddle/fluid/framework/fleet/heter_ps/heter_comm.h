@@ -918,18 +918,22 @@ public:
       keys_contest.clear();
     }
     pull_push_keys.clear();
+    pull_embedding_.clear();
     PADDLE_ENFORCE_GPU_SUCCESS(cudaStreamDestroy(stream_));
   };
   virtual std::string get_runner_name() {return std::string("PsRunner");}
   void RegisterFunctions() override;
   void PullSparse(struct AsyncReqRes *request, struct AsyncReqRes *response);
   void PushSparse(struct AsyncReqRes *request, struct AsyncReqRes *response);
+  void PullSparseBatched(AsyncReqRes **request, AsyncReqRes **response, size_t batch_size);
+  void PushSparseBatched(AsyncReqRes **request, AsyncReqRes **response, size_t batch_size);
   void PullOneSparse(struct AsyncReqRes *request, struct AsyncReqRes *response);
   void PushOneSparse(struct AsyncReqRes *request, struct AsyncReqRes *response);
 
 private:
  HeterComm<FeatureKey, float*, float*, GPUAccessor> * comm_;
  std::vector<AsyncComMemContext> pull_push_keys;
+ std::vector<std::shared_ptr<phi::Allocation>> pull_embedding_;
  GPUOptimizer<GPUAccessor> opt_;
  cudaStream_t stream_;
 };

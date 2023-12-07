@@ -52,10 +52,14 @@ PsRunner<GPUAccessor, GPUOptimizer> :: PsRunner(Partitioner *partitioner, Memory
       : RequestRunner(partitioner, allocator) {
         int gpu_id = partitioner->GetLocalRank();
         platform::CUDADeviceGuard guard(gpu_id);
-        cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking);
+        // cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking);
+        int least_priority, greatest_priority;
+        CUDA_CHECK(cudaDeviceGetStreamPriorityRange(&least_priority, &greatest_priority));
+        CUDA_CHECK(cudaStreamCreateWithPriority(&stream_, cudaStreamNonBlocking, greatest_priority-1));
         comm_ = comm;
         opt_ = GPUOptimizer<GPUAccessor>(gpu_accessor);
         pull_push_keys.resize(partitioner->GetGlobalSize());
+        pull_embedding_.resize(partitioner->GetGlobalSize());
 };
 
 template <typename GPUAccessor, template <typename T> class GPUOptimizer>
@@ -91,10 +95,11 @@ void PsRunner<GPUAccessor, GPUOptimizer>::PushSparse(struct AsyncReqRes *request
 	response->FillMetaByMemoryContext();
 	pull_push_keys[requset_global_id].clear();
 }
-
 template <typename GPUAccessor, template <typename T> class GPUOptimizer>
 void PsRunner<GPUAccessor, GPUOptimizer>::PullOneSparse(struct AsyncReqRes *request, struct AsyncReqRes *response) {
-	  int gpu_id = partitioner_->GetLocalRank();
+
+    VLOG(2) << "PsRunner::PullSparseBatched batch_size: " << 1;
+    int gpu_id = partitioner_->GetLocalRank();
 	  comm_->storage_[gpu_id].pull_.Resume();
 	  platform::CUDADeviceGuard guard(gpu_id);
 	  size_t data_size =  comm_->get_pull_type_size();
@@ -104,11 +109,85 @@ void PsRunner<GPUAccessor, GPUOptimizer>::PullOneSparse(struct AsyncReqRes *requ
 	  FeatureKey * input_idx_ptr = static_cast<FeatureKey*> (request->memory_contexts[0]->GetPointer());
 	  auto requset_global_id = partitioner_->MakeGlobalRank(request->meta.requester_node_id, request->meta.requester_lane_id);
 	  pull_push_keys[requset_global_id] = *(static_cast<AsyncComMemContext*> (request->memory_contexts[0]));
+	  pull_embedding_[requset_global_id] = nullptr;
 	  comm_->pull_one_table(gpu_id, input_idx_ptr, d_vals, elt_count, stream_);
 	  CUDA_CHECK(cudaStreamSynchronize(stream_));
 	  response->meta.valid_data_count = 1;
 	  response->FillMetaByMemoryContext();
 	  comm_->storage_[gpu_id].pull_.Pause();
+}
+
+
+template <typename GPUAccessor, template <typename T> class GPUOptimizer>
+void PsRunner<GPUAccessor, GPUOptimizer>::PullSparseBatched(AsyncReqRes **request,
+                                                            AsyncReqRes **response,
+                                                            size_t batch_size){
+  VLOG(2) << "PsRunner::PullSparseBatched batch_size: " << batch_size;
+  int gpu_id = partitioner_->GetLocalRank();
+  comm_->storage_[gpu_id].pull_.Resume();
+  platform::CUDADeviceGuard guard(gpu_id);
+  auto place = platform::CUDAPlace(gpu_id);
+  size_t data_size =  comm_->get_pull_type_size();
+
+  std::vector<size_t> h_part_offsets(batch_size + 1);
+  h_part_offsets[0] = 0;
+  for (size_t i = 0; i < batch_size; i++) {	  
+    auto input_dt = static_cast<::DataType>(request[i]->meta.data_types[0]);
+    size_t elt_count = request[i]->meta.data_sizes[0] / GetElementSize(input_dt);;
+    h_part_offsets[i + 1] = h_part_offsets[i] + elt_count;
+  }
+  size_t len = h_part_offsets[batch_size];
+
+  auto d_in_keys =
+          memory::AllocShared(place,
+                              len * sizeof(FeatureKey),
+                              phi::Stream(reinterpret_cast<phi::StreamId>(stream_)));
+  FeatureKey *d_in_keys_ptr = reinterpret_cast<FeatureKey *>(d_in_keys->ptr());
+
+  auto d_embedding =
+          memory::AllocShared(place,
+                              len * sizeof(char) * data_size,
+                              phi::Stream(reinterpret_cast<phi::StreamId>(stream_)));
+  float *d_embedding_ptr = reinterpret_cast<float *>(d_embedding->ptr());
+  for (size_t i = 0; i < batch_size; i++) {
+    
+    size_t elt_count = (h_part_offsets[i+1] - h_part_offsets[i]);
+    auto requset_global_id = partitioner_->MakeGlobalRank(request[i]->meta.requester_node_id, request[i]->meta.requester_lane_id);
+    pull_push_keys[requset_global_id] = *(static_cast<AsyncComMemContext*> (request[i]->memory_contexts[0]));
+    pull_embedding_[requset_global_id] = d_embedding;
+
+    if(requset_global_id != partitioner_ ->GetGlobalRank()){
+      auto allocator = dynamic_cast<AsyncComAllocator*> (allocator_);
+      MemoryContextBase* res_embedding = allocator->ToMemoryContext(reinterpret_cast<char *>(d_embedding_ptr) + h_part_offsets[i] * data_size, elt_count * data_size, DT_INT8, ML_DEVICE);
+      response[i]->memory_contexts[0] = res_embedding;
+      allocator_->AllocateOrUseExistContextPointer(response[i], 0, ML_DEVICE, DT_INT8, elt_count * data_size);    
+    }    
+    
+    FeatureKey* d_keys = static_cast<FeatureKey*> (request[i]->memory_contexts[0]->GetPointer());
+    CUDA_CHECK(cudaMemcpyAsync(d_in_keys_ptr + h_part_offsets[i],
+                               d_keys,
+                               sizeof(FeatureKey) * elt_count,
+                               cudaMemcpyDeviceToDevice,
+                               stream_));
+  }
+
+  comm_->pull_one_table(gpu_id, d_in_keys_ptr, d_embedding_ptr, len, stream_);
+  for (size_t i = 0; i < batch_size; i++) {
+    auto requset_global_id = partitioner_->MakeGlobalRank(request[i]->meta.requester_node_id, request[i]->meta.requester_lane_id);
+    if(requset_global_id == partitioner_ ->GetGlobalRank()){
+      size_t elt_count = h_part_offsets[i +1 ] - h_part_offsets[i];
+      float *d_vals = static_cast<float*> (allocator_->AllocateOrUseExistContextPointer(response[i], 0, ML_DEVICE, DT_INT8, elt_count * data_size));
+      CUDA_CHECK(cudaMemcpyAsync(d_vals,
+                                 reinterpret_cast<char *>(d_embedding_ptr) + h_part_offsets[i] * data_size,
+                                 sizeof(char) * elt_count * data_size,
+                                 cudaMemcpyDeviceToDevice,
+                                 stream_));
+    }
+    response[i]->meta.valid_data_count = 1;
+    response[i]->FillMetaByMemoryContext();
+  }
+  comm_->storage_[gpu_id].pull_.Pause();
+  CUDA_CHECK(cudaStreamSynchronize(stream_));
 }
 
 template <typename GPUAccessor, template <typename T> class GPUOptimizer>
@@ -128,6 +207,11 @@ void PsRunner<GPUAccessor, GPUOptimizer>::RegisterFunctions() {
 			  PullSparse(request, response);
 	     };
 	  }
+
+    function_info.max_batchsize = -1;
+    function_info.batched_func_ = [this](AsyncReqRes** requests, AsyncReqRes** responses, size_t batchsize) {
+      PullSparseBatched(requests, responses, batchsize);
+    };
 	  function_info.input_locations[0] = ML_DEVICE;
 	  function_info.output_locations[0] = ML_DEVICE;
 	  function_info_table_.push_back(function_info);
@@ -147,6 +231,7 @@ void PsRunner<GPUAccessor, GPUOptimizer>::RegisterFunctions() {
 			PushSparse(request, response);
 		  };
 	  }
+    function_info.max_batchsize = 1;
 	  function_info.input_locations[0] = ML_DEVICE;
 	  function_info.output_locations[0] = ML_HOST;
 	  function_info_table_.push_back(function_info);
