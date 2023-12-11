@@ -186,8 +186,8 @@ void PsRunner<GPUAccessor, GPUOptimizer>::PullSparseBatched(AsyncReqRes **reques
     response[i]->meta.valid_data_count = 1;
     response[i]->FillMetaByMemoryContext();
   }
-  comm_->storage_[gpu_id].pull_.Pause();
   CUDA_CHECK(cudaStreamSynchronize(stream_));
+  comm_->storage_[gpu_id].pull_.Pause();
 }
 
 template <typename GPUAccessor, template <typename T> class GPUOptimizer>

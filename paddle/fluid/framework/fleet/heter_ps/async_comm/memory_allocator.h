@@ -90,11 +90,15 @@ class MemoryContextBase {
 };
 
 struct AsyncReqRes;
+class Partitioner;
 
 class MemoryAllocatorBase {
  public:
   MemoryAllocatorBase() = default;
   virtual ~MemoryAllocatorBase() = default;
+  void SetPartitioner(Partitioner* partitioner) {
+    partitioner_ = partitioner;
+  }
   virtual MemoryContextBase* CreateMemoryContext() = 0;
   virtual void DestroyMemoryContext(MemoryContextBase* memory_context) = 0;
 
@@ -112,4 +116,6 @@ class MemoryAllocatorBase {
                                                  DataType data_type,
                                                  size_t elt_count);
   virtual void FreeReqRes(AsyncReqRes* req_res);
+ public:
+  Partitioner* partitioner_ = nullptr;
 };

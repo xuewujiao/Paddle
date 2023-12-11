@@ -14,6 +14,7 @@
 #include "demo_runner.h"
 #include "demo_kernels.h"
 #include "merged_handler.h"
+#include "synchronizer.h"
 
 int node_rank = -1;
 std::string config_file;
@@ -154,7 +155,8 @@ void AllRequestWorkFunction(int global_rank,
   std::uniform_int_distribution<int> loop_dist(IntScale(kAvgLoopCount, 0.9), IntScale(kAvgLoopCount, 1.1));
   std::uniform_int_distribution<int>
       vertex_count_dist(IntScale(max_vertex_count_per_rank, 0.5), max_vertex_count_per_rank);
-  int loop_count = loop_dist(engine);
+  //int loop_count = loop_dist(engine);
+  int loop_count = kAvgLoopCount;
 
   int embedding_dim = embedding_ps_runner->GetEmbeddingDim();
 
@@ -267,6 +269,7 @@ void AllRequestWorkFunction(int global_rank,
       allocator->FreeReqRes(walk_request_handles[r].response_);
       walk_request_handles[r].response_ = nullptr;
     }
+    ReadyToEnterSynchronizeZone(local_rank);
 #if 0
     for (int i = 0; i < global_size; i++) {
       int r = rand_idx_mapping[i];
@@ -287,7 +290,11 @@ void AllRequestWorkFunction(int global_rank,
 #endif
     CheckNextRandomWalkId(rank_raw_ptr, vertex_count, rank_walked_ptr, stream);
 
+    EnterSynchronizeZone(local_rank);
+
+    LOG_INFO("local_rank=%d, in Synchronize Zone.", local_rank);
     std::shuffle(rand_idx_mapping.begin(), rand_idx_mapping.end(), perm_gen);
+    LeaveSynchronizeZone(local_rank);
     for (int i = 0; i < global_size; i++) {
       int r = rand_idx_mapping[i];
       get_embedding_request_handles[r].request_ =
@@ -343,6 +350,7 @@ void RankFunction(int global_rank, Config *pconfig) {
   int local_rank = global_rank % ranks_per_node;
   Partitioner partitioner(global_node_count, ranks_per_node, node_id, local_rank);
   DemoMemoryAllocator memory_allocator(local_rank);
+  memory_allocator.SetPartitioner(&partitioner);
   RunnerRegistry runner_registry;
   DemoRandomWalkRunner random_walk_runner(&partitioner, &memory_allocator);
   DemoEmbeddingPsRunner embedding_ps_runner(&partitioner, &memory_allocator);
@@ -377,6 +385,13 @@ int main(int argc, char **argv) {
   if (global_node_count > 1) {
     IbInit();
   }
+  const char* sync_ib_dev_name = nullptr;
+  int sync_ib_port = 1;
+  if (global_node_count > 1) {
+    sync_ib_dev_name = config.ib_device_name[0].c_str();
+    sync_ib_port = config.ib_port[0];
+  }
+  EnableSynchronizeMode(global_node_count, ranks_per_node, node_rank, sync_ib_dev_name, sync_ib_port);
   EnableAllPeerAccess();
 
   int local_size = ranks_per_node;

@@ -7,6 +7,8 @@
 
 #include "check_macros.h"
 #include "log_macros.h"
+#include "partitioner.h"
+#include "synchronizer.h"
 
 static std::atomic<int64_t> storage_count_{0};
 static std::atomic<int64_t> context_count_{0};
@@ -280,6 +282,7 @@ void *DemoMemoryAllocator::Malloc(MemoryContextBase *memory_context,
                                   MemoryLocation location,
                                   DataType data_type,
                                   size_t element_count) {
+  SensitiveZoneGuard sensitive_zone_guard(partitioner_->GetLocalRank());
   if (location == ML_DEVICE) {
     int dev_id;
     CUDA_CHECK(cudaGetDevice(&dev_id));
@@ -293,6 +296,7 @@ void *DemoMemoryAllocator::Malloc(MemoryContextBase *memory_context,
 }
 
 void DemoMemoryAllocator::Free(MemoryContextBase* memory_context) {
+  SensitiveZoneGuard sensitive_zone_guard(partitioner_->GetLocalRank());
   BOOL_CHECK(memory_context != nullptr);
   if (!memory_context->IsValid()) {
     return;
