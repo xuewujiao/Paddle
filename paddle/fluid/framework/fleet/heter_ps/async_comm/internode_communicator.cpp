@@ -3,6 +3,7 @@
 #include <memory>
 
 #include "async_communicator.h"
+#include "synchronizer.h"
 
 InterNodeCommunicator::InterNodeCommunicator(Partitioner *partitioner, MemoryAllocatorBase *allocator, Config* config) :
     partitioner_(partitioner), allocator_(allocator), config_(config) {
@@ -13,6 +14,7 @@ InterNodeCommunicator::~InterNodeCommunicator() {
 
 }
 void InterNodeCommunicator::CreateResources() {
+  InitSynchronizerHelperFunc(partitioner_->GetLocalRank(), async_communicator_->GetSideBandCommunicator());
   copy_thread_->SetAsyncCommunicator(async_communicator_);
   copy_thread_->CreateResources();
   agent_->SetSideBandCommunicator(async_communicator_->GetSideBandCommunicator());
@@ -21,6 +23,7 @@ void InterNodeCommunicator::CreateResources() {
 void InterNodeCommunicator::DestroyResources() {
   copy_thread_->DestroyResources();
   agent_->DestroyResources();
+  DeinitSynchronizerHelperFunc(partitioner_->GetLocalRank());
 }
 void InterNodeCommunicator::Connect() {
   copy_thread_->ConnectFifo();

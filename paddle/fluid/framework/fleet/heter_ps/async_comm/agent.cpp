@@ -47,7 +47,7 @@ static bool SupportGPUDirectRDMA(struct ibv_pd *pd) {
     void* cpu_ptr = malloc(buf_size);
     ib_mr = TryRegisterIbMr(pd, cpu_ptr, buf_size);
     if (ib_mr == nullptr) {
-      LOG_INFO("CPU RDMA is also not supported!");
+      LOG_FATAL("CPU RDMA is also not supported!");
     } else {
       DeRegIbMr(ib_mr);
     }

@@ -2,6 +2,7 @@
 
 #include "async_communicator.h"
 #include "check_macros.h"
+#include "synchronizer.h"
 
 int BatchedQueuedRunner::WorkItemList::WaitAndPopBatched(std::vector<QueuedRunner::RunnerWorkItem>* items,
                                                          const std::vector<FunctionInfo>& func_info) {
@@ -64,11 +65,14 @@ void BatchedQueuedRunner::ProcessLoop() {
         responses[i] = async_communicator_->OnRunnerGetResponse(runner_work_items[i].request);
       }
     }
-    if (requests.size() == 1) {
-      function_info_table_[func_id].func_(requests[0], responses[0]);
-    } else {
-      BOOL_CHECK(function_info_table_[func_id].batched_func_ != nullptr);
-      function_info_table_[func_id].batched_func_(requests.data(), responses.data(), requests.size());
+    {
+      SensitiveZoneGuard sensitive_zone_guard(partitioner_->GetLocalRank());
+      if (requests.size() == 1) {
+        function_info_table_[func_id].func_(requests[0], responses[0]);
+      } else {
+        BOOL_CHECK(function_info_table_[func_id].batched_func_ != nullptr);
+        function_info_table_[func_id].batched_func_(requests.data(), responses.data(), requests.size());
+      }
     }
     for (size_t i = 0; i < runner_work_items.size(); i++) {
       if (responses[i] != nullptr) {

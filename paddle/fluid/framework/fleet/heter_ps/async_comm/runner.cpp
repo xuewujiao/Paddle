@@ -5,6 +5,7 @@
 #include "async_communicator.h"
 #include "check_macros.h"
 #include "log_macros.h"
+#include "synchronizer.h"
 
 static constexpr int kMaxRankCountBits = 12;
 static constexpr int kRankIdShift = 64 - kMaxRankCountBits;
@@ -84,7 +85,10 @@ void QueuedRunner::ProcessLoop() {
     if (GetProcessFunctionInfoTable()[func_id].need_response) {
       response = async_communicator_->OnRunnerGetResponse(runner_work_item.request);
     }
-    GetProcessFunctionInfoTable()[func_id].func_(runner_work_item.request, response);
+    {
+      SensitiveZoneGuard sensitive_zone_guard(partitioner_->GetLocalRank());
+      GetProcessFunctionInfoTable()[func_id].func_(runner_work_item.request, response);
+    }
     if (response != nullptr) {
       runner_work_item.process_call_back_func(response);
     }
