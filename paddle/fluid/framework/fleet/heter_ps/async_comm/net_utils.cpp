@@ -45,14 +45,18 @@ int CreateServerListenFd(int port) {
     abort();
   };
   // CALL_CHECK(bind(server_sock, (sockaddr*)&server_addr, sizeof(server_addr)));
-  if(bind(server_sock, (sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
-    std::cerr << "Bind port failed, errno=" << strerror(errno) << std::endl;
-    // 打印 server_addr 的内容
-    std::cerr << "Server Address: "
-              << inet_ntoa(server_addr.sin_addr)   // 将 IP 地址转换为点分十进制格式
-              << ":" << ntohs(server_addr.sin_port) // 将网络字节顺序的端口号转换为主机字节顺序
-              << std::endl;
-    abort();
+  for(int i = 0; i < 40; ++i) {
+    if(bind(server_sock, (sockaddr*)&server_addr, sizeof(server_addr)) == 0) {
+      std::cout << "Successfully bound port : " << ntohs(server_addr.sin_port) << std::endl;
+      break;
+    }else{
+      std::cerr << "Bind port : " << ntohs(server_addr.sin_port) << " failed, errno=" << strerror(errno) << "retry after "<< i <<" seconds."<< std::endl;
+      usleep(1000000 * i);
+    }
+      if(i == 39) {
+          std::cerr << "Bind port failed,errno=" << strerror(errno) << std::endl;
+          abort();
+      }
   }
 
   return server_sock;
