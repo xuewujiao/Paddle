@@ -99,6 +99,11 @@ class CtrDymfAccessor : public ValueAccessor {
           reinterpret_cast<uint16_t*>(val + UnseenDaysIndex());
       return int16_val[1];
     }
+    void ResetUnseenDays(float* val) {
+      uint16_t* int16_val =
+          reinterpret_cast<uint16_t*>(val + UnseenDaysIndex());
+      int16_val[1] = 0;
+    }
     float& DeltaScore(float* val) { return val[DeltaScoreIndex()]; }
     float& Show(float* val) { return val[ShowIndex()]; }
     float& Click(float* val) { return val[ClickIndex()]; }
@@ -244,6 +249,9 @@ class CtrDymfAccessor : public ValueAccessor {
     return 0.0;
   }
 
+  void ResetUnseenDays(float* value) override {
+    common_feature_value.ResetUnseenDays(value);
+  }
   robin_hood::unordered_set<float>* GetFilteredSlots() override {
     return &_filtered_slots;
   }
