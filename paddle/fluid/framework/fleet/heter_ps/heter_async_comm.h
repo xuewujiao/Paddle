@@ -219,8 +219,25 @@ public:
          }
          auto gpu_mlxs = rdma_checker->get_gpu_mlxs();
          for (int gpu_id = 0; gpu_id < card_num; gpu_id++) {
-             auto agent_id = config.agent_local_rank[gpu_id];
-             config.ib_device_name.push_back(gpu_mlxs[agent_id]);
+              auto agent_id = config.agent_local_rank[gpu_id];
+              if (gpu_mlxs[agent_id].substr(0, 5) == "mlx5_"){
+                config.ib_device_name.push_back(gpu_mlxs[agent_id]);
+              }else{
+                std::vector<std::string> nics;
+                if (gpu_mlxs[agent_id].find("NIC") != std::string::npos) {
+                  std::istringstream nicStream(gpu_mlxs[agent_id]); 
+                  std::string nic;
+                  while (std::getline(nicStream, nic, ',')) {
+                    nics.push_back(nic); 
+                  }
+                  
+                }
+                if (nics.size() == 1) {
+                  config.ib_device_name.push_back("mlx5_" + nics[0].substr(3));
+                }else{
+                  config.ib_device_name.push_back("mlx5_" + nics[gpu_id % nics.size()].substr(3));
+                }
+              }
          }
     	 IbInit();
     	 config.node_count = node_num;
