@@ -1091,6 +1091,7 @@ int32_t MemorySparseTable::PullSparsePtr(int shard_id,  // fake num
                   ret = &feature_value;
                 } else {
                   ret = itr.value_ptr();
+                  _value_accesor->ResetUnseenDays(itr.value_ptr()->data());
                 }
                 int pull_data_idx = keys[i].second;
                 pull_values[pull_data_idx] = reinterpret_cast<char *>(ret);
